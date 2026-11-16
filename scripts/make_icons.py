@@ -1,73 +1,75 @@
 # -*- coding: utf-8 -*-
-"""生成畅聊 App 图标与启动图：深蓝渐变底 + 白色对话气泡 + 橙色圆点"""
+"""生成 FreeSeek 图标：两只简约像素小鲸鱼（一蓝一粉，相向而游）。
+
+低分辨率 32×32 网格绘制 → NEAREST 放大到 1024，得到干净的像素边缘。
+"""
 from PIL import Image, ImageDraw
 
-TOP = (30, 58, 138)     # 深蓝
-BOTTOM = (59, 130, 246)  # 亮蓝
-ORANGE = (249, 115, 22)
-WHITE = (255, 255, 255)
+BLUE = (37, 99, 235)
+BLUE_BELLY = (147, 197, 253)
+PINK = (244, 114, 182)
+PINK_BELLY = (251, 207, 232)
+EYE = (15, 23, 42)
+BG = (239, 246, 255)  # 极浅蓝底
+
+GRID = 32
+SCALE = 1024 // GRID
 
 
-def gradient(size):
-    img = Image.new('RGB', (size, size))
-    d = ImageDraw.Draw(img)
-    for y in range(size):
-        t = y / size
-        color = tuple(int(a + (b - a) * t) for a, b in zip(TOP, BOTTOM))
-        d.line([(0, y), (size, y)], fill=color)
-    return img
+def draw_whales(d: ImageDraw.ImageDraw, ox: int = 0, oy: int = 0):
+    """在 32×32 像素网格上画两只鲸鱼：蓝色朝右，粉色朝左，彼此相望。"""
+    def r(x0, y0, x1, y1, color):
+        d.rectangle([ox + x0, oy + y0, ox + x1 - 1, oy + y1 - 1], fill=color)
+
+    # —— 蓝鲸（左上方，朝右）——
+    d.ellipse([ox + 6, oy + 8, ox + 22, oy + 18], fill=BLUE)          # 身体
+    d.polygon(                                                      # 尾鳍
+        [(ox + 7, oy + 10), (ox + 3, oy + 6), (ox + 3, oy + 17), (ox + 7, oy + 14)],
+        fill=BLUE,
+    )
+    d.ellipse([ox + 9, oy + 13, ox + 21, oy + 18], fill=BLUE_BELLY)  # 腹部
+    r(18, 11, 20, 13, EYE)                                          # 眼睛
+    r(11, 4, 12, 5, BLUE_BELLY)                                     # 水柱
+    r(12, 2, 13, 4, BLUE_BELLY)
+
+    # —— 粉鲸（右下方，朝左，略小）——
+    d.ellipse([ox + 14, oy + 18, ox + 27, oy + 27], fill=PINK)       # 身体
+    d.polygon(                                                      # 尾鳍
+        [(ox + 25, oy + 19), (ox + 28, oy + 17), (ox + 28, oy + 25), (ox + 25, oy + 22)],
+        fill=PINK,
+    )
+    d.ellipse([ox + 16, oy + 22, ox + 26, oy + 27], fill=PINK_BELLY)  # 腹部
+    r(16, 20, 18, 22, EYE)                                          # 眼睛
 
 
-def draw_bubble(d, s, scale=1.0):
-    """居中气泡：圆角矩形 + 尾巴 + 三个橙点；scale 控制相对画布大小"""
-    cx = s / 2
-    w, h = 640 * scale, 414 * scale
-    top = cx - h / 2 - 40 * scale
-    box = (cx - w / 2, top, cx + w / 2, top + h)
-    d.rounded_rectangle(box, radius=min(w, h) * 0.28, fill=WHITE)
-    tail = [(cx - w * 0.22, box[3] - 4), (cx - w * 0.02, box[3] - 4), (cx - w * 0.24, box[3] + 110 * scale)]
-    d.polygon(tail, fill=WHITE)
-    dot_y = top + h / 2
-    for i, off in enumerate([-0.125, 0, 0.125]):
-        r = 34 * scale
-        dx = cx + w * off
-        d.ellipse([dx - r, dot_y - r, dx + r, dot_y + r], fill=ORANGE)
+def whale_layer(with_background: bool) -> Image.Image:
+    low = Image.new('RGBA', (GRID, GRID), BG + (255,) if with_background else (0, 0, 0, 0))
+    draw_whales(ImageDraw.Draw(low))
+    return low.resize((1024, 1024), Image.NEAREST)
 
 
-def make_logo(path, size=1024):
-    img = gradient(size).convert('RGBA')
-    d = ImageDraw.Draw(img)
-    draw_bubble(d, size)
-    mask = Image.new('L', (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size, size], radius=size * 0.22, fill=255)
-    out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+def rounded_icon(path: str, radius_ratio: float = 0.22):
+    img = whale_layer(True)
+    mask = Image.new('L', (1024, 1024), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, 1024, 1024], radius=int(1024 * radius_ratio), fill=255)
+    out = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0))
     out.paste(img, (0, 0), mask)
     out.save(path)
 
 
-def make_icon(path, size=1024):
-    img = gradient(size)
-    d = ImageDraw.Draw(img)
-    draw_bubble(d, size)
-    img.save(path, quality=95)
-
-
-def make_splash(path, size=2732):
-    img = gradient(size)
-    icon = Image.open('assets/icon-source.png').convert('RGB')
-    inner = int(size * 0.38)
-    icon = icon.resize((inner, inner), Image.LANCZOS)
-    mask = Image.new('L', (inner, inner), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, inner, inner], radius=inner * 0.22, fill=255)
-    pos = ((size - inner) // 2, (size - inner) // 2)
-    img.paste(icon, pos, mask)
-    img.save(path, quality=90)
+def make_splash(path: str, size: int = 2732):
+    img = Image.new('RGB', (size, size), BG)
+    mark = whale_layer(False).resize((int(size * 0.42), int(size * 0.42)), Image.LANCZOS)
+    mask = mark.split()[-1]
+    pos = ((size - mark.width) // 2, (size - mark.height) // 2)
+    img.paste(mark, pos, mask)
+    img.save(path, quality=92)
 
 
 import os
 os.makedirs('assets', exist_ok=True)
-make_logo('assets/logo.png')
-make_icon('assets/icon-source.png')
-make_icon('assets/icon.png')
+rounded_icon('assets/icon.png')
+whale_layer(False).save('assets/logo.png')
 make_splash('assets/splash.png')
-print('assets generated')
+make_splash('assets/icon-source.png') if False else None
+print('pixel whales generated')

@@ -12,6 +12,14 @@
   border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
   background: var(--dsw-specific-input-major);
   overflow: hidden;
+  transition:
+    border-color var(--fs-duration-base) var(--fs-ease-out),
+    box-shadow var(--fs-duration-base) var(--fs-ease-out);
+
+  &:focus-within {
+    border-color: rgba(37, 99, 235, 0.5);
+    box-shadow: 0 0 0 3px var(--fs-brand-soft);
+  }
 }
 
 .session {
@@ -319,10 +327,16 @@
   background: var(--dsw-alias-button-primary-fill);
   color: var(--dsw-static-neutral-bluish-00);
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition:
+    background var(--fs-duration-fast) var(--fs-ease-out),
+    transform var(--fs-duration-fast) var(--fs-ease-out);
 
   &:not(.disabled):hover {
     background: var(--dsw-alias-button-primary-hover);
+  }
+
+  &:not(.disabled):active {
+    transform: scale(0.92);
   }
 
   &.disabled {

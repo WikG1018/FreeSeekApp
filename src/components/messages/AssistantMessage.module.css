@@ -11,6 +11,18 @@
   }
 }
 
+/* 新回复（重新生成/续写）入场：柔和淡入 */
+.fresh {
+  animation: replyIn var(--fs-duration-slow) var(--fs-ease-out) both;
+}
+
+@keyframes replyIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
 .waiting {
   display: flex;
   align-items: center;

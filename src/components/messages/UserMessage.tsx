@@ -44,6 +44,8 @@ export const UserMessage = memo(function UserMessage({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isMobile = useIsMobile()
   const canSend = !busy && (draft.trim() !== '' || message.files.length > 0)
+  // 刚发送的消息（挂载时创建不足 800ms）播放一次气泡入场动画，历史消息不受影响
+  const [fresh] = useState(() => Date.now() - message.createdAt < 800)
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current
@@ -61,7 +63,7 @@ export const UserMessage = memo(function UserMessage({
   }
 
   return (
-    <div className={clsx(styles.container, isFirst && styles.isFirst)}>
+    <div className={clsx(styles.container, isFirst && styles.isFirst, fresh && styles.fresh)}>
       {message.files.length > 0 ? (
         <div
           className={clsx(

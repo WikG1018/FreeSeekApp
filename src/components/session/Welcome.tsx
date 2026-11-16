@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useState } from 'react'
+import logo from '../../assets/logo.png'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getContextRounds } from '../../services/chat/reply.js'
@@ -11,7 +12,7 @@ import { PersonaManager } from '../personas/PersonaManager.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
-/** 新对话：问候语 + 人设选择 + 输入框。桌面端居中；移动端输入框吸底 */
+/** 新对话：品牌标识 + 问候语 + 人设选择 + 输入框。桌面端居中；移动端输入框吸底 */
 export const Welcome = () => {
   const t = useTranslate()
   const isMobile = useIsMobile()
@@ -24,31 +25,36 @@ export const Welcome = () => {
     <div className={styles.container}>
       {isMobile ? <MobileHeader /> : null}
       <div className={styles.welcome}>
-        <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
-        <div className={styles.personaRow} role="group" aria-label={t('personaRowLabel')}>
-          {personas.map((persona) => (
+        <div className={styles.brand}>
+          <img className={styles.logo} src={logo} alt="" draggable={false} />
+          <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
+        </div>
+        <div className={styles.personaScroll}>
+          <div className={styles.personaRow} role="group" aria-label={t('personaRowLabel')}>
+            {personas.map((persona) => (
+              <button
+                key={persona.id}
+                type="button"
+                className={clsx(
+                  styles.personaChip,
+                  persona.id === defaultPersonaId && styles.personaChipActive
+                )}
+                onClick={() => setDefaultPersona(persona.id)}
+              >
+                {persona.name}
+              </button>
+            ))}
             <button
-              key={persona.id}
               type="button"
-              className={clsx(
-                styles.personaChip,
-                persona.id === defaultPersonaId && styles.personaChipActive
-              )}
-              onClick={() => setDefaultPersona(persona.id)}
+              className={clsx(styles.personaChip, styles.personaManage)}
+              onClick={() => setManagerOpen(true)}
             >
-              {persona.name}
+              {t('personaManage')}
             </button>
-          ))}
-          <button
-            type="button"
-            className={styles.personaChip}
-            onClick={() => setManagerOpen(true)}
-          >
-            {t('personaManage')}
-          </button>
+          </div>
         </div>
         {inherit ? (
-          <div className={styles.inheritChip}>
+          <div className={styles.inheritCard}>
             <span className={styles.inheritText}>
               {t('inheritContextChip', {
                 title: inherit.fromTitle || t('untitledChat'),
@@ -65,7 +71,9 @@ export const Welcome = () => {
             </button>
           </div>
         ) : null}
-        <ChatInput sessionId={null} />
+        <div className={styles.inputArea}>
+          <ChatInput sessionId={null} />
+        </div>
         {isMobile ? <div className={styles.caveat}>{t('contentCaveat')}</div> : null}
       </div>
       {managerOpen ? <PersonaManager onClose={() => setManagerOpen(false)} /> : null}

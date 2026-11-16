@@ -41,6 +41,7 @@ export const en = {
   personaPromptPlaceholder:
     'Describe the identity, tone and strengths of this persona. Sent as the system prompt with every request.',
   personaDefaultPromptHint: 'Uses the default assistant identity',
+  backToBottom: 'Back to bottom',
   usageTitle: 'Usage & cost',
   usageTotalCost: 'Estimated total cost',
   usageRequests: 'Requests',

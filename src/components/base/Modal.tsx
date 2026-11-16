@@ -6,10 +6,23 @@ import { IconCloseOutline16 } from './icons.js'
 import { IconButton } from './IconButton.js'
 import styles from './Modal.module.css'
 
-/** 当前打开的弹窗，后打开的在末尾；叠放时 Esc 只关闭最上层 */
-const openModals: object[] = []
+/** 当前打开的弹窗，后打开的在末尾；叠放时 Esc 只关闭最上层，原生返回键同理 */
+const openModals: { close: () => void }[] = []
 
-/** 遮罩 + 居中卡片，Esc / 点遮罩关闭 */
+/** 是否有弹窗打开（Android 返回键优先关闭弹窗） */
+export const hasOpenModal = (): boolean => openModals.length > 0
+
+/** 关闭最上层弹窗，返回是否有关闭操作 */
+export const closeTopModal = (): boolean => {
+  const top = openModals.at(-1)
+  if (!top) {
+    return false
+  }
+  top.close()
+  return true
+}
+
+/** 遮罩 + 居中卡片（移动端为底部 Sheet），Esc / 点遮罩关闭 */
 export const Modal = ({
   title,
   children,
@@ -34,16 +47,16 @@ export const Modal = ({
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   useEffect(() => {
-    const token = {}
-    openModals.push(token)
+    const entry = { close: () => onCloseRef.current() }
+    openModals.push(entry)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openModals.at(-1) === token) {
+      if (event.key === 'Escape' && openModals.at(-1) === entry) {
         onCloseRef.current()
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => {
-      openModals.splice(openModals.indexOf(token), 1)
+      openModals.splice(openModals.indexOf(entry), 1)
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [])

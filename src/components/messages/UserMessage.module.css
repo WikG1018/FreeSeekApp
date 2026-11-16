@@ -13,6 +13,18 @@
   }
 }
 
+/* 刚发送的消息：气泡轻微上浮 + 缩放，不干扰历史消息 */
+.fresh .bubble {
+  animation: bubbleIn var(--fs-duration-slow) var(--fs-ease-spring) both;
+}
+
+@keyframes bubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
 .files {
   display: flex;
   flex-wrap: wrap;

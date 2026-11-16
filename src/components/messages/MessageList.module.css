@@ -1,4 +1,5 @@
 .container {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -6,6 +7,54 @@
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--scroll-color) transparent;
+}
+
+/* 回到底部：上滑阅读时浮现在输入框上方 */
+.toBottom {
+  position: absolute;
+  right: 20px;
+  bottom: 128px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    0 6px 18px rgba(15, 23, 42, 0.12);
+  animation: rise var(--fs-duration-base) var(--fs-ease-out) both;
+  transition:
+    background-color var(--fs-duration-fast) var(--fs-ease-out),
+    transform var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media not all and (min-width: 768px) {
+  .toBottom {
+    right: 16px;
+    bottom: 150px;
+  }
 }
 
 .scroll {

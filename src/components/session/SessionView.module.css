@@ -3,6 +3,14 @@
   inset: 0;
   display: flex;
   flex-direction: column;
+  animation: pageIn var(--fs-duration-base) var(--fs-ease-out) both;
+}
+
+@keyframes pageIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 
 .header {

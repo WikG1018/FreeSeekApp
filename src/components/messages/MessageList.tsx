@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
+import { useTranslate } from '../../i18n/index.js'
+import { IconChevronDownOutline14 } from '../base/icons.js'
 import {
   buildMessageVersions,
   getVisibleMessages,
@@ -43,10 +45,12 @@ export const MessageList = ({
   footer: React.ReactNode
 }) => {
   const isMobile = useIsMobile()
+  const t = useTranslate()
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
+  const [atBottom, setAtBottom] = useState(true)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const messages = getVisibleMessages(session)
   const [previousVersions, setPreviousVersions] = useState(() =>
@@ -65,7 +69,18 @@ export const MessageList = ({
     if (el && stickyRef.current) {
       el.scrollTop = el.scrollHeight
       scrollTopRef.current = el.scrollTop
+      setAtBottom(true)
     }
+  }, [])
+  /** 点击「回到底部」：平滑滚动并恢复跟随 */
+  const goToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) {
+      return
+    }
+    stickyRef.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    setAtBottom(true)
   }, [])
 
   // 内容、键盘和输入框高度变化时，继续遵循当前跟随状态。
@@ -134,6 +149,7 @@ export const MessageList = ({
         stickyRef.current = false
       }
       scrollTopRef.current = el.scrollTop
+      setAtBottom(nearBottom)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -175,6 +191,16 @@ export const MessageList = ({
           </div>
         </div>
         {footer}
+        {messages.length > 0 && !atBottom ? (
+          <button
+            type="button"
+            className={styles.toBottom}
+            aria-label={t('backToBottom')}
+            onClick={goToBottom}
+          >
+            <IconChevronDownOutline14 />
+          </button>
+        ) : null}
       </div>
     </ScrollToBottomContext.Provider>
   )

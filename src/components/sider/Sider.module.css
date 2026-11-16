@@ -198,12 +198,47 @@
   bottom: 0;
   left: 0;
   z-index: 800;
+  animation: drawerIn var(--fs-duration-slow) var(--fs-ease-out) both;
+}
+
+.drawerClosing {
+  animation: drawerOut var(--fs-duration-base) var(--fs-ease-in-out) forwards;
 }
 
 .drawerMask {
   position: absolute;
   inset: 0;
   z-index: 799;
+  background-color: rgba(0, 0, 0, 0.36);
+  animation: maskIn var(--fs-duration-base) var(--fs-ease-out) both;
+}
+
+.drawerMaskClosing {
+  animation: maskOut var(--fs-duration-base) var(--fs-ease-in-out) forwards;
+}
+
+@keyframes drawerIn {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes drawerOut {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes maskIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes maskOut {
+  to {
+    opacity: 0;
+  }
 }
 
 .mobile {

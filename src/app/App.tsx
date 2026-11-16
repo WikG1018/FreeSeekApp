@@ -1,16 +1,20 @@
 import { useEffect } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { App as CapacitorApp } from '@capacitor/app'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
   initChat,
+  newChat,
   retrySaveSessions,
   selectSession,
   useChatStore,
 } from '../services/chat/store.js'
 import { SearchPanel } from '../components/search/SearchPanel.js'
-import { closeSearchPanel } from '../components/search/searchPanelState.js'
+import { closeSearchPanel, useSearchPanel } from '../components/search/searchPanelState.js'
+import { closeTopModal, hasOpenModal } from '../components/base/Modal.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
@@ -22,7 +26,7 @@ import { onUploadNotice } from '../services/attachments.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
-import { closeMobileSider } from '../components/sider/mobileSiderState.js'
+import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import styles from './App.module.css'
 
@@ -71,6 +75,34 @@ export const App = () => {
     void initChat()
     // 首次打开先在设置里输入 API Key
     ensureApiKey()
+  }, [])
+
+  // Android 返回键：弹窗 → 搜索面板 → 侧边抽屉 → 回到欢迎页 → 退出 App
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return
+    }
+    const subscription = CapacitorApp.addListener('backButton', () => {
+      if (hasOpenModal() && closeTopModal()) {
+        return
+      }
+      if (useSearchPanel.getState().entry !== null) {
+        closeSearchPanel()
+        return
+      }
+      if (useMobileSider.getState().open) {
+        closeMobileSider()
+        return
+      }
+      if (useChatStore.getState().activeId !== null) {
+        newChat()
+        return
+      }
+      void CapacitorApp.exitApp()
+    })
+    return () => {
+      void subscription.then((handle) => handle.remove())
+    }
   }, [])
 
   return (

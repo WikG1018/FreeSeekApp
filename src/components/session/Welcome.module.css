@@ -14,13 +14,33 @@
   max-width: var(--message-list-max-width);
   margin: auto;
   padding: 0 32px 64px;
+  gap: 18px;
+  animation: welcomeRise var(--fs-duration-slow) var(--fs-ease-out) both;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) both;
+}
+
+.logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  user-select: none;
+  -webkit-user-drag: none;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 8px 24px rgba(37, 99, 235, 0.12);
 }
 
 .greeting {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 21px;
   font-size: 24px;
   line-height: 32px;
   font-weight: 600;
@@ -28,48 +48,98 @@
   color: var(--dsw-alias-label-primary);
 }
 
-.inheritChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  max-width: 100%;
-  margin-bottom: 16px;
-  padding: 4px 6px 4px 12px;
-  border: 1px solid var(--dsw-alias-border-secondary, rgba(5, 12, 20, 0.1));
-  border-radius: 999px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary, inherit);
-  background: var(--dsw-alias-fill-secondary, transparent);
+/* 人设选择：单行横向滚动，超出部分可左右滑，隐藏滚动条 */
+.personaScroll {
+  width: 100%;
+  max-width: 680px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 40ms both;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .personaRow {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
   gap: 8px;
-  max-width: 100%;
-  margin-bottom: 20px;
-  padding: 0;
+  box-sizing: border-box;
+  min-width: max-content;
+  padding: 2px 12px;
 }
 
 .personaChip {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  padding: 4px 12px;
-  border: 1px solid var(--dsw-alias-border-secondary, rgba(5, 12, 20, 0.1));
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
-  background: none;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
   cursor: pointer;
+  user-select: none;
+  transition:
+    border-color var(--fs-duration-fast) var(--fs-ease-out),
+    background-color var(--fs-duration-fast) var(--fs-ease-out),
+    color var(--fs-duration-fast) var(--fs-ease-out),
+    transform var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:hover {
+    border-color: var(--dsw-alias-border-l3);
+    background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary);
+  }
+
+  &:active {
+    transform: scale(0.96);
+  }
 }
 
 .personaChipActive {
-  border-color: var(--dsw-alias-border-accent, rgba(5, 12, 20, 0.4));
-  color: var(--dsw-alias-label-primary, inherit);
-  background: var(--dsw-alias-fill-secondary, rgba(5, 12, 20, 0.06));
+  border-color: rgba(37, 99, 235, 0.45);
+  color: var(--fs-brand);
+  background: var(--fs-brand-soft);
+
+  &:hover {
+    border-color: rgba(37, 99, 235, 0.6);
+    background: rgba(37, 99, 235, 0.12);
+    color: var(--fs-brand);
+  }
+}
+
+.personaManage {
+  border-style: dashed;
+}
+
+/* 继承上下文提示：卡片形态，比胶囊更易读 */
+.inheritCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: 680px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 14px;
+  background: var(--fs-brand-soft);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 80ms both;
 }
 
 .inheritText {
@@ -83,11 +153,37 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  padding: 2px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
+  border-radius: 50%;
   background: none;
-  cursor: pointer;
   color: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(37, 99, 235, 0.12);
+  }
+}
+
+.inputArea {
+  width: 100%;
+  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 60ms both;
+}
+
+@keyframes welcomeRise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 @media (max-width: 439px) {
@@ -110,11 +206,27 @@
     max-width: none;
     margin: 0;
     padding: 0 16px env(safe-area-inset-bottom);
+    gap: 12px;
   }
 
-  .greeting {
-    flex-shrink: 0;
-    margin: auto 0;
+  .brand {
+    margin-top: auto;
+    gap: 10px;
+  }
+
+  .logo {
+    width: 52px;
+    height: 52px;
+    border-radius: 15px;
+  }
+
+  .personaScroll {
+    max-width: none;
+  }
+
+  .personaRow {
+    justify-content: flex-start;
+    padding: 2px 4px;
   }
 
   .caveat {

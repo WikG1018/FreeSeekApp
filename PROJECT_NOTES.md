@@ -26,7 +26,21 @@
 - CI：.github/workflows/android.yml（自动 debug APK）、ios.yml（macos runner 出未签名 xcarchive + 工程 zip）。
 - 验证：每步 pnpm type/lint/build 全绿；真机 API 联调待用户提供 Key 后进行。
 
+## 品牌与 v1.1.0 UI 重做（2026-11-17）
+
+- 软件名统一英文 **FreeSeek**（zh/en appName、标题、Android 应用名、文档、Release）；包名 `app.freeseek.chat` 不变。
+- 新图标：一蓝一粉两只像素小鲸鱼（`scripts/make_icons.py` 用 32 网格 + NEAREST 放大），`@capacitor/assets` 生成 Android 全套；应用内欢迎页复用 `src/assets/logo.png`（rspack 增加 png asset 规则 + env.d.ts 声明）。
+- 动效 Token 在 `global.css`：`--fs-duration-fast/base/slow`、`--fs-ease-out/ease-in-out/spring`、`--fs-brand`；支持 `prefers-reduced-motion`。
+- 欢迎页：品牌 logo + 问候语 + 单行横向人设条（mask 渐隐）+ 卡片式接续提示 + 分层入场动画。
+- 聊天页：SessionView 页面淡入；UserMessage/AssistantMessage 按 `createdAt < 800ms` 播放一次入场；MessageList 增加“回到底部”悬浮按钮（scroll 状态、平滑滚动）。
+- 弹窗：Modal 重写为带开合动画的居中对话框，移动端自动变底部 Sheet；`openModals` 改为 `{close}` 数组并导出 `hasOpenModal/closeTopModal` 供返回键使用。
+- 抽屉：MobileSider 增加 open/closing 相位，滑出动画结束后卸载；遮罩渐变。
+- 返回键：`@capacitor/app` 监听 backButton，优先级 弹窗 → 搜索面板 → 抽屉 → 欢迎页 → exitApp。
+- v1.1.0：package.json 1.1.0、Android versionCode 2 / versionName 1.1.0；APK 已在本地构建并发布 GitHub Release。
+- 文档：README.zh-CN 全面重写（截图/FAQ/签名）、新增 CHANGELOG.md；截图存 `docs/screenshots/`。
+
 ## 已知取舍
+
 
 - 人设 prompt 整体替换官方 SYSTEM_PROMPT（角色扮演需要）；默认助手=官方原 prompt。
 - 继承上下文会整段进入请求（token 花费自理，看板可见）；不做自动摘要。

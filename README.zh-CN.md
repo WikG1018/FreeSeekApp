@@ -1,16 +1,38 @@
-# 畅聊（FreeSeek）
+# FreeSeek
 
-[English](README.md) | 简体中文
+[English](README.md) | **简体中文** · [更新日志](CHANGELOG.md)
 
-**使用自己的 DeepSeek API Key，没有次数限制、没有每日额度、没有"7 天不活跃砍会话"的本地聊天 App。**
+**使用自己的 DeepSeek API Key，没有次数限制、没有每日额度、没有“7 天不活跃砍会话”的本地聊天 App。**
 
-基于 DeepSeek 官方开源的 [chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT 协议）二次开发，界面与官方 App 同源的完整体验，数据全部保存在你自己的设备上。
+基于 DeepSeek 官方开源的 [chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT 协议）二次开发，界面与官方 App 同源，数据全部保存在你的设备上。
+
+<p>
+  <img src="docs/screenshots/desktop-welcome.png" width="49%" alt="欢迎页（浅色）" />
+  <img src="docs/screenshots/dark-welcome.png" width="49%" alt="欢迎页（深色）" />
+</p>
+<p>
+  <img src="docs/screenshots/mobile-welcome.png" width="32%" alt="手机版" />
+  <img src="docs/screenshots/mobile-sheet.png" width="32%" alt="手机版底部弹层" />
+  <img src="docs/screenshots/desktop-usage.png" width="32%" alt="用量与费用" />
+</p>
 
 ## 为什么做这个
 
 2026 年 11 月 15-16 日起，DeepSeek 官方 App 与网页版因算力紧张实施限额：长对话（超过 7 天不活跃不再支持）、每日使用额度、单次输入约 4 万字上限；此前 5 月底起修改/重新生成次数也被限制到个位数。大量用户在社交平台表达了不满。
 
-畅聊的思路很简单：**自己带 Key，按 token 计费，把限制的权力拿回自己手里。** 没有次数墙、没有每日额度、会话永久保存在本地、随时导出迁移。
+FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的权力拿回自己手里。** 没有次数墙、没有每日额度、会话永久保存在本地、随时导出迁移。
+
+## v1.1.0 更新了什么
+
+- 🐳 **全新品牌图标**：一蓝一粉两只像素小鲸鱼，相向而游；配套启动页与 Android 自适应图标
+- 🎨 **界面重构**：欢迎页品牌标识、单行人设滑动条、卡片式“对话接续”提示、全新浅蓝品牌色
+- ✨ **原生感动效**：页面淡入、新消息气泡入场、抽屉滑入滑出、移动端弹窗改为底部 Sheet、菜单缩放淡入、输入框聚焦光环
+- ↕️ **回到底部悬浮按钮**：上滑阅读长回答时出现
+- 📱 **Android 返回键**：依次关闭弹窗 → 搜索面板 → 侧边抽屉 → 回到欢迎页 → 退出 App
+- ♿ **减少动态效果**：系统开启“减弱动态效果”时自动关闭非必要动画
+- 🧭 **品牌统一**：应用名统一为 **FreeSeek**（包名不变：`app.freeseek.chat`）
+
+完整记录见 [CHANGELOG](CHANGELOG.md)。
 
 ## 功能
 
@@ -22,16 +44,16 @@
 - Markdown、代码高亮、KaTeX 公式、Mermaid 图表
 - 中英文、深浅色主题、移动端布局、历史记录 ZIP 导入导出
 
-**畅聊新增：**
+**FreeSeek 新增：**
 
 | 功能 | 说明 |
 | --- | --- |
-| 🔄 对话接续 | 任意会话菜单里选「从这里继续」，新对话自动携带其全部上下文——官方"对话长度到顶只能割裂重开"的痛点在这里不存在 |
+| 🔄 对话接续 | 任意会话菜单里选「从这里继续」，新对话自动携带其全部上下文——官方“对话长度到顶只能割裂重开”的痛点在这里不存在 |
 | 🎭 人设与提示词库 | 内置写作助手、翻译专家、编程助手、小红书文案、头脑风暴等人设，可自建；新对话按人设开场 |
 | 💰 用量与费用看板 | 按天统计 token 用量与联网搜索次数，按官方刊例价（区分高峰/空闲时段）估算费用，单价可自行修改 |
 | 🔓 无限制 | 提问/回答/修改/重新生成次数不限；无每日额度；不清理不活跃会话；输入长度只受 API 上下文（1M tokens）约束 |
 
-> 提醒：无限制 ≠ 免费。畅聊直连 DeepSeek 官方 API，按 token 计费从你的账户余额扣除（flash 模型空闲时段输入约 1 元/百万 tokens，详见 App 内「用量与费用」）。量大的话请留意费用看板。
+> 提醒：无限制 ≠ 免费。FreeSeek 直连 DeepSeek 官方 API，按 token 计费从你的账户余额扣除（flash 模型空闲时段输入约 1 元/百万 tokens，详见 App 内「用量与费用」）。量大的话请留意费用看板。
 
 ## 快速开始
 
@@ -43,7 +65,7 @@
 
 ### 2. 安装
 
-- **Android**：下载 Release 中的 APK 直接安装（允许未知来源即可）；或按下方自行构建。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.0-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 
@@ -53,7 +75,7 @@
 
 ## 自行构建
 
-需要 Node.js 22.12+、pnpm 10、JDK 17 与 Android SDK（compileSdk 36）。
+需要 Node.js 22.12+、pnpm 10、JDK 21 与 Android SDK（compileSdk 36）。
 
 ```sh
 pnpm install
@@ -63,7 +85,25 @@ cd android && gradlew assembleDebug   # Windows 用 .\gradlew.bat
 # APK: android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-改完网页代码后：`pnpm build && npx cap sync android` 再重新出包。
+发布正式包（需先配置签名，见下）：
+
+```sh
+cd android && gradlew assembleRelease
+# APK: android/app/build/outputs/apk/release/app-release.apk
+```
+
+### 发布签名（可选）
+
+在 `android/keystore.properties`（**已被 .gitignore 忽略，严禁入库**）中填写：
+
+```properties
+storeFile=C:\\path\\to\\release.jks
+storePassword=你的密码
+keyAlias=你的别名
+keyPassword=你的密码
+```
+
+存在该文件时 `assembleRelease` 自动使用它签名；否则输出未签名包。
 
 ### iOS 构建说明
 
@@ -78,6 +118,20 @@ iOS 平台的生成与签名必须在 macOS 上进行（本仓库未提交 `ios/
 - 历史导入导出（ZIP）不包含 API Key；
 - 不内置任何统计、崩溃上报或第三方 SDK。
 
+## 常见问题
+
+**Q：会不会有次数限制？**
+A：没有。FreeSeek 只是 DeepSeek API 的客户端，限制只来自 API 的用量计费与并发限制，不再有 App 端的每日额度、修改次数墙或长对话清理。
+
+**Q：对话越聊越长会不会超上下文？**
+A：DeepSeek 当前模型上下文为 1M tokens。FreeSeek 的「从这里继续」可以把一个会话的上下文带入新会话，避免单会话无限增长的界面管理问题。
+
+**Q：数据会丢吗？**
+A：数据存在浏览器/WebView 的本地存储中。建议定期在「设置 → 数据管理」导出 ZIP 备份；卸载 App 或清除存储会删除本地数据。
+
+**Q：iOS 能像安卓一样直接装 APK 吗？**
+A：不能。iOS 必须经过 Apple 签名（免费账号 7 天、付费账号长期），这是系统限制，不是 App 的问题。
+
 ## 与官方 chat-demo 的关系 & 许可
 
-本项目 fork 自 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT License），感谢 DeepSeek 开源。依 MIT 协议分发时保留原许可证（见 [LICENSE](LICENSE)，构建产物中亦会复制到 `dist/LICENSE`）。畅聊为个人自用客户端，与 DeepSeek 官方无隶属关系；请遵守 DeepSeek API 服务条款使用。
+本项目 fork 自 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT License），感谢 DeepSeek 开源。依 MIT 协议分发时保留原许可证（见 [LICENSE](LICENSE)，构建产物中亦会复制到 `dist/LICENSE`）。FreeSeek 为个人自用客户端，与 DeepSeek 官方无隶属关系；请遵守 DeepSeek API 服务条款使用。
