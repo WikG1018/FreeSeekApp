@@ -1,13 +1,13 @@
 {
-  "name": "chat-demo",
-  "version": "0.1.1",
-  "description": "基于 DeepSeek API 的静态聊天示例。",
+  "name": "freeseek",
+  "version": "0.1.0",
+  "description": "畅聊：使用自己的 DeepSeek API Key，无次数与额度限制的本地聊天 App。基于 deepseek-ai/chat-demo (MIT) 二次开发。",
   "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "rspack serve -c rspack.config.ts",
-    "build": "rm -rf dist && NODE_ENV=production rspack build -c rspack.config.ts",
+    "build": "rspack build -c rspack.config.ts",
     "type": "tsc -p tsconfig.json",
     "lint": "oxlint src rspack.config.ts",
     "format": "oxfmt --write ."

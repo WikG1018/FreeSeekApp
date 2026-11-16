@@ -20,14 +20,14 @@ type Settings = {
 }
 
 const KEYS = {
-  apiKey: 'chat-demo:api-key',
-  locale: 'chat-demo:locale',
-  location: 'chat-demo:location',
-  themePreference: 'chat-demo:theme-preference',
-  ttsVoice: 'chat-demo:tts-voice',
-  thinking: 'chat-demo:thinking',
-  search: 'chat-demo:search',
-  siderCollapsed: 'chat-demo:sider-collapsed',
+  apiKey: 'freeseek:api-key',
+  locale: 'freeseek:locale',
+  location: 'freeseek:location',
+  themePreference: 'freeseek:theme-preference',
+  ttsVoice: 'freeseek:tts-voice',
+  thinking: 'freeseek:thinking',
+  search: 'freeseek:search',
+  siderCollapsed: 'freeseek:sider-collapsed',
 } as const
 
 const read = (key: string) => {
