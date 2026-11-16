@@ -130,9 +130,53 @@ const dayKey = (timestamp: number): string => {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
+export type SessionUsage = UsageTotals & { id: string; title: string }
+
 export type UsageStats = {
   days: DayUsage[]
   total: UsageTotals
+  /** 按会话聚合，按 token 总量降序 */
+  sessions: SessionUsage[]
+}
+
+/** 单条回复的用量明细（输入拆分缓存命中/未命中） */
+export type MessageUsageDetail = {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  searches: number
+  tokens: number
+  costCny: number
+}
+
+/** 按消息时间所处时段计价，计算单条回复的费用 */
+export const computeMessageUsage = (
+  usage: MessageUsage,
+  createdAt: number,
+  pricing: FlashPricing = usePricing.getState().pricing
+): MessageUsageDetail => {
+  const input = usage.input_tokens ?? 0
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0
+  const output = usage.output_tokens ?? 0
+  const searches = usage.server_tool_use?.web_search_requests ?? 0
+  const peak = isPeakBeijing(createdAt)
+  const rate = peak
+    ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }
+    : { hit: pricing.offPeakHit, miss: pricing.offPeakMiss, out: pricing.offPeakOut }
+  return {
+    input,
+    cacheRead,
+    cacheWrite,
+    output,
+    searches,
+    tokens: input + cacheRead + cacheWrite + output,
+    costCny:
+      (cacheRead * rate.hit + (input + cacheWrite) * rate.miss + output * rate.out) /
+        1_000_000 +
+      (searches * pricing.searchPer1k) / 1000,
+  }
 }
 
 /** 遍历本地会话聚合用量；按消息时间所在时段计价 */
@@ -140,8 +184,10 @@ export const collectUsage = async (): Promise<UsageStats> => {
   const pricing = usePricing.getState().pricing
   const days = new Map<string, UsageTotals>()
   const total = emptyTotals()
-  const sessions = await loadAllSessions().catch(() => [])
-  for (const session of sessions) {
+  const sessions: SessionUsage[] = []
+  const allSessions = await loadAllSessions().catch(() => [])
+  for (const session of allSessions) {
+    const sessionTotals = emptyTotals()
     for (const message of session.messages) {
       if (message.role !== 'assistant' || !message.usage) {
         continue
@@ -152,6 +198,10 @@ export const collectUsage = async (): Promise<UsageStats> => {
       addUsage(day, message.usage, peak, pricing)
       days.set(key, day)
       addUsage(total, message.usage, peak, pricing)
+      addUsage(sessionTotals, message.usage, peak, pricing)
+    }
+    if (sessionTotals.requests > 0) {
+      sessions.push({ ...sessionTotals, id: session.id, title: session.title || '' })
     }
   }
   return {
@@ -159,6 +209,11 @@ export const collectUsage = async (): Promise<UsageStats> => {
       .map(([date, totals]) => ({ date, ...totals }))
       .sort((a, b) => (a.date < b.date ? -1 : 1)),
     total,
+    sessions: sessions.sort(
+      (a, b) =>
+        b.cacheReadTokens + b.cacheMissTokens + b.outputTokens -
+        (a.cacheReadTokens + a.cacheMissTokens + a.outputTokens)
+    ),
   }
 }
 

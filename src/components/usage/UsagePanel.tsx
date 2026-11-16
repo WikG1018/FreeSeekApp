@@ -133,6 +133,19 @@ export const UsageContent = () => {
       </div>
       <div className={styles.chartCaption}>{t('usageLast14Days')}</div>
 
+      <div className={styles.sectionTitle}>{t('usageBySession')}</div>
+      <div className={styles.sessionList}>
+        {stats.sessions.slice(0, 5).map((item) => (
+          <div key={item.id} className={styles.sessionRow}>
+            <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
+            <span className={styles.sessionMeta}>
+              {formatTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok ·{' '}
+              {formatCost(item.costCny)}
+            </span>
+          </div>
+        ))}
+      </div>
+
       <div className={styles.sectionTitle}>{t('usagePricingSection')}</div>
       <div className={styles.priceGroup}>
         <div className={styles.priceGroupTitle}>{t('usagePricingOffPeak')}</div>

@@ -17,6 +17,7 @@ import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
 import { ReplyArea } from './ReplyArea.js'
 import { useReplyView } from './useReplyView.js'
+import { MessageUsage } from '../usage/MessageUsage.js'
 import {
   BranchSwitcher,
   type MessageVersions,
@@ -140,24 +141,12 @@ export const AssistantMessage = memo(function AssistantMessage({
           </span>
         </div>
       ) : null}
+      {!streaming ? <MessageUsage message={message} /> : null}
       {streaming ? null : (
         <div className={styles.bottom}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
             {copyText ? <CopyButton text={copyText} /> : null}
-            {message.usage ? (
-              <span className={styles.usage} title={t('usageMessageTokensTitle')}>
-                {(() => {
-                  const usage = message.usage
-                  const tokens =
-                    (usage.input_tokens ?? 0) +
-                    (usage.cache_read_input_tokens ?? 0) +
-                    (usage.cache_creation_input_tokens ?? 0) +
-                    (usage.output_tokens ?? 0)
-                  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`
-                })()}
-              </span>
-            ) : null}
             {responseText && !refused ? (
               <ReadAloudButton messageId={message.id} text={responseText} />
             ) : null}

@@ -5,6 +5,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { newChat } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
+import { computeMessageUsage, usePricing } from '../../services/usage.js'
 import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
@@ -29,6 +30,9 @@ const sessionTokens = (session: Session): number =>
 const formatTokens = (value: number) =>
   value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
 
+const formatCost = (value: number) =>
+  value === 0 ? '—' : value >= 0.01 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
+
 /** 会话页：标题栏（移动端为顶栏）+ 消息列表，输入框吸底 */
 export const SessionView = ({
   session,
@@ -43,6 +47,17 @@ export const SessionView = ({
   const isMobile = useIsMobile()
   const title = session.title || t('untitledChat')
   const tokens = useMemo(() => sessionTokens(session), [session])
+  const pricing = usePricing((state) => state.pricing)
+  const cost = useMemo(
+    () =>
+      getVisibleMessages(session).reduce((total, message) => {
+        if (message.role !== 'assistant' || !message.usage) {
+          return total
+        }
+        return total + computeMessageUsage(message.usage, message.createdAt, pricing).costCny
+      }, 0),
+    [session, pricing]
+  )
   // 滚动后才浮现顶栏渐隐（dsh-Go：静止时是一整块干净页面）
   const [scrolled, setScrolled] = useState(false)
   const onScrolledChange = useCallback((value: boolean) => setScrolled(value), [])
@@ -56,7 +71,7 @@ export const SessionView = ({
             <div className={styles.title}>{title}</div>
             {tokens > 0 ? (
               <span className={styles.usage} title={t('usageTokensTitle')}>
-                {formatTokens(tokens)} tokens
+                {formatTokens(tokens)} tok · {formatCost(cost)}
               </span>
             ) : null}
           </div>

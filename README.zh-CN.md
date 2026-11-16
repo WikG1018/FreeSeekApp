@@ -66,6 +66,15 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 - 抽屉改为实底 + 右侧圆角 + 列表边缘渐隐，修复背景文字透出
 - API 页入口改为「前往 DeepSeek 开放平台创建 API Key」（登录功能暂缓）
 
+## v1.1.8 更新了什么
+
+完整版用量统计：
+
+- 每条回复显示「输入 · 输出 · 预估费用」摘要，可展开查看缓存命中/未命中/输出/费用明细
+- 会话标题栏显示本会话累计 token 与费用
+- 设置新增独立「用量」分组，入口直接显示今日费用与 token
+- 用量页新增会话用量排行（前 5），保留每日图表与可编辑价格
+
 ## 功能
 
 **继承自官方 chat-demo 的全部能力：**
@@ -97,7 +106,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.7-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.8-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 

@@ -46,6 +46,7 @@ import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
+import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
 import {
   closeSettings,
@@ -200,6 +201,29 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         : fontScale < 1.15
           ? t('fontLarge')
           : t('fontExtraLarge')
+  // 设置首页直接显示今日用量摘要，证明统计确实生效
+  const [usageValue, setUsageValue] = useState<string | undefined>()
+  useEffect(() => {
+    let alive = true
+    collectUsage()
+      .then((stats) => {
+        if (!alive) {
+          return
+        }
+        const today = stats.days.find((day) => day.date === todayKey())
+        if (!today || today.requests === 0) {
+          return
+        }
+        const tokens = today.cacheReadTokens + today.cacheMissTokens + today.outputTokens
+        const cost =
+          today.costCny >= 0.01 ? `¥${today.costCny.toFixed(2)}` : `¥${today.costCny.toFixed(4)}`
+        setUsageValue(`${cost} · ${tokens.toLocaleString()} tok`)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   const themeLabel =
     theme === 'light' ? t('themeLight') : theme === 'dark' ? t('themeDark') : t('themeSystem')
   const localeLabel =
@@ -242,12 +266,15 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
           onClick={() => push('voice')}
         />
       </Section>
-      <Section title={t('settingsSectionData')}>
+      <Section title={t('settingsSectionUsage')}>
         <Row
           icon={<IconDataOutline16 />}
           label={t('usageTitle')}
+          value={usageValue}
           onClick={() => push('usage')}
         />
+      </Section>
+      <Section title={t('settingsSectionData')}>
         <Row
           icon={<IconDataOutline16 />}
           label={t('settingsDataManage')}
