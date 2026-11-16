@@ -15,6 +15,7 @@ import {
   prepareDraftMessage,
 } from './drafts.js'
 import { createLatestReminder } from './latestReminder.js'
+import { activePersona } from '../personas.js'
 import {
   applyEvent,
   canContinueReply,
@@ -603,6 +604,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   if (sessionId === null) {
     const inherit = get().inheritFrom
+    const persona = activePersona()
     const session: Session = {
       id: createId(),
       title: '',
@@ -611,6 +613,7 @@ export const sendMessage = (targetSessionId: string | null) => {
       messages: [],
       rootMessageId: null,
       ...(inherit && inherit.messages.length > 0 ? { inherited: inherit } : null),
+      ...(persona ? { persona } : null),
     }
     sessionId = session.id
     touchSession(session.id)
@@ -657,6 +660,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     history,
     question,
     inherited: current.inherited ?? null,
+    persona: current.persona ?? null,
   })
   return true
 }
@@ -684,7 +688,12 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history, question, inherited: session.inherited ?? null })
+  void streamReply(sessionId, reply, {
+    history,
+    question,
+    inherited: session.inherited ?? null,
+    persona: session.persona ?? null,
+  })
 }
 
 /** 编辑提问后新增同父版本，保留原文件；旧问题的所有回答与后续对话仍可切回。 */
@@ -720,6 +729,7 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     history: path.slice(0, index),
     question,
     inherited: session.inherited ?? null,
+    persona: session.persona ?? null,
   })
   return true
 }
@@ -775,6 +785,7 @@ export const continueReply = (sessionId: string, messageId: string) => {
     question,
     prefix: previous,
     inherited: session.inherited ?? null,
+    persona: session.persona ?? null,
   })
 }
 
@@ -805,6 +816,7 @@ export const retryUpload = (sessionId: string, messageId: string) => {
     history: path.slice(0, index - 1),
     question,
     inherited: session.inherited ?? null,
+    persona: session.persona ?? null,
   })
 }
 
@@ -814,6 +826,8 @@ type Request = {
   prefix?: AssistantMessage
   /** 对话接续：置于请求上下文最前的继承轮次 */
   inherited?: InheritedContext | null
+  /** 人设快照：prompt 覆盖默认 system 提示词 */
+  persona?: { name: string; prompt: string } | null
 }
 
 /** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
@@ -870,6 +884,7 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
     question: pick(request.question),
     prefix: request.prefix,
     inherited: request.inherited,
+    persona: request.persona,
   }
 }
 
@@ -939,6 +954,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
     question: resolve(request.question),
     prefix: request.prefix,
     inherited: request.inherited,
+    persona: request.persona,
   }
 }
 
@@ -1068,7 +1084,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           useSettings.getState().apiKey ?? '',
           {
             model: initial.model ?? MODEL,
-            system: SYSTEM_PROMPT,
+            // 人设提示词覆盖默认助手身份说明
+            system: request.persona?.prompt.trim() ? request.persona.prompt : SYSTEM_PROMPT,
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             safety_check: SAFETY_CHECK,

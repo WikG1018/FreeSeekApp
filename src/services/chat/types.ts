@@ -123,6 +123,8 @@ export type Session = {
   rootMessageId?: string | null
   /** 对话接续：请求时置于上下文最前，不在界面展示；历史导出 ZIP 不包含该字段。 */
   inherited?: InheritedContext | null
+  /** 创建会话时的人设快照：prompt 覆盖默认 system 提示词；null 表示默认助手身份。 */
+  persona?: { name: string; prompt: string } | null
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */

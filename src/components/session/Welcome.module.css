@@ -44,6 +44,34 @@
   background: var(--dsw-alias-fill-secondary, transparent);
 }
 
+.personaRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+  margin-bottom: 20px;
+  padding: 0;
+}
+
+.personaChip {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(5, 12, 20, 0.1));
+  border-radius: 999px;
+  background: none;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  cursor: pointer;
+}
+
+.personaChipActive {
+  border-color: var(--dsw-alias-border-accent, rgba(5, 12, 20, 0.4));
+  color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-fill-secondary, rgba(5, 12, 20, 0.06));
+}
+
 .inheritText {
   overflow: hidden;
   text-overflow: ellipsis;
