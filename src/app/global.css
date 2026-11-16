@@ -40,11 +40,23 @@ body {
   font-feature-settings: 'kern';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* 字体大小设置：整体 UI 等比缩放（Chromium / Android WebView 支持 zoom） */
-  zoom: var(--fs-ui-scale, 1);
 
   --scroll-color: rgba(0, 0, 0, 0.08);
   --scroll-color-hover: rgba(0, 0, 0, 0.15);
+}
+
+/*
+ * 字体大小缩放（网页端）：固定容器按 1/scale 放大布局后再 transform 缩小，
+ * 固定定位的弹层也会跟随缩放，不会出现底部/右侧留白。
+ * Android App 端使用原生 textZoom（只缩放文字），此变量保持 1。
+ */
+.app-scaler {
+  position: fixed;
+  inset: 0;
+  width: calc(100% / var(--fs-ui-scale, 1));
+  height: calc(100% / var(--fs-ui-scale, 1));
+  transform: scale(var(--fs-ui-scale, 1));
+  transform-origin: top left;
 }
 
 body.dark {

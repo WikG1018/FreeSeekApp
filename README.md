@@ -15,20 +15,19 @@ Forked from DeepSeek's official open-source [chat-demo](https://github.com/deeps
   <img src="docs/screenshots/dark-welcome.png" width="49%" alt="Welcome (dark)" />
 </p>
 
-## v1.1.3 highlights
+## v1.1.4 highlights
 
-- Android back navigation fixed: settings pages pop back level by level, session view returns to home, double-back to exit
-- Restores the last opened conversation on relaunch
-- Redrawn pixel whale icon (horizontal flukes, fin, blowhole, safe margins)
-- Global MiSans typeface plus a new font-size setting (small / default / large / extra large)
-- API service page: show/hide key, clear key, model & billing info; language options have icons
+- Fixed the white band at small font size: web uses a compensated scaled container; Android uses native WebView textZoom (text only, layout and touch targets unchanged)
+- Token usage is now visible: Settings → Data → Usage & cost, per-conversation total in the header, and per-reply usage
+- API page adds "Sign in to the DeepSeek platform" via the system browser (the app never sees your account or password)
+- v1.1.3: back navigation, session restore, redrawn whale icon, MiSans font and font-size setting
 
 See the [Chinese README](README.zh-CN.md) for full documentation (installation, API key, build & signing, iOS, FAQ, third-party notices).
 
 ## Quick start
 
 1. Create an API key at [platform.deepseek.com](https://platform.deepseek.com/) (top up a small amount).
-2. Install `freeseek-v1.1.3-release.apk` from [Releases](https://github.com/WikG1018/freeseek/releases) (Android 7.0+), or build the web version: `pnpm install && pnpm build`, then serve `dist/`.
+2. Install `freeseek-v1.1.4-release.apk` from [Releases](https://github.com/WikG1018/freeseek/releases) (Android 7.0+), or build the web version: `pnpm install && pnpm build`, then serve `dist/`.
 3. Paste your key in Settings and chat. Usage is billed per token by DeepSeek — watch the built-in cost dashboard.
 
 ## Building

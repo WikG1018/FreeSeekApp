@@ -112,6 +112,15 @@
   transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
+/* 单条回复的 token 用量 */
+.usage {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .alwaysShow {
   opacity: 1;
 }

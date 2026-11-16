@@ -45,6 +45,8 @@ import { Button } from '../base/Button.js'
 import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
+import { UsageContent } from '../usage/UsagePanel.js'
+import { openExternal } from '../../utils/openExternal.js'
 import {
   closeSettings,
   useSettingsDialog,
@@ -67,6 +69,7 @@ const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
   language: 'settingsLocalePreference',
   voice: 'settingsTtsVoice',
   data: 'settingsDataManage',
+  usage: 'usageTitle',
   about: 'settingsAboutApp',
 }
 
@@ -169,6 +172,7 @@ const SettingsRoot = () => {
                 disabled={historyBusy}
               />
             ) : null}
+            {page === 'usage' ? <UsageContent /> : null}
             {page === 'about' ? <AboutPage /> : null}
           </div>
         </div>
@@ -239,6 +243,11 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         />
       </Section>
       <Section title={t('settingsSectionData')}>
+        <Row
+          icon={<IconDataOutline16 />}
+          label={t('usageTitle')}
+          onClick={() => push('usage')}
+        />
         <Row
           icon={<IconDataOutline16 />}
           label={t('settingsDataManage')}
@@ -339,8 +348,13 @@ const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> })
       <Section title={t('settingsApiService')}>
         <Row label={t('settingsApiModelLabel')} value="deepseek-flash" />
         <Row label={t('settingsApiBillingLabel')} value={t('settingsApiBillingValue')} />
-        <Row icon={<IconLinkOutline16 />} label={t('settingsGetApiKey')} href={PLATFORM_URL} />
+        <Row
+          icon={<IconLinkOutline16 />}
+          label={t('settingsLoginOfficial')}
+          onClick={() => void openExternal(PLATFORM_URL)}
+        />
       </Section>
+      <p className={styles.paragraph}>{t('settingsLoginOfficialHint')}</p>
       {clearOpen ? (
         <Modal
           title={t('settingsApiKeyClear')}

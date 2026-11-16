@@ -145,6 +145,19 @@ export const AssistantMessage = memo(function AssistantMessage({
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
             {copyText ? <CopyButton text={copyText} /> : null}
+            {message.usage ? (
+              <span className={styles.usage} title={t('usageMessageTokensTitle')}>
+                {(() => {
+                  const usage = message.usage
+                  const tokens =
+                    (usage.input_tokens ?? 0) +
+                    (usage.cache_read_input_tokens ?? 0) +
+                    (usage.cache_creation_input_tokens ?? 0) +
+                    (usage.output_tokens ?? 0)
+                  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`
+                })()}
+              </span>
+            ) : null}
             {responseText && !refused ? (
               <ReadAloudButton messageId={message.id} text={responseText} />
             ) : null}

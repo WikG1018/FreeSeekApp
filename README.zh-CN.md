@@ -44,6 +44,12 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 - **MiSans 字体**：界面全局改用 MiSans（400/500/600 三档），新增「字体大小」设置（小/标准/大/特大）
 - **设置细节**：语言选项补图标；API 服务页支持显示/隐藏与清除 Key，并展示当前模型与计费方式
 
+## v1.1.4 更新了什么
+
+- **修复小字体白条**：网页端改为容器等比缩放并补偿尺寸；Android 端使用原生 `WebView.textZoom`（只缩放文字，布局与触控尺寸不变）
+- **Token 用量统计**：设置 → 数据 → 用量与费用；会话标题栏显示累计 token；每条回复显示本条消耗
+- **API 页登录入口**：新增「登录 DeepSeek 开放平台」，在系统浏览器完成官方登录后回填 API Key（应用不接触账号密码）
+
 ## 功能
 
 **继承自官方 chat-demo 的全部能力：**
@@ -75,7 +81,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.3-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.4-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 
@@ -146,6 +152,15 @@ A：不能。iOS 必须经过 Apple 签名（免费账号 7 天、付费账号�
 
 - 界面字体为 [MiSans](https://hyperos.mi.com/font/)（小米），按《MiSans 字体知识产权许可协议》使用，本应用已在「设置 → 关于」中注明；许可原文见 [docs/fonts/MiSans-License.pdf](docs/fonts/MiSans-License.pdf)。
 - 代码基于 DeepSeek 官方开源 chat-demo（MIT），详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+**Q：为什么没有“账号登录”？怎么登录 DeepSeek 官方？**
+A：本应用基于官方开源的 chat-demo，它本身不包含账号体系（BYOK，直接用 API Key）。官方 App 的登录是其私有账号系统（手机号等），并未开源。因此我们提供「登录 DeepSeek 开放平台」入口：用系统浏览器打开官方页面完成登录/注册，在控制台创建 API Key 后粘贴回来。应用不接触、不保存你的账号密码。
+
+**Q：字体大小在哪些地方生效？**
+A：Android App 使用原生 `textZoom`，只缩放文字、不改变布局，触控尺寸保持不变；网页预览为整体等比缩放。
+
+**Q：token 用量在哪里看？**
+A：设置 → 数据 → 用量与费用（每日统计、费用估算、价格设置）；会话标题栏显示该会话累计 token；每条回复的操作区显示本条消耗。
 
 ## 与官方 chat-demo 的关系 & 许可
 

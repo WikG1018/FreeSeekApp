@@ -8,4 +8,8 @@ import './app/global.css'
 ensureKatex()
 setupTheme()
 
-createRoot(document.getElementById('root') as HTMLElement).render(<App />)
+createRoot(document.getElementById('root') as HTMLElement).render(
+  <div className="app-scaler">
+    <App />
+  </div>
+)

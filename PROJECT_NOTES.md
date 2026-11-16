@@ -72,6 +72,14 @@
 - **API 页**：显示/隐藏、清除 Key（确认）、模型/计费说明；语言两行均带图标。
 - 验证：E2E 23/23（MiSans check、zoom=1.1、API 掩码/清除、设置返回栈）。
 
+## v1.1.4 缩放修复与用量（2026-11-17）
+
+- 用户反馈：小字体界面有 bug（截图底部大白条）、缺 token 用量显示、API 页要加登录官方。
+- **缩放根因**：body zoom 缩小固定定位层；移动端 `.frame` 高度用 100dvh 不随容器缩放。方案：main.tsx 包 `.app-scaler`（fixed + width/height 1/scale + transform scale），移动端 `.frame` 高度改 `100%`；Android 端改用原生 `WebView.textZoom`（FontScalePlugin），CSS 缩放只在非 Android 生效。
+- **用量**：UsagePanel 拆出 UsageContent；设置新增 usage 页；SessionView 标题栏累计 token；AssistantMessage 单条 token。
+- **登录官方**：新增 @capacitor/browser + openExternal；API 页「登录 DeepSeek 开放平台」；chat-demo 无账号体系，官方 App 登录为其私有账号，未开源；应用不接触密码。
+- 验证：E2E 26/26（小字体满屏、缩放无留白、用量入口、API 清除）。
+
 ## 已知取舍
 
 

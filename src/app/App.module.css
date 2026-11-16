@@ -57,6 +57,7 @@
     position: fixed;
     top: var(--app-viewport-top, 0px);
     bottom: auto;
-    height: var(--app-viewport-height, 100dvh);
+    /* 使用 100% 跟随缩放容器；键盘弹出时由 --app-viewport-height 覆盖 */
+    height: var(--app-viewport-height, 100%);
   }
 }

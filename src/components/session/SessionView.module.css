@@ -37,6 +37,19 @@
   margin-left: 113px;
 }
 
+/* 会话累计 token（当前可见路径） */
+.usage {
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
 .inputContainer {
   position: sticky;
   bottom: 0;

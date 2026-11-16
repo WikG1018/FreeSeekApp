@@ -3,7 +3,13 @@ import { hasSettingsOpen } from '../components/settings/settingsDialogState.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
 import { useEffect } from 'react'
-import { Capacitor, SystemBars, SystemBarsStyle, SystemBarType } from '@capacitor/core'
+import {
+  Capacitor,
+  registerPlugin,
+  SystemBars,
+  SystemBarsStyle,
+  SystemBarType,
+} from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
@@ -30,6 +36,11 @@ import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import styles from './App.module.css'
+
+/** 字体大小原生插件（Android WebView textZoom） */
+const FontScale = registerPlugin<{ setFontScale(options: { scale: number }): Promise<void> }>(
+  'FontScale'
+)
 
 export const App = () => {
   const t = useTranslate()
@@ -61,9 +72,14 @@ export const App = () => {
     document.documentElement.lang = locale
   }, [locale])
 
-  // 字体大小：写入根 CSS 变量，body 通过 zoom 整体缩放
+  // 字体大小：Android 用原生 textZoom（只缩放文字，不改布局）；网页预览用 #root 等比缩放
   const fontScale = useSettings((state) => state.fontScale)
   useEffect(() => {
+    if (Capacitor.getPlatform() === 'android') {
+      document.documentElement.style.setProperty('--fs-ui-scale', '1')
+      void FontScale.setFontScale({ scale: fontScale }).catch(() => {})
+      return
+    }
     document.documentElement.style.setProperty('--fs-ui-scale', String(fontScale))
   }, [fontScale])
 
