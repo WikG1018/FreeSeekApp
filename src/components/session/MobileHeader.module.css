@@ -11,15 +11,26 @@
   padding: calc(var(--fs-safe-top) + 6px) 10px 6px;
   min-height: 52px;
   pointer-events: none;
-  /* 悬浮顶栏：向下渐隐，消息从下方穿过 */
-  background: linear-gradient(
-    to bottom,
-    var(--dsw-alias-bg-base) 0%,
-    var(--dsw-alias-bg-base) 64%,
-    rgba(255, 255, 255, 0) 100%
-  );
+  /* 悬浮顶栏：静止时不加色带，滚动后浮现渐隐 */
+  background: transparent;
+  transition: background-color var(--fs-duration-base) var(--fs-ease-out);
 
-  [data-ds-dark-theme] & {
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      var(--dsw-alias-bg-base) 0%,
+      var(--dsw-alias-bg-base) 64%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    opacity: 0;
+    transition: opacity var(--fs-duration-base) var(--fs-ease-out);
+  }
+
+  [data-ds-dark-theme] &::before {
     background: linear-gradient(
       to bottom,
       var(--dsw-alias-bg-base) 0%,
@@ -31,6 +42,10 @@
   button {
     pointer-events: auto;
   }
+}
+
+.headerScrolled::before {
+  opacity: 1;
 }
 
 .title {

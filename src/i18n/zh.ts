@@ -84,9 +84,9 @@ export const zh = {
   settingsApiKeyClear: '清除 API Key',
   settingsApiKeyClearConfirm: '清除后需要重新填写 API Key 才能对话，确认清除？',
   apiKeyCleared: '已清除 API Key',
-  settingsLoginOfficial: '登录 DeepSeek 开放平台',
+  settingsLoginOfficial: '前往 DeepSeek 开放平台创建 API Key',
   settingsLoginOfficialHint:
-    '登录在 DeepSeek 官方页面完成，本应用不会获取你的账号密码；登录后在控制台创建 API Key，复制并粘贴到上方输入框。',
+    '在官方页面登录/注册并创建 API Key，然后粘贴到上方输入框。本应用不接触你的账号密码。',
   settingsApiModelLabel: '当前模型',
   settingsApiBillingLabel: '计费方式',
   settingsApiBillingValue: '按 token 计费',

@@ -29,14 +29,26 @@
   padding: 10px 12px 0;
   box-sizing: border-box;
   pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    var(--dsw-alias-bg-base) 0%,
-    var(--dsw-alias-bg-base) 58%,
-    rgba(255, 255, 255, 0) 100%
-  );
+  background: transparent;
+  isolation: isolate;
 
-  [data-ds-dark-theme] & {
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      var(--dsw-alias-bg-base) 0%,
+      var(--dsw-alias-bg-base) 58%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    opacity: 0;
+    transition: opacity var(--fs-duration-base) var(--fs-ease-out);
+  }
+
+  [data-ds-dark-theme] &::before {
     background: linear-gradient(
       to bottom,
       var(--dsw-alias-bg-base) 0%,
@@ -46,8 +58,14 @@
   }
 }
 
+.headerScrolled::before {
+  opacity: 1;
+}
+
 /* 标题胶囊：玻璃底 + 44 高 */
 .headerPill {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -70,6 +88,8 @@
 
 /* 新对话圆键：44 玻璃圆 */
 .headerAction {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;

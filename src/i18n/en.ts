@@ -89,9 +89,9 @@ export const en = {
   settingsApiKeyClear: 'Clear API key',
   settingsApiKeyClearConfirm: 'You will need to enter an API key again before chatting. Clear it?',
   apiKeyCleared: 'API key cleared',
-  settingsLoginOfficial: 'Sign in to the DeepSeek platform',
+  settingsLoginOfficial: 'Open the DeepSeek platform to create an API key',
   settingsLoginOfficialHint:
-    'Signing in happens on the official DeepSeek page. This app never sees your account or password; create an API key there and paste it above.',
+    'Sign in or register on the official page, create an API key, then paste it above. This app never sees your account or password.',
   settingsApiModelLabel: 'Model',
   settingsApiBillingLabel: 'Billing',
   settingsApiBillingValue: 'Per token',

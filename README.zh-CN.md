@@ -59,6 +59,13 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 - 侧边栏玻璃面板、列表边缘渐隐、底部圆键
 - 登录说明：dsh-Go 的官方登录依赖其本地 DSH 引擎的 OAuth 回调与账号模型路由，纯静态客户端无法复刻，本应用保留官方平台登录入口
 
+## v1.1.6 更新了什么
+
+- 顶栏改为「静止无渐隐、滚动后浮现」的悬浮玻璃件（桌面与移动端一致）
+- 会话页标题胶囊、新对话圆键、会话 token 与单条 token
+- 抽屉改为实底 + 右侧圆角 + 列表边缘渐隐，修复背景文字透出
+- API 页入口改为「前往 DeepSeek 开放平台创建 API Key」（登录功能暂缓）
+
 ## 功能
 
 **继承自官方 chat-demo 的全部能力：**
@@ -90,7 +97,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.5-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.6-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 

@@ -39,10 +39,13 @@ export const MessageList = ({
   session,
   streaming,
   footer,
+  onScrolledChange,
 }: {
   session: Session
   streaming: boolean
   footer: React.ReactNode
+  /** 滚动超过阈值时上报，供悬浮顶栏决定是否浮现渐隐 */
+  onScrolledChange?: (scrolled: boolean) => void
 }) => {
   const isMobile = useIsMobile()
   const t = useTranslate()
@@ -51,6 +54,7 @@ export const MessageList = ({
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
+  const scrolledRef = useRef(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const messages = getVisibleMessages(session)
   const [previousVersions, setPreviousVersions] = useState(() =>
@@ -150,10 +154,18 @@ export const MessageList = ({
       }
       scrollTopRef.current = el.scrollTop
       setAtBottom(nearBottom)
+      // 顶栏渐隐：滚动离开顶部后浮现
+      const scrolled = el.scrollTop > 4
+      if (scrolled !== scrolledRef.current) {
+        scrolledRef.current = scrolled
+        onScrolledChange?.(scrolled)
+      }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
+    // 初始即在顶部（无滚动）时确保顶栏无渐隐
+    onScrolledChange?.(el.scrollTop > 4)
     return () => el.removeEventListener('scroll', onScroll)
-  }, [isMobile, scrollToBottom])
+  }, [isMobile, scrollToBottom, onScrolledChange])
 
   const lastIndex = messages.length - 1
   const uploadRetryId = getUploadRetryId(messages, streaming)

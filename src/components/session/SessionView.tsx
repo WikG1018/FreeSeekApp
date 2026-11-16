@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
@@ -43,12 +43,15 @@ export const SessionView = ({
   const isMobile = useIsMobile()
   const title = session.title || t('untitledChat')
   const tokens = useMemo(() => sessionTokens(session), [session])
+  // 滚动后才浮现顶栏渐隐（dsh-Go：静止时是一整块干净页面）
+  const [scrolled, setScrolled] = useState(false)
+  const onScrolledChange = useCallback((value: boolean) => setScrolled(value), [])
   return (
     <div className={styles.view}>
       {isMobile ? (
-        <MobileHeader title={title} />
+        <MobileHeader title={title} scrolled={scrolled} />
       ) : (
-        <div className={styles.header}>
+        <div className={clsx(styles.header, scrolled && styles.headerScrolled)}>
           <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
             <div className={styles.title}>{title}</div>
             {tokens > 0 ? (
@@ -70,6 +73,7 @@ export const SessionView = ({
       <MessageList
         session={session}
         streaming={streaming}
+        onScrolledChange={onScrolledChange}
         footer={
           <div className={styles.inputContainer}>
             <ChatInput sessionId={session.id} />
