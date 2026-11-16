@@ -1,0 +1,14 @@
+services:
+  freeseek:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DB_PATH: /app/data/freeseek.db
+    ports:
+      # 只绑定本机，由 Caddy/Nginx 反代并提供 HTTPS
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/app/data
+      - ./secrets:/app/secrets:ro

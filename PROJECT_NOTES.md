@@ -123,6 +123,27 @@
 - 验证：新增 `.e2e/composer-audit.mjs`（8 项：面板不溢出、空输入/输入后/回车发送/开关高度）与 `.e2e/attach-audit.mjs`（9 项：展开三入口、aria-expanded、三个 input 的 accept/capture、点外收起、选文件收起、面板不溢出、等宽）。全量：26+18+7+12+8+9 通过。
 - 文档：README 中英图库改为手机 8 图（含附件面板），删除桌面图；`docs-shots.mjs` 输出路径改为 `join(process.cwd(), 'docs/screenshots')`（此前相对路径导致写到 freeseek/freeseek）。
 
+## v1.3 账号与计费（进行中，2026-11-17）
+
+用户明确：**只做手机版（Android App），网页版不作为设计目标**；付费要**直接跳转支付宝**，不要二维码（二维码是网页/桌面才需要的形态）。因此：
+
+- 支付只保留「手机网站支付 alipay.trade.wap.pay」：服务端签名出收银台 URL，App 用系统浏览器打开 → 唤起支付宝 App；不实现 precreate 二维码。
+- 服务端只存账号/余额/订单/用量计数，**不保存对话内容**；上游 Key 只在服务端。
+- 登录非强制：默认仍是自带 Key，登录后切换到账号额度。
+
+## v1.3.0 账号与付费（2026-11-17）
+
+用户需求：注册登录 + 余额付费，流量走自己的 API Key 路由，价格官方价 +10%，登录非强制，不保存云端对话，要安全。
+
+- **产品选择（用户确认）**：支付宝**手机网站支付**（直接跳转，不做二维码——只做手机版）；本地先跑通；附件走代理计费、语音代理不计费但限每日次数。
+- **架构**：新增 `server/`（Node 22+，零第三方运行时依赖：node:sqlite / node:crypto / fetch）。客户端默认仍是自带 Key 直连；登录后 `services/account.ts` 把 `apiOrigin` 切到服务端，凭证用会话令牌（复用 `x-api-key` 头），API 层无需感知两种模式（`services/api/runtime.ts` 保存运行时地址）。
+- **计费**：服务端解析 SSE 的 `message_start` / `message_delta` 用量，按官方价 ×1.1（`PRICE_MARKUP`）计费，微元整数记账；请求前要求余额 > 0，流结束后在 finally 中扣费（客户端断开也照扣，符合上游实际成本）。附件本身不计费，进入上下文后按输入 token 计。
+- **支付**：`alipay.trade.wap.pay` 用 RSA2 自签收银台 URL（无 SDK）；异步通知验签 + 校验 app_id/订单号/金额；`/confirm` 主动查单兜底；`creditOrder` 用 BEGIN IMMEDIATE 原子流转订单状态防重复入账。mock 模式给「模拟支付」按钮。
+- **安全**：scrypt 密码哈希；令牌只存 SHA-256；对话内容不落盘（单测遍历所有表断言没有提问/回复文本）；CORS 白名单；登录/注册按 IP、对话按用户、语音按日限流；卡密只存哈希；订单/账单按 user_id 过滤。**坑**：`applyBalance` 自带事务，在 `creditOrder` 的 tx 里再调用会嵌套事务报错 → 拆出 `applyBalanceTx`。
+- **客户端**：设置页「API 服务」改为「账号与 API Key」：使用方式切换（账号余额/自带 Key）、服务地址、登录/注册、余额卡、充值、卡密、账单、退出登录；欢迎页与 `ensureApiKey` 都按模式判断凭证；回复结束后自动刷新余额；401 清理会话回到 Key 模式；402/401 的错误提示在账号模式下改为「余额不足/登录过期」并给「去处理」。
+- **构建期**：新增 `ACCOUNT_ORIGIN` define，打包时可预填服务端地址（`ACCOUNT_ORIGIN=https://api.x.com pnpm build`）。
+- **验证**：服务端 22 项单测（计价/鉴权/幂等/验签/不保存对话/语音配额）+ 客户端新增 `account-check.mjs` 7 项（注册→模拟充值→账号模式对话→余额扣减 29.86→账单→退出）；原有 26+18+7+12+8+9 全绿。
+
 ## 已知取舍
 
 

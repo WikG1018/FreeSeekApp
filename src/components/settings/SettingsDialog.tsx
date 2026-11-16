@@ -46,6 +46,8 @@ import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
+import { AccountPanels } from '../account/AccountPage.js'
+import { useAccount } from '../../services/account.js'
 import { PricingForm } from '../usage/PricingForm.js'
 import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
@@ -66,7 +68,7 @@ const PLATFORM_URL = 'https://platform.deepseek.com/'
 
 const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
   home: 'settings',
-  account: 'settingsApiService',
+  account: 'accountPageTitle',
   appearance: 'avatarMenuSettingsDialogThemeItemLabel',
   font: 'settingsFontSize',
   language: 'settingsLocalePreference',
@@ -129,6 +131,7 @@ const SettingsRoot = () => {
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
+  const accountMode = useAccount((state) => state.mode)
 
   // Esc 关闭设置页；确认弹窗打开时交给弹窗自己处理
   useEffect(() => {
@@ -171,7 +174,12 @@ const SettingsRoot = () => {
         <div className={styles.scroll}>
           <div key={page} className={styles.pageBody}>
             {page === 'home' ? <HomePage push={push} /> : null}
-            {page === 'account' ? <AccountPage editor={apiKeyEditor} /> : null}
+            {page === 'account' ? (
+              <>
+                <AccountPanels />
+                {accountMode === 'key' ? <ApiKeySection editor={apiKeyEditor} /> : null}
+              </>
+            ) : null}
             {page === 'appearance' ? <AppearancePage /> : null}
             {page === 'font' ? <FontPage /> : null}
             {page === 'language' ? <LanguagePage /> : null}
@@ -199,6 +207,8 @@ const SettingsRoot = () => {
 const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
   const apiKey = useSettings((state) => state.apiKey)
+  const accountMode = useAccount((state) => state.mode)
+  const accountUser = useAccount((state) => state.user)
   const theme = useSettings((state) => state.themePreference)
   const locale = useSettings((state) => state.locale)
   const ttsVoice = useSettings((state) => state.ttsVoice)
@@ -246,8 +256,14 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
       <Section title={t('settingsSectionAccount')}>
         <Row
           icon={<IconUserOutline16 />}
-          label={t('settingsApiService')}
-          value={apiKey ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
+          label={t('accountPageTitle')}
+          value={
+            accountMode === 'account' && accountUser
+              ? accountUser.username
+              : apiKey
+                ? t('settingsApiKeyConfigured')
+                : t('settingsApiKeyMissing')
+          }
           onClick={() => push('account')}
         />
       </Section>
@@ -307,8 +323,8 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   )
 }
 
-/** 二级页：API 服务 */
-const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
+/** 二级页：自带 API Key（账号模式切换由 AccountPanels 负责） */
+const ApiKeySection = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
   const t = useTranslate()
   const { apiKey, editing, setEditing, form, showInput } = editor
   const [showKey, setShowKey] = useState(false)

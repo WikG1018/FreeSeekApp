@@ -20,6 +20,8 @@ const cssLoader = {
 type ConfigOptions = {
   /** 公开 API 的地址，注入为 __API_ORIGIN__ */
   apiOrigin?: string
+  /** 自建账号服务端默认地址，注入为 __ACCOUNT_ORIGIN__；为空时由用户在设置里填写 */
+  accountOrigin?: string
   /** 开发服务器配置，支持本地接口代理 */
   devServer?: Configuration['devServer']
 }
@@ -27,6 +29,7 @@ type ConfigOptions = {
 /** 创建构建配置，支持自定义 API 地址和开发服务器选项 */
 export const createConfig = ({
   apiOrigin = 'https://api.deepseek.com',
+  accountOrigin = '',
   devServer,
 }: ConfigOptions = {}): Configuration => ({
   mode: dev ? 'development' : 'production',
@@ -82,7 +85,10 @@ export const createConfig = ({
       scriptLoading: 'defer',
       meta: { 'application-version': version },
     }),
-    new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) }),
+    new rspack.DefinePlugin({
+      __API_ORIGIN__: JSON.stringify(apiOrigin),
+      __ACCOUNT_ORIGIN__: JSON.stringify(accountOrigin),
+    }),
     new rspack.CopyRspackPlugin({
       patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
     }),
@@ -92,4 +98,6 @@ export const createConfig = ({
 })
 
 // eslint-disable-next-line import/no-default-export
-export default defineConfig(createConfig())
+export default defineConfig(
+  createConfig({ accountOrigin: process.env.ACCOUNT_ORIGIN ?? '' })
+)

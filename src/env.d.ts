@@ -13,6 +13,9 @@ declare module '*.png' {
 /** 公开 API 的地址，见 rspack.config.ts 的 createConfig */
 declare const __API_ORIGIN__: string
 
+/** 自建账号服务端默认地址（可为空），见 rspack.config.ts 的 createConfig */
+declare const __ACCOUNT_ORIGIN__: string
+
 /** Prism 语言包通过副作用注册到全局 Prism */
 declare module 'prismjs/components/*' {}
 

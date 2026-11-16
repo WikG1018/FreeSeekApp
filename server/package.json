@@ -1,0 +1,14 @@
+{
+  "name": "freeseek-server",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test",
+    "admin": "node scripts/admin.js"
+  }
+}

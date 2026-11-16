@@ -7,15 +7,15 @@
 基于 DeepSeek 官方开源的 [chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT 协议）二次开发，界面与官方 App 同源，数据全部保存在你的设备上。
 
 <p>
-  <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="手机版首页" />
-  <img src="docs/screenshots/mobile-attach.png" width="23.5%" alt="手机版附件面板（+ 展开）" />
-  <img src="docs/screenshots/mobile-usage.png" width="23.5%" alt="手机版用量与费用" />
-  <img src="docs/screenshots/mobile-pricing.png" width="23.5%" alt="手机版价格设置二级页" />
+  <img src="docs/screenshots/mobile-account.png" width="23.5%" alt="手机版账号与余额" />
+  <img src="docs/screenshots/mobile-account-login.png" width="23.5%" alt="登录 / 注册" />
+  <img src="docs/screenshots/mobile-chat-footer.png" width="23.5%" alt="手机版对话" />
+  <img src="docs/screenshots/mobile-attach.png" width="23.5%" alt="附件面板" />
 </p>
 <p>
-  <img src="docs/screenshots/mobile-chat-footer.png" width="23.5%" alt="手机版对话：底部工具行" />
+  <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="手机版首页" />
+  <img src="docs/screenshots/mobile-usage.png" width="23.5%" alt="手机版用量与费用" />
   <img src="docs/screenshots/dark-mobile-chat.png" width="23.5%" alt="深色模式对话" />
-  <img src="docs/screenshots/mobile-sider.png" width="23.5%" alt="半宽抽屉" />
   <img src="docs/screenshots/mobile-settings.png" width="23.5%" alt="设置一级目录" />
 </p>
 
@@ -39,6 +39,32 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 - **底部免责声明已移除**（原「内容由 AI 生成，请仔细甄别」）
 
 完整历史见 [CHANGELOG](CHANGELOG.md)。
+## 账号与付费（v1.3，可选）
+
+不想自己申请 API Key 的人，可以登录你部署的服务端、用余额付费：
+
+- **登录不是强制的**：默认仍是自带 Key 的纯本地模式；登录后切到「账号余额」即可
+- **价格**：DeepSeek 官方刊例价 **×1.1**（高峰/空闲按北京时间区分），余额不足会拒绝请求并提示充值
+- **充值**：手机网站支付，App 内点「去支付宝支付」直接唤起支付宝；也支持卡密兑换
+- **不保存对话**：服务端只记录 token 用量与金额，不落盘任何消息内容；你的上游 Key 只存在服务端
+- **语音**：账号模式下 ASR/TTS 走代理、不额外收费，但按每日次数限额防滥用
+
+部署自己的服务端（零第三方运行时依赖，Node 22+ 即可）：
+
+```sh
+cd server
+cp .env.example .env      # 本地联调：MOCK_UPSTREAM=1、PAY_PROVIDER=mock
+node src/index.js         # http://127.0.0.1:8787
+```
+
+生产环境配置 `DEEPSEEK_API_KEY`、`PUBLIC_ORIGIN`、支付宝三件套（`ALIPAY_APP_ID` / 私钥 / 公钥）后，放在 HTTPS 反代之后即可；详见 [server/README.md](server/README.md)。打包 App 时可设置 `ACCOUNT_ORIGIN` 预填服务地址：
+
+```sh
+ACCOUNT_ORIGIN=https://api.your-domain.com pnpm build
+```
+
+> 计费与转售需遵守 DeepSeek API 服务条款；请自行确认账号资质与合规要求。
+
 ## 功能
 
 **继承自官方 chat-demo 的全部能力：**

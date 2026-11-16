@@ -11,10 +11,16 @@ Forked from DeepSeek's official open-source [chat-demo](https://github.com/deeps
 - **Usage & cost dashboard** — daily token usage and estimated cost with peak/off-peak DeepSeek pricing (editable).
 
 <p>
+  <img src="docs/screenshots/mobile-account.png" width="23.5%" alt="Account and balance" />
+  <img src="docs/screenshots/mobile-account-login.png" width="23.5%" alt="Sign in / sign up" />
+  <img src="docs/screenshots/mobile-chat-footer.png" width="23.5%" alt="One-line footer row" />
+  <img src="docs/screenshots/mobile-attach.png" width="23.5%" alt="Attachment panel" />
+</p>
+<p>
   <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="Mobile welcome" />
-  <img src="docs/screenshots/mobile-attach.png" width="23.5%" alt="Mobile attachment panel" />
-  <img src="docs/screenshots/mobile-usage.png" width="23.5%" alt="Mobile usage & cost" />
-  <img src="docs/screenshots/mobile-pricing.png" width="23.5%" alt="Mobile pricing sub-page" />
+  <img src="docs/screenshots/mobile-usage.png" width="23.5%" alt="Usage & cost" />
+  <img src="docs/screenshots/dark-mobile-chat.png" width="23.5%" alt="Dark mode" />
+  <img src="docs/screenshots/mobile-settings.png" width="23.5%" alt="Settings" />
 </p>
 
 ## v1.2.2 highlights
@@ -30,6 +36,25 @@ The mobile app is the primary target of ongoing polish:
 - Complete motion pass: exit animations for dialogs/settings/toast, press feedback and focus rings everywhere
 
 See the [Chinese README](README.zh-CN.md) for full documentation (installation, API key, build & signing, iOS, FAQ, third-party notices).
+
+## Accounts & paid usage (v1.3, optional)
+
+Sign-in is optional — the app still works with your own key by default. With an account you pay from a balance instead:
+
+- Billing at **1.1× official DeepSeek rates** (peak/off-peak), deducted per request from your balance; 402 when the balance runs out
+- Top up inside the app: the server signs an Alipay WAP checkout URL and the app opens it in the system browser, which launches the Alipay app directly
+- The server stores token counts and amounts only — **never message content**; your upstream key never leaves the server
+- Attachments are proxied and billed as input tokens; speech is proxied without extra charge but rate-limited per day
+
+Deploy your own server (no third-party runtime dependencies, Node 22+):
+
+```sh
+cd server
+cp .env.example .env      # local: MOCK_UPSTREAM=1, PAY_PROVIDER=mock
+node src/index.js         # http://127.0.0.1:8787
+```
+
+Set `DEEPSEEK_API_KEY`, `PUBLIC_ORIGIN` and the Alipay credentials for production, then put it behind an HTTPS reverse proxy — see [server/README.md](server/README.md). Prefill the server URL at build time with `ACCOUNT_ORIGIN=https://api.your-domain.com pnpm build`.
 
 ## Quick start
 
