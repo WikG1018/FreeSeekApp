@@ -18,6 +18,16 @@
   --fs-brand: rgb(37, 99, 235);
   --fs-brand-soft: rgba(37, 99, 235, 0.08);
   --fs-accent-pink: rgb(244, 114, 182);
+
+  /*
+   * 悬浮玻璃件（顶栏胶囊、输入栏）：底色不透明度取高值。
+   * Android WebView 的 backdrop-filter 支持不稳定，仅靠模糊时下方正文会透上来导致看不清，
+   * 因此以「足够不透明的底色」保证可读性，模糊只作锦上添花。
+   */
+  --fs-glass-bg: rgba(255, 255, 255, 0.95);
+  --fs-glass-bg-strong: rgba(255, 255, 255, 0.985);
+  --fs-glass-border: rgba(15, 23, 42, 0.07);
+  --fs-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.09);
 }
 
 @media (max-width: 1023px) {
@@ -66,6 +76,11 @@ body.dark {
 body[data-ds-dark-theme] {
   --scroll-color: rgba(255, 255, 255, 0.15);
   --scroll-color-hover: rgba(255, 255, 255, 0.24);
+
+  --fs-glass-bg: rgba(38, 38, 40, 0.95);
+  --fs-glass-bg-strong: rgba(38, 38, 40, 0.985);
+  --fs-glass-border: rgba(255, 255, 255, 0.12);
+  --fs-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
 }
 
 body.change-theme *,

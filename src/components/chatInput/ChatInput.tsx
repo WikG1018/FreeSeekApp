@@ -21,7 +21,10 @@ import {
   useDrafts,
 } from '../../services/chat/drafts.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
+import { openAppPermissionSettings } from '../../services/speech/micPermission.js'
+import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
+import { Modal } from '../base/Modal.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
@@ -302,6 +305,31 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         </div>
       </div>
       {dragging ? <DragMask /> : null}
+      {voice.permissionBlocked ? (
+        <Modal
+          title={t('voiceInputPermissionTitle')}
+          centered
+          onClose={voice.dismissPermission}
+          footer={
+            <>
+              <Button variant="outlined" autoFocus onClick={voice.dismissPermission}>
+                {t('cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  void openAppPermissionSettings()
+                  voice.dismissPermission()
+                }}
+              >
+                {t('openSystemSettings')}
+              </Button>
+            </>
+          }
+        >
+          {t('voiceInputPermissionText')}
+        </Modal>
+      ) : null}
     </div>
   )
 }

@@ -34,29 +34,23 @@
   background: transparent;
   isolation: isolate;
 
+  /* 渐隐层：栏内实底（胶囊下方不透出正文），栏底以下 14px 柔化收尾 */
   &::before {
     content: '';
     position: absolute;
-    inset: 0;
+    inset: 0 0 -14px;
     z-index: 0;
     pointer-events: none;
-    background: linear-gradient(
-      to bottom,
-      var(--dsw-alias-bg-base) 0%,
-      var(--dsw-alias-bg-base) 58%,
-      rgba(255, 255, 255, 0) 100%
-    );
+    background: var(--dsw-alias-bg-base);
     opacity: 0;
     transition: opacity var(--fs-duration-base) var(--fs-ease-out);
-  }
-
-  [data-ds-dark-theme] &::before {
-    background: linear-gradient(
+    -webkit-mask-image: linear-gradient(
       to bottom,
-      var(--dsw-alias-bg-base) 0%,
-      var(--dsw-alias-bg-base) 58%,
-      rgba(21, 21, 23, 0) 100%
+      #000 0,
+      #000 calc(100% - 14px),
+      transparent 100%
     );
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 14px), transparent 100%);
   }
 }
 
@@ -74,18 +68,12 @@
   min-height: 44px;
   padding: 0 16px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.66);
-  backdrop-filter: blur(18px) saturate(1.35);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  border: 1px solid var(--fs-glass-border);
+  background: var(--fs-glass-bg);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
   pointer-events: auto;
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.06);
-
-  [data-ds-dark-theme] & {
-    border-color: rgba(255, 255, 255, 0.1);
-    background: rgba(38, 38, 40, 0.66);
-    box-shadow: none;
-  }
+  box-shadow: var(--fs-glass-shadow);
 }
 
 /* 新对话圆键：44 玻璃圆 */
@@ -99,22 +87,16 @@
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--fs-glass-border);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.66);
-  backdrop-filter: blur(18px) saturate(1.35);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  background: var(--fs-glass-bg);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--fs-glass-shadow);
   transition: transform var(--fs-duration-fast) var(--fs-ease-out);
-
-  [data-ds-dark-theme] & {
-    border-color: rgba(255, 255, 255, 0.1);
-    background: rgba(38, 38, 40, 0.66);
-    box-shadow: none;
-  }
 
   &:active {
     transform: scale(0.92);

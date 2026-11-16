@@ -1,0 +1,128 @@
+.group {
+  margin-top: 18px;
+}
+
+.group:first-child {
+  margin-top: 4px;
+}
+
+.groupTitle {
+  padding: 0 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 与设置页其他卡片同一套：16 圆角、层 2 底色、0.5px 描边 */
+.card {
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 0 0 0.5px var(--dsw-alias-border-l1);
+}
+
+[data-ds-dark-theme] .card {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+/* 一行一项：名称 + 输入框 + 单位，触控高度 52 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 14px;
+  cursor: text;
+
+  & + & {
+    border-top: 0.5px solid var(--dsw-alias-border-l1);
+  }
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 21px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 82px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 9px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  transition: border-color var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:focus {
+    border-color: rgba(37, 99, 235, 0.45);
+  }
+
+  /* 去掉数字输入框的上下箭头，避免误触 */
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+  }
+
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.unit {
+  flex-shrink: 0;
+  min-width: 46px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 恢复默认：与导航行同高的独立按钮 */
+.reset {
+  display: block;
+  width: 100%;
+  height: 52px;
+  margin-top: 18px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 0 0 0.5px var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+
+  &:active {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
+
+[data-ds-dark-theme] .reset {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.hint {
+  padding: 12px 8px 0;
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-tertiary);
+}

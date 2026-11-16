@@ -34,4 +34,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 语音输入（录音）需要麦克风权限；未授权时文字聊天不受影响 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+      必须一并声明：Capacitor 的 WebChromeClient 处理 AUDIO_CAPTURE 时会同时申请
+      RECORD_AUDIO 和 MODIFY_AUDIO_SETTINGS，未声明后者会导致整次申请被判为拒绝，
+      getUserMedia 直接 NotAllowedError（表现为麦克风根本打不开）。
+    -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 </manifest>

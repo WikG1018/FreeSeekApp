@@ -127,24 +127,27 @@ export const AssistantMessage = memo(function AssistantMessage({
           </span>
         </div>
       ) : null}
-      {!streaming && !refused && view.searchResults.length > 0 ? (
-        <div
-          className={clsx(styles.summary, panelEntry === summaryEntry && styles.summaryActive)}
-          onClick={() => toggleSearchPanel(summaryEntry, view.searchResults)}
-        >
-          <SiteThumbnails sources={view.searchResults} />
-          <span>
-            {t(
-              view.searchResults.length === 1 ? 'messageSearchSummary' : 'messageSearchSummaries',
-              { count: view.searchResults.length }
-            )}
-          </span>
-        </div>
-      ) : null}
-      {!streaming ? <MessageUsage message={message} /> : null}
-      {streaming ? null : (
-        <div className={styles.bottom}>
+      {!streaming ? (
+        <div className={styles.footer}>
           <BranchSwitcher versions={versions} disabled={busy} onSelect={onSelectVersion} />
+          {!refused && view.searchResults.length > 0 ? (
+            <button
+              type="button"
+              className={clsx(styles.chip, panelEntry === summaryEntry && styles.chipActive)}
+              onClick={() => toggleSearchPanel(summaryEntry, view.searchResults)}
+            >
+              <SiteThumbnails sources={view.searchResults} />
+              <span className={styles.chipLabel}>
+                {t(
+                  view.searchResults.length === 1
+                    ? 'messageSearchSummary'
+                    : 'messageSearchSummaries',
+                  { count: view.searchResults.length }
+                )}
+              </span>
+            </button>
+          ) : null}
+          <MessageUsage message={message} />
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
             {copyText ? <CopyButton text={copyText} /> : null}
             {responseText && !refused ? (
@@ -176,7 +179,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             </Button>
           ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   )
 })

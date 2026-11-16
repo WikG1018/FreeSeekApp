@@ -93,32 +93,30 @@
   }
 }
 
-.bottom {
-  position: relative;
-  left: -6px;
+/* 一条回复的底部工具行：引用、用量、操作按钮共用一行，窄屏自动换行 */
+.footer {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
-  padding-top: 12px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
   padding-bottom: 10px;
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
+  margin-left: auto;
   opacity: 0;
   transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
-/* 单条回复的 token 用量 */
-.usage {
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  white-space: nowrap;
-  user-select: none;
+/* 触屏没有 hover：操作按钮常显，否则历史消息无法复制/朗读 */
+@media not all and (min-width: 768px) {
+  .actions {
+    opacity: 1;
+  }
 }
 
 .alwaysShow {
@@ -129,32 +127,33 @@
   margin-left: auto;
 }
 
-.summary {
+/* 网页引用：小尺寸胶囊，与用量、操作同一行 */
+.chip {
   display: flex;
   align-items: center;
-  width: fit-content;
-  margin-top: 16px;
-  padding: 4px 10px 4px 4px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 3px;
   border-radius: 100px;
   border: 1px solid var(--dsw-alias-border-l2);
-  background-color: var(--dsw-alias-bg-base);
+  background-color: transparent;
   color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-markdown-small);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.3s;
-
-  > span:first-child {
-    margin-left: 0;
-  }
-
-  > span:last-child {
-    margin-left: 6px;
-  }
+  transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
 
   &:hover,
-  &.summaryActive {
+  &.chipActive {
     background-color: var(--dsw-alias-interactive-bg-hover);
     --search-row-site-logo-color: var(--dsw-alias-interactive-bg-hover);
   }
+}
+
+.chipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

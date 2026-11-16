@@ -66,6 +66,12 @@ export const setPricing = (pricing: FlashPricing): void => {
   usePricing.setState({ pricing })
 }
 
+/** 当前价格是否仍是官方默认值（用量页据此显示「官方默认 / 自定义」） */
+export const isDefaultPricing = (pricing: FlashPricing): boolean =>
+  (Object.keys(DEFAULT_PRICING) as (keyof FlashPricing)[]).every(
+    (key) => pricing[key] === DEFAULT_PRICING[key]
+  )
+
 /** 北京时间是否处于高峰时段（工作日 9-12、14-18 点）；法定节假日未计入，估算略有偏差 */
 const isPeakBeijing = (timestamp: number): boolean => {
   const beijing = new Date(timestamp + 8 * 3600_000)

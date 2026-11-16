@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   collectUsage,
-  DEFAULT_PRICING,
+  isDefaultPricing,
   recentDays,
-  setPricing,
   todayKey,
   usePricing,
-  type FlashPricing,
   type UsageStats,
 } from '../../services/usage.js'
+import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
+import { openSettings } from '../settings/settingsDialogState.js'
 import styles from './UsagePanel.module.css'
 
 const formatTokens = (value: number) => value.toLocaleString()
@@ -18,33 +18,12 @@ const formatTokens = (value: number) => value.toLocaleString()
 const formatCost = (value: number) =>
   value === 0 ? '—' : value >= 1 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
 
-const numberField = (
-  label: string,
-  value: number,
-  onChange: (value: number) => void,
-  keyPrefix: string
-) => (
-  <label key={`${keyPrefix}-${label}`} className={styles.priceField}>
-    <span className={styles.priceFieldLabel}>{label}</span>
-    <input
-      className={styles.priceInput}
-      type="number"
-      min={0}
-      step={0.01}
-      value={value}
-      onChange={(event) => onChange(Number(event.target.value))}
-    />
-  </label>
-)
-
-/** 设置页内的用量内容：与弹窗共享同一套统计与价格编辑 */
-export const UsageContent = () => {
+/** 统计内容：设置页与抽屉弹窗共用；价格编辑统一收进「价格设置」二级页 */
+export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) => {
   const t = useTranslate()
   const pricing = usePricing((state) => state.pricing)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const [draft, setDraft] = useState<FlashPricing>(pricing)
-  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -69,11 +48,6 @@ export const UsageContent = () => {
   const days = stats ? recentDays(stats, 14) : []
   const maxCost = Math.max(0.000001, ...days.map((day) => day.costCny))
   const today = stats?.days.find((day) => day.date === todayKey())
-
-  const update = (patch: Partial<FlashPricing>) => {
-    setSaved(false)
-    setDraft((previous) => ({ ...previous, ...patch }))
-  }
 
   if (loading) {
     return <div className={styles.loading}>{t('sessionLoading')}</div>
@@ -146,59 +120,30 @@ export const UsageContent = () => {
         ))}
       </div>
 
-      <div className={styles.sectionTitle}>{t('usagePricingSection')}</div>
-      <div className={styles.priceGroup}>
-        <div className={styles.priceGroupTitle}>{t('usagePricingOffPeak')}</div>
-        <div className={styles.priceRow}>
-          {numberField(t('usagePricingHit'), draft.offPeakHit, (v) => update({ offPeakHit: v }), 'off')}
-          {numberField(t('usagePricingMiss'), draft.offPeakMiss, (v) => update({ offPeakMiss: v }), 'off')}
-          {numberField(t('usagePricingOut'), draft.offPeakOut, (v) => update({ offPeakOut: v }), 'off')}
-        </div>
-      </div>
-      <div className={styles.priceGroup}>
-        <div className={styles.priceGroupTitle}>{t('usagePricingPeak')}</div>
-        <div className={styles.priceRow}>
-          {numberField(t('usagePricingHit'), draft.peakHit, (v) => update({ peakHit: v }), 'peak')}
-          {numberField(t('usagePricingMiss'), draft.peakMiss, (v) => update({ peakMiss: v }), 'peak')}
-          {numberField(t('usagePricingOut'), draft.peakOut, (v) => update({ peakOut: v }), 'peak')}
-        </div>
-      </div>
-      <div className={styles.priceGroup}>
-        <div className={styles.priceRow}>
-          {numberField(t('usagePricingSearch'), draft.searchPer1k, (v) => update({ searchPer1k: v }), 'search')}
-          <button
-            type="button"
-            className={styles.primaryButton}
-            onClick={() => {
-              setPricing(draft)
-              setSaved(true)
-            }}
-          >
-            {saved ? t('usageSaved') : t('usageSave')}
-          </button>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={() => {
-              setSaved(false)
-              setDraft(DEFAULT_PRICING)
-            }}
-          >
-            {t('usagePricingReset')}
-          </button>
-        </div>
-      </div>
-      <div className={styles.hint}>{t('usagePricingHint')}</div>
+      {onOpenPricing ? (
+        <button type="button" className={styles.pricingRow} onClick={onOpenPricing}>
+          <span className={styles.pricingRowLabel}>{t('usagePricingTitle')}</span>
+          <span className={styles.pricingRowValue}>
+            {isDefaultPricing(pricing) ? t('usagePricingDefault') : t('usagePricingCustom')}
+          </span>
+          <IconChevronRightOutline14 />
+        </button>
+      ) : null}
     </div>
   )
 }
 
-/** 抽屉里的用量弹窗 */
+/** 抽屉里的用量弹窗：价格设置跳到设置页的二级页面，不在弹窗里堆表单 */
 export const UsagePanel = ({ onClose }: { onClose: () => void }) => {
   const t = useTranslate()
   return (
     <Modal title={t('usageTitle')} closable onClose={onClose} className={styles.dialog}>
-      <UsageContent />
+      <UsageContent
+        onOpenPricing={() => {
+          onClose()
+          openSettings('usagePricing')
+        }}
+      />
     </Modal>
   )
 }

@@ -10,10 +10,10 @@
   line-height: var(--line-height);
   /* dsh-Go 式玻璃输入条：胶囊 28 → 聚焦展开为 20 圆角 */
   border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--fs-glass-border);
+  background: var(--fs-glass-bg);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
   overflow: hidden;
   transition:
     border-radius var(--fs-duration-base) var(--fs-ease-out),
@@ -22,24 +22,28 @@
     transform var(--fs-duration-base) var(--fs-ease-out);
 
   [data-ds-dark-theme] & {
-    border-color: rgba(255, 255, 255, 0.1);
-    background: rgba(38, 38, 40, 0.72);
+    border-color: var(--fs-glass-border);
+    background: var(--fs-glass-bg);
   }
 
   &:focus-within {
     border-radius: 20px;
     transform: translateY(-2px);
-    border-color: rgba(255, 255, 255, 0.7);
+    border-color: rgba(37, 99, 235, 0.32);
     box-shadow:
-      0 14px 40px rgba(15, 23, 42, 0.14),
+      0 14px 40px rgba(15, 23, 42, 0.13),
       0 2px 8px rgba(15, 23, 42, 0.06);
+
+    [data-ds-dark-theme] & {
+      border-color: rgba(120, 160, 255, 0.4);
+    }
   }
 }
 
 .session {
   box-shadow:
-    0 10px 30px rgba(15, 23, 42, 0.1),
-    0 2px 6px rgba(15, 23, 42, 0.05);
+    var(--fs-glass-shadow),
+    0 2px 6px rgba(15, 23, 42, 0.04);
 }
 
 .home {
@@ -254,6 +258,8 @@
   .wrapper {
     flex-shrink: 0;
     max-height: calc(var(--app-viewport-height, 100dvh) - 120px);
+    /* 手机上内容更密，输入栏取更实的底色，避免正文透上来 */
+    background: var(--fs-glass-bg-strong);
   }
 
   .textareaWrapper {

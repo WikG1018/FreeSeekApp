@@ -46,6 +46,7 @@ import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
+import { PricingForm } from '../usage/PricingForm.js'
 import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
 import {
@@ -71,6 +72,7 @@ const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
   voice: 'settingsTtsVoice',
   data: 'settingsDataManage',
   usage: 'usageTitle',
+  usagePricing: 'usagePricingTitle',
   about: 'settingsAboutApp',
 }
 
@@ -173,7 +175,8 @@ const SettingsRoot = () => {
                 disabled={historyBusy}
               />
             ) : null}
-            {page === 'usage' ? <UsageContent /> : null}
+            {page === 'usage' ? <UsageContent onOpenPricing={() => push('usagePricing')} /> : null}
+            {page === 'usagePricing' ? <PricingForm /> : null}
             {page === 'about' ? <AboutPage /> : null}
           </div>
         </div>

@@ -1,41 +1,44 @@
+/*
+ * 用量胶囊与引用、操作按钮同处一行：容器不生成盒子，
+ * 让「摘要」直接成为这一行的 flex item，展开的明细用 flex-basis 独占下一行。
+ */
 .container {
-  margin-top: 8px;
+  display: contents;
 }
 
 .summary {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   max-width: 100%;
-  padding: 4px 10px;
+  height: 26px;
+  padding: 0 4px 0 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
   background: none;
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
 
-  &:hover {
+  &:hover,
+  &.summaryOpen {
     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 
-.icon {
-  display: flex;
-  flex-shrink: 0;
-}
-
 .summaryText {
   overflow: hidden;
-  white-space: nowrap;
   text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .chevron {
   display: flex;
   flex-shrink: 0;
+  color: var(--dsw-alias-label-dimmed);
   transition: transform var(--fs-duration-fast) var(--fs-ease-out);
 }
 
@@ -43,8 +46,11 @@
   transform: rotate(180deg);
 }
 
+/* 明细独占一整行，宽度跟随正文列；order 排到最后，展开时不会把操作按钮挤到下一行 */
 .details {
-  margin-top: 8px;
+  flex: 0 0 100%;
+  order: 10;
+  margin-top: 2px;
   padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;

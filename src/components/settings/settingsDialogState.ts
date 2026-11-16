@@ -11,6 +11,7 @@ export type SettingsPageId =
   | 'voice'
   | 'data'
   | 'usage'
+  | 'usagePricing'
   | 'about'
 
 /** 设置页：默认打开一级目录；account 用于首次配置与 401 引导 */

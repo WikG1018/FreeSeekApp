@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { transcribe } from '../../services/api/speech.js'
+import { ensureMicPermission, isNativeApp } from '../../services/speech/micPermission.js'
 import { startRecording, type Recording } from '../../services/speech/recorder.js'
 import { useSettings } from '../../services/settings.js'
 import { showToast } from '../base/toastState.js'
@@ -31,6 +32,8 @@ const describeRecordingError = (error: unknown): TranslationMessage => {
  */
 export const useVoiceInput = (onText: (text: string) => void) => {
   const [status, setStatus] = useState<VoiceInputStatus>('idle')
+  /** 原生端麦克风权限被拒：由输入栏弹出「去设置」引导 */
+  const [permissionBlocked, setPermissionBlocked] = useState(false)
   /** 本次录音已录秒数，只在录音中递增 */
   const [seconds, setSeconds] = useState(0)
   const recordingRef = useRef<Recording | null>(null)
@@ -98,6 +101,7 @@ export const useVoiceInput = (onText: (text: string) => void) => {
 
   const toggle = useCallback(async () => {
     if (!AVAILABLE) {
+      showToast({ key: 'voiceInputRequiresHttps' })
       return
     }
     if (status === 'recording') {
@@ -109,6 +113,17 @@ export const useVoiceInput = (onText: (text: string) => void) => {
       return
     }
     const operation = ++operationRef.current
+    // 原生端先拿系统麦克风权限：Capacitor 的 WebView 授权流程会连带 MODIFY_AUDIO_SETTINGS，
+    // 缺这条权限时 getUserMedia 必然被拒，所以不能等它自己弹窗。
+    const granted = await ensureMicPermission()
+    if (operationRef.current !== operation) {
+      return
+    }
+    if (!granted) {
+      setStatus('idle')
+      setPermissionBlocked(true)
+      return
+    }
     setStatus('recording')
     try {
       const recording = await startRecording(() => {
@@ -125,7 +140,15 @@ export const useVoiceInput = (onText: (text: string) => void) => {
     } catch (error) {
       if (operationRef.current === operation) {
         setStatus('idle')
-        showToast(describeRecordingError(error))
+        const denied =
+          error instanceof DOMException &&
+          (error.name === 'NotAllowedError' || error.name === 'SecurityError')
+        if (denied && isNativeApp()) {
+          // Android：权限可在系统设置里重新开启，给出明确入口而不是一句失败提示
+          setPermissionBlocked(true)
+        } else {
+          showToast(describeRecordingError(error))
+        }
       }
     }
   }, [status, finish, cancel])
@@ -148,5 +171,14 @@ export const useVoiceInput = (onText: (text: string) => void) => {
   /** 当前录音的频谱分析节点，未录音时为 null */
   const getAnalyser = useCallback(() => recordingRef.current?.analyser ?? null, [])
 
-  return { status, seconds, getAnalyser, toggle, cancel, available: AVAILABLE }
+  return {
+    status,
+    seconds,
+    getAnalyser,
+    toggle,
+    cancel,
+    available: AVAILABLE,
+    permissionBlocked,
+    dismissPermission: () => setPermissionBlocked(false),
+  }
 }

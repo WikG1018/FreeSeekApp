@@ -80,6 +80,16 @@
 - **登录官方**：新增 @capacitor/browser + openExternal；API 页「登录 DeepSeek 开放平台」；chat-demo 无账号体系，官方 App 登录为其私有账号，未开源；应用不接触密码。
 - 验证：E2E 26/26（小字体满屏、缩放无留白、用量入口、API 清除）。
 
+## v1.2.0 可读性与语音权限（2026-11-17）
+
+- 用户真机反馈四点：悬浮层太透明看不清、顶栏左右按钮要加胶囊、回复底部（引用/用量/三个按钮）缩小并合并一行、设置里的价格设置要独立二级页；另加一条「安卓麦克风根本无法开启」。
+- **麦克风根因（关键）**：Capacitor `BridgeWebChromeClient.onPermissionRequest` 收到 `AUDIO_CAPTURE` 时同时申请 `RECORD_AUDIO` + `MODIFY_AUDIO_SETTINGS`，`permissionCallback` 要求**全部** granted 才 `request.grant`。Manifest 之前只声明了 RECORD_AUDIO，未声明的 MODIFY_AUDIO_SETTINGS 必然返回 denied → 整体 deny → `getUserMedia` 直接 `NotAllowedError`。修复：Manifest 补 `MODIFY_AUDIO_SETTINGS`，并加原生 `MicPermissionPlugin`（check/request/openSettings）在录音前显式申请，被拒时弹「去设置」而不是只 toast。改权限后必须重新安装 APK（覆盖升级不会自动补权限）。
+- **玻璃件可读性**：WebView 对 `backdrop-filter` 支持不稳定，仅靠模糊会让正文透过输入栏/标题。改为在 `global.css` 定义 `--fs-glass-bg/strong/border/shadow`（浅 0.95/0.985、深 0.95），输入栏、顶栏胶囊统一引用；手机端输入栏再升到 strong。设计上仍保留玻璃观感（描边 + 阴影 + 轻模糊），但可读性优先。
+- **顶栏渐隐**：由「58% 实色渐变」改为「`inset: 0 0 -16px` 实底 + mask 只渐隐溢出部分」，保证胶囊所在区域永远是实底；滚动时正文不会压在胶囊上。
+- **回复底部工具行**：`AssistantMessage` 的 `.footer` 单行 flex（引用 chip / 用量 chip / 操作按钮，`margin-left:auto`）；用量胶囊高 26、字号 11，摘要改为「20.1k tok · ¥0.043」（`usageMessageCompact`），展开仍给 4 项明细，用 `order:10` + `flex-basis:100%` 保证明细换行而不挤走操作按钮。触屏（<768px）操作按钮常显，避免历史消息无法复制。
+- **价格设置二级页**：`PricingForm`（`components/usage`）按空闲/高峰/联网搜索分组，输入失焦即写入 `freeseek:pricing` 并 toast「已保存」，底部「恢复默认」；用量页只留一行入口（官方默认 / 自定义），弹窗版用量面板也跳转到该二级页，不再内联表单。
+- 验证：E2E 26/26 + 用量 18/18；APK `aapt dump permissions` 已确认 RECORD_AUDIO + MODIFY_AUDIO_SETTINGS；versionCode 12 / versionName 1.2.0。
+
 ## 已知取舍
 
 

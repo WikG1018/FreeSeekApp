@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(FontScalePlugin.class);
+        registerPlugin(MicPermissionPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
