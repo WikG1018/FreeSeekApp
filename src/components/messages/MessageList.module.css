@@ -13,7 +13,7 @@
 .toBottom {
   position: absolute;
   right: 20px;
-  bottom: 128px;
+  bottom: calc(var(--composer-inset, 150px) + 12px);
   z-index: 30;
   display: flex;
   align-items: center;
@@ -53,7 +53,7 @@
 @media not all and (min-width: 768px) {
   .toBottom {
     right: 16px;
-    bottom: 196px;
+    bottom: calc(var(--composer-inset, 168px) + 10px);
   }
 }
 
@@ -82,7 +82,7 @@
   width: calc(var(--message-list-max-width) - 2 * var(--message-list-padding-horizontal));
   max-width: calc(100% - 40px);
   margin: 0 auto;
-  /* 顶部悬浮栏高度；内容滚动时从栏下穿过 */
+  /* 顶部悬浮栏与底部输入栏均为覆盖层，内容可滚到栏边并从栏底穿过 */
   padding-top: var(--message-list-top-inset, 0px);
-  padding-bottom: 24px;
+  padding-bottom: var(--composer-inset, 150px);
 }

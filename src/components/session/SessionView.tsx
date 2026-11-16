@@ -89,13 +89,12 @@ export const SessionView = ({
         session={session}
         streaming={streaming}
         onScrolledChange={onScrolledChange}
-        footer={
-          <div className={styles.inputContainer}>
-            <ChatInput sessionId={session.id} />
-            <div className={styles.caveat}>{t('contentCaveat')}</div>
-          </div>
-        }
       />
+      <div className={styles.dock}>
+        <div className={styles.dockInner}>
+          <ChatInput sessionId={session.id} />
+        </div>
+      </div>
     </div>
   )
 }

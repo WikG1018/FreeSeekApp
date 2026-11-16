@@ -43,7 +43,7 @@ export const MessageList = ({
 }: {
   session: Session
   streaming: boolean
-  footer: React.ReactNode
+  footer?: React.ReactNode
   /** 滚动超过阈值时上报，供悬浮顶栏决定是否浮现渐隐 */
   onScrolledChange?: (scrolled: boolean) => void
 }) => {

@@ -5,6 +5,8 @@
   flex-direction: column;
   /* 顶部悬浮栏高度：消息列表以此为上边距，滚动时内容从栏下穿过 */
   --message-list-top-inset: 68px;
+  /* 底部悬浮输入栏预留：最后一条消息能滚到栏边 */
+  --composer-inset: 150px;
   animation: pageIn var(--fs-duration-base) var(--fs-ease-out) both;
 }
 
@@ -146,22 +148,22 @@
   white-space: nowrap;
 }
 
-.inputContainer {
-  position: sticky;
+/* 悬浮输入栏：覆盖在消息列表之上，内容从栏底穿过（玻璃自身模糊） */
+.dock {
+  position: absolute;
+  left: 0;
+  right: 0;
   bottom: 0;
-  z-index: 10;
+  z-index: 25;
   display: flex;
   flex-direction: column;
   align-items: center;
-  box-sizing: border-box;
-  width: calc(var(--message-list-max-width) - 48px);
-  max-width: calc(100% - 24px);
-  margin: auto auto 0;
-  padding: 8px 0 calc(var(--fs-safe-bottom) + 10px);
+  padding: 20px 12px calc(var(--fs-safe-bottom) + 10px);
+  pointer-events: none;
   background: linear-gradient(
     to bottom,
     rgba(255, 255, 255, 0) 0%,
-    var(--dsw-alias-bg-base) 34%,
+    var(--dsw-alias-bg-base) 52%,
     var(--dsw-alias-bg-base) 100%
   );
 
@@ -169,34 +171,32 @@
     background: linear-gradient(
       to bottom,
       rgba(21, 21, 23, 0) 0%,
-      var(--dsw-alias-bg-base) 34%,
+      var(--dsw-alias-bg-base) 52%,
       var(--dsw-alias-bg-base) 100%
     );
   }
 }
 
+.dockInner {
+  width: min(calc(var(--message-list-max-width) - 48px), 100%);
+  pointer-events: auto;
+}
+
 .caveat {
-  width: 100%;
-  padding: 6px 0;
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--dsw-alias-label-tertiary);
-  user-select: none;
+  display: none;
 }
 
 @media not all and (min-width: 768px) {
   .view {
     --message-list-top-inset: calc(var(--fs-safe-top) + 58px);
+    --composer-inset: 168px;
   }
 
-  .inputContainer {
-    position: relative;
-    bottom: auto;
-    flex-shrink: 0;
+  .dock {
+    padding: 18px 12px calc(var(--fs-safe-bottom) + 8px);
+  }
+
+  .dockInner {
     width: 100%;
-    max-width: none;
-    margin: 0 auto;
-    padding: 4px 12px calc(var(--fs-safe-bottom) + 8px);
   }
 }

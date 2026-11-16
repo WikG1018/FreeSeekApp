@@ -57,10 +57,21 @@
 .title {
   flex: 1;
   min-width: 0;
-  margin: 0 12px;
+  margin: 0 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font: var(--dsw-font-s-strong-14);
   color: var(--dsw-alias-label-primary);
+
+  [data-ds-dark-theme] & {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(38, 38, 40, 0.66);
+  }
 }
