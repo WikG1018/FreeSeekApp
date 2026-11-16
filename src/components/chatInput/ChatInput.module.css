@@ -8,33 +8,55 @@
   cursor: text;
   font-size: 16px;
   line-height: var(--line-height);
-  border-radius: 26px;
-  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
-  background: var(--dsw-specific-input-major);
+  /* dsh-Go 式玻璃输入条：胶囊 28 → 聚焦展开为 20 圆角 */
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
   overflow: hidden;
   transition:
+    border-radius var(--fs-duration-base) var(--fs-ease-out),
     border-color var(--fs-duration-base) var(--fs-ease-out),
-    box-shadow var(--fs-duration-base) var(--fs-ease-out);
+    box-shadow var(--fs-duration-base) var(--fs-ease-out),
+    transform var(--fs-duration-base) var(--fs-ease-out);
+
+  [data-ds-dark-theme] & {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(38, 38, 40, 0.72);
+  }
 
   &:focus-within {
-    border-color: rgba(37, 99, 235, 0.5);
-    box-shadow: 0 0 0 3px var(--fs-brand-soft);
+    border-radius: 20px;
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.7);
+    box-shadow:
+      0 14px 40px rgba(15, 23, 42, 0.14),
+      0 2px 8px rgba(15, 23, 42, 0.06);
   }
 }
 
 .session {
   box-shadow:
-    0 4px 10px rgba(0, 0, 0, 0.02),
-    0 2px 4px rgba(0, 0, 0, 0.04);
+    0 10px 30px rgba(15, 23, 42, 0.1),
+    0 2px 6px rgba(15, 23, 42, 0.05);
 }
 
 .home {
   box-shadow:
     0 1px 2px rgba(15, 23, 42, 0.03),
-    0 8px 24px rgba(15, 23, 42, 0.04);
+    0 10px 30px rgba(15, 23, 42, 0.06);
+  animation: dockIn var(--fs-duration-slow) var(--fs-ease-out) both;
 
   [data-ds-dark-theme] & {
     box-shadow: none;
+  }
+}
+
+@keyframes dockIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
   }
 }
 
@@ -173,6 +195,8 @@
 .textareaWrapper {
   position: relative;
   width: 100%;
+  transition: height var(--fs-duration-base) var(--fs-ease-out);
+  overflow: hidden;
 }
 
 .textarea,

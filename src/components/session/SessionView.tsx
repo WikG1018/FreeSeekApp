@@ -3,7 +3,9 @@ import { useMemo } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
+import { newChat } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
+import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
 import { MobileHeader } from './MobileHeader.js'
@@ -47,14 +49,22 @@ export const SessionView = ({
         <MobileHeader title={title} />
       ) : (
         <div className={styles.header}>
-          <div className={clsx(styles.title, siderCollapsed && styles.withCollapsedSider)}>
-            {title}
+          <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
+            <div className={styles.title}>{title}</div>
+            {tokens > 0 ? (
+              <span className={styles.usage} title={t('usageTokensTitle')}>
+                {formatTokens(tokens)} tokens
+              </span>
+            ) : null}
           </div>
-          {tokens > 0 ? (
-            <span className={styles.usage} title={t('usageTokensTitle')}>
-              {formatTokens(tokens)} tokens
-            </span>
-          ) : null}
+          <button
+            type="button"
+            className={styles.headerAction}
+            aria-label={t('newChat')}
+            onClick={newChat}
+          >
+            <IconNewChatOutline20 />
+          </button>
         </div>
       )}
       <MessageList

@@ -56,6 +56,24 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
+  const textareaWrapperRef = useRef<HTMLDivElement>(null)
+  const mirrorRef = useRef<HTMLDivElement>(null)
+
+  // 输入框高度变化时平滑展开/收起（镜像层测量高度，外层过渡）
+  useEffect(() => {
+    const mirror = mirrorRef.current
+    const wrapper = textareaWrapperRef.current
+    if (!mirror || !wrapper) {
+      return
+    }
+    const update = () => {
+      wrapper.style.height = `${mirror.offsetHeight}px`
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(mirror)
+    return () => observer.disconnect()
+  }, [])
 
   useLayoutEffect(() => {
     const toggles = togglesRef.current
@@ -162,7 +180,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       }}
     >
       <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
-      <div className={styles.textareaWrapper}>
+      <div ref={textareaWrapperRef} className={styles.textareaWrapper}>
         <textarea
           ref={textareaRef}
           className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
@@ -195,7 +213,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           }}
         />
         {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
-        <div className={styles.mirror} aria-hidden>
+        <div ref={mirrorRef} className={styles.mirror} aria-hidden>
           {`${text}\n`}
         </div>
       </div>
