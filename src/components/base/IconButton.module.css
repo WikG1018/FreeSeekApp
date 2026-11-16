@@ -40,6 +40,17 @@
   height: var(--ds-control-height-xs);
 }
 
+/* 手机输入栏用的小号圆键：比 xs 略大，视觉上与其他 30px 元素对齐 */
+.s {
+  width: 30px;
+  height: 30px;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+}
+
 .m {
   width: 34px;
   height: 34px;

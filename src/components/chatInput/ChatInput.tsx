@@ -1,8 +1,12 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  IconAddOutline16,
+  IconCameraOutline16,
+  IconCloseOutline16,
+  IconFileOutline16,
   IconGlobeLanguageOutline14,
-  IconPaperclipOutline16,
+  IconImageOutline16,
   IconSendOutline16,
   IconStopFill16,
   IconThinkOutline14,
@@ -57,10 +61,28 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
   const textareaWrapperRef = useRef<HTMLDivElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
+  /** 附件面板展开状态：点 + 展开拍照/相册/文件，选完或点外部收起 */
+  const [attachOpen, setAttachOpen] = useState(false)
+
+  useEffect(() => {
+    if (!attachOpen) {
+      return
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setAttachOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [attachOpen])
 
   // 输入框高度变化时平滑展开/收起（镜像层测量高度，外层过渡）
   useEffect(() => {
@@ -173,6 +195,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   return (
     <div
+      ref={wrapperRef}
       className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
@@ -187,6 +210,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
           placeholder={t('chatInputPlaceholderChat')}
           rows={2}
+          // 手机版不显示发送按钮，交给输入法回车键发送
+          enterKeyHint="send"
           // 移动端不自动聚焦，避免一打开就弹出键盘
           autoFocus={!isMobile}
           disabled={importingHistory}
@@ -218,6 +243,49 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           {`${text}\n`}
         </div>
       </div>
+      {attachOpen ? (
+        <div className={styles.attachPanel} role="group" aria-label={t('attachPanelLabel')}>
+          <button
+            type="button"
+            className={styles.attachOption}
+            onClick={() => {
+              setAttachOpen(false)
+              if (ensureApiKey()) {
+                cameraInputRef.current?.click()
+              }
+            }}
+          >
+            <IconCameraOutline16 />
+            <span>{t('attachCamera')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles.attachOption}
+            onClick={() => {
+              setAttachOpen(false)
+              if (ensureApiKey()) {
+                imageInputRef.current?.click()
+              }
+            }}
+          >
+            <IconImageOutline16 />
+            <span>{t('attachGallery')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles.attachOption}
+            onClick={() => {
+              setAttachOpen(false)
+              if (ensureApiKey()) {
+                fileInputRef.current?.click()
+              }
+            }}
+          >
+            <IconFileOutline16 />
+            <span>{t('attachFiles')}</span>
+          </button>
+        </div>
+      ) : null}
       <div className={styles.functionRow}>
         {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
         <div ref={togglesRef} className={styles.toggles}>
@@ -247,26 +315,30 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           </Tooltip>
         </div>
         <div className={styles.right}>
-          <VoiceButton
-            status={voice.status}
-            disabled={!voice.available}
-            seconds={voice.seconds}
-            onClick={() => {
-              if (
-                voice.status !== 'idle' ||
-                (!useChatStore.getState().importingHistory && ensureApiKey())
-              ) {
-                void voice.toggle()
-              }
-            }}
-          />
+          {/* 桌面保留三个并列按钮；手机把「麦克风 / 发送」合并成一个位置 */}
+          {isMobile ? null : (
+            <VoiceButton
+              status={voice.status}
+              disabled={!voice.available}
+              seconds={voice.seconds}
+              onClick={() => {
+                if (
+                  voice.status !== 'idle' ||
+                  (!useChatStore.getState().importingHistory && ensureApiKey())
+                ) {
+                  void voice.toggle()
+                }
+              }}
+            />
+          )}
           <IconButton
-            size="m"
+            size={isMobile ? 's' : 'm'}
             tone="primary"
-            icon={<IconPaperclipOutline16 />}
-            tooltip={t('uploadFile')}
+            icon={attachOpen ? <IconCloseOutline16 /> : <IconAddOutline16 />}
+            tooltip={attachOpen ? t('close') : t('attachPanelLabel')}
+            aria-expanded={attachOpen}
             disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            onClick={() => setAttachOpen((value) => !value)}
           />
           <input
             ref={fileInputRef}
@@ -279,7 +351,68 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
               event.target.value = ''
             }}
           />
-          {streaming && sessionId ? (
+          <input
+            ref={imageInputRef}
+            type="file"
+            multiple
+            hidden
+            accept="image/*"
+            onChange={(event) => {
+              acceptFiles(Array.from(event.target.files ?? []))
+              event.target.value = ''
+            }}
+          />
+          {/* 拍照：capture 让 Android 直接打开相机，桌面端退化为选图 */}
+          <input
+            ref={cameraInputRef}
+            type="file"
+            hidden
+            accept="image/*"
+            capture="environment"
+            onChange={(event) => {
+              acceptFiles(Array.from(event.target.files ?? []))
+              event.target.value = ''
+            }}
+          />
+          {isMobile ? (
+            // 手机版：空输入显示麦克风，有文字/附件变为发送，生成中变为停止
+            streaming && sessionId ? (
+              <button
+                type="button"
+                className={styles.sendButton}
+                aria-label={t('chatInputStopButtonTooltip')}
+                onClick={() => {
+                  stopReadAloud()
+                  stopReply(sessionId)
+                }}
+              >
+                <IconStopFill16 />
+              </button>
+            ) : canSend ? (
+              <button
+                type="button"
+                className={styles.sendButton}
+                aria-label={t('send')}
+                onClick={send}
+              >
+                <IconSendOutline16 />
+              </button>
+            ) : (
+              <VoiceButton
+                status={voice.status}
+                disabled={!voice.available}
+                seconds={voice.seconds}
+                onClick={() => {
+                  if (
+                    voice.status !== 'idle' ||
+                    (!useChatStore.getState().importingHistory && ensureApiKey())
+                  ) {
+                    void voice.toggle()
+                  }
+                }}
+              />
+            )
+          ) : streaming && sessionId ? (
             <button
               type="button"
               className={styles.sendButton}

@@ -53,6 +53,8 @@
 
 /* 明细独占一整行，宽度跟随正文列；order 排到最后，展开时不会把操作按钮挤到下一行 */
 .details {
+  /* 必须 border-box：flex-basis:100% + padding/border 否则会向右溢出 26px */
+  box-sizing: border-box;
   flex: 0 0 100%;
   order: 10;
   margin-top: 2px;

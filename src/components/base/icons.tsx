@@ -213,6 +213,49 @@ export const IconPanelLeftOutline16 = () => (
   </svg>
 )
 
+/** 加号：手机输入栏的附件入口（点开展开拍照/相册/文件） */
+export const IconAddOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M7.35 2a.65.65 0 0 1 1.3 0v4.7h4.85a.65.65 0 1 1 0 1.3H8.65v4.7a.65.65 0 1 1-1.3 0V8H2.5a.65.65 0 0 1 0-1.3h4.85V2Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
+export const IconCameraOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M5.98 1.8c-.34 0-.65.18-.82.47l-.6 1.06H3.1A1.9 1.9 0 0 0 1.2 5.23v6.07c0 1.05.85 1.9 1.9 1.9h9.8c1.05 0 1.9-.85 1.9-1.9V5.23a1.9 1.9 0 0 0-1.9-1.9h-1.46l-.6-1.06a.95.95 0 0 0-.82-.47H5.98Zm2.02 3.6a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Zm0 1.4a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
+export const IconImageOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M3.5 2.2h9A2.3 2.3 0 0 1 14.8 4.5v7a2.3 2.3 0 0 1-2.3 2.3h-9A2.3 2.3 0 0 1 1.2 11.5v-7A2.3 2.3 0 0 1 3.5 2.2Zm0 1.4c-.5 0-.9.4-.9.9v5.9l2.35-2.35a.75.75 0 0 1 1.06 0L8 10.06l1.5-1.5a.75.75 0 0 1 1.06 0l1.94 1.94V4.5c0-.5-.4-.9-.9-.9h-9Zm8.5 8.1-1.4-1.4-1.5 1.5.65.65.25.25h.55c.5 0 .95-.4 1.45-1ZM3.5 12.7h4.2l-.65-.65L4.4 9.4l-1.8 1.8v.6c0 .5.4.9.9.9Zm4-6.55a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
+export const IconFileOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M9.05 1.4H4.6a1.7 1.7 0 0 0-1.7 1.7v9.8c0 .94.76 1.7 1.7 1.7h6.8a1.7 1.7 0 0 0 1.7-1.7V5.45L9.05 1.4Zm-.5 1.4v2.1c0 .3.25.55.55.55h2.1L8.55 2.8ZM4.6 2.8h3.25v2.1c0 1.1.9 2 2 2h2.1v6c0 .16-.14.3-.3.3H4.6a.3.3 0 0 1-.3-.3V3.1c0-.17.13-.3.3-.3Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
 export const IconPaperclipOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

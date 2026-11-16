@@ -102,6 +102,27 @@
 - **验证脚本**：`.e2e/motion-check.mjs`（7 项：Sheet 抓手/退出动画、用量弹窗退出、Settings 退出、Toast 样式）与 `.e2e/ui-audit.mjs`（12 项：溢出、省略号裁剪、玻璃不透明度、工具行对齐、遮挡间距、焦点环、深浅色）。注意省略号断言：`scrollWidth > clientWidth` 在 overflow:hidden 下是正常裁剪，不能当失败，要断言 `overflowX==='hidden' && textOverflow==='ellipsis'` 且元素不撑破父容器。
 - 截图像素体检：PIL 算均值/方差防白屏（当前模型无图像输入，用此法 + DOM 计算样式审计替代肉眼看图）。
 
+## v1.2.2 顶栏对齐修复与项目信息更新（2026-11-17）
+
+- 用户反馈（附截图）：手机版「顶部标题和胶囊错位」，且明确**手机版是重点、不在乎网页版**；要求把项目信息更新好。
+- **根因**：v1.2.1 修省略号时把 `.title` 改成 `display:block; line-height:42px`，但 `line-height` 声明在 `font: var(--dsw-font-s-strong-14)` **之前**——`font` 简写会重置 line-height 为 token 的小值，于是 14px 文字按小行高排、贴在 44px 胶囊顶部，看起来就是"标题和胶囊错位"。教训：**`font` 简写必须放在 line-height 之前，或干脆不用简写**。
+- **修复**：`.title` 用 `display:flex; align-items:center`，文字放内层 `span.titleText`（`min-width:0 + overflow:hidden + text-overflow:ellipsis`）——垂直居中不依赖 font 简写顺序，省略号在内层 span 上生效。Playwright 实测：文字中心 = 胶囊中心 = 左右圆键中心 = 29px，偏差 0。
+- **项目信息**：README 中/英把 v1.1.2~v1.1.8 的逐版本流水换成「当前版本」摘要（CHANGELOG 有全史）；安装链接改 `releases/latest`（不再硬编码会过期的文件名）；`docs/screenshots` 用本版重拍（mobile-welcome / mobile-chat-footer / mobile-usage / mobile-pricing / dark-mobile-chat / mobile-sider / mobile-settings / desktop-chat + 备用图），删 9 张陈旧图；FAQ「token 用量在哪里看」更新为当前路径（每条回复工具行 + 设置 → 用量与费用 + 价格二级页）。
+- 截图脚本陷阱再现：`.e2e/docs-shots.mjs` 里 OUT 用了相对路径 `freeseek/docs/screenshots`，而脚本在 freeseek 目录下执行 → 写到了 `freeseek/freeseek/...`。已移动并清理。**教训：脚本内输出路径一律用绝对路径或相对脚本位置解析。**
+- 今后方向以手机版为第一优先级，桌面仅保持可用。
+
+## v1.2.2 手机版三连修（2026-11-17）
+
+用户连续三条真机反馈（带头像截图），明确「只在手机版、网页版不重要」：
+
+1. **顶栏标题与胶囊错位**：根因是 v1.2.1 把 `line-height:42px` 写在 `font:` 简写**之前**，简写把行高重置回 token 小值，文字顶在胶囊上部。修复：`.title` 用 `display:flex; align-items:center`，文字放内层 `span.titleText` 做省略号（flex 容器自身 text-overflow 无效）。实测中心偏差 0px。
+2. **用量展开面板向右突出**：`.details` 只写了 `flex: 0 0 100%`，缺 `box-sizing: border-box` → padding 24 + border 2 把面板撑出正文列 26px。加 box-sizing 后右边缘精确对齐正文列（370 = 370）。
+3. **输入栏按钮过大 + 不要发送键**：用户先要求去掉发送键（回车发送），随后修正为「开始时与麦克风合并一个按钮，输入文字后变发送」。实现：手机 `.right` 只保留「附件 + 主操作槽位」，槽位按状态切换 麦克风 → 发送 → 停止；桌面保留三键。尺寸：开关 36→30、圆键 34→30/32、`functionRow` padding 12→8/12/10；`textarea` 加 `enterKeyHint="send"`。E2E 实测：空输入仅「附件+语音输入」、输入后出现「发送」、回车真的清空草稿并发消息。
+4. **附件入口改为 + 展开面板**：新增 `IconAddOutline16/Camera/Image/File` 四个图标（16px 填充风格，与现有图标一致）；`+` 点击展开 拍照/相册/文件 三个等宽入口（拍照用 `capture="environment"` 直接调相机），选完或点外部（document pointerdown 判定 wrapper 外）自动收起，展开时图标变 ×、`aria-expanded` 同步。面板用 grid 三等分 + `attachIn` 入场动画。
+- **CSS 顺序坑（本次踩两次）**：媒体查询**不增加优先级**，放在基础规则之前的移动端覆盖会被后面的基础规则覆盖。ChatInput/VoiceButton 的手机尺寸规则统一移到文件末尾，并注释说明。另有一次性把媒体块插进原媒体块内部导致花括号错位，已修复。
+- 验证：新增 `.e2e/composer-audit.mjs`（8 项：面板不溢出、空输入/输入后/回车发送/开关高度）与 `.e2e/attach-audit.mjs`（9 项：展开三入口、aria-expanded、三个 input 的 accept/capture、点外收起、选文件收起、面板不溢出、等宽）。全量：26+18+7+12+8+9 通过。
+- 文档：README 中英图库改为手机 8 图（含附件面板），删除桌面图；`docs-shots.mjs` 输出路径改为 `join(process.cwd(), 'docs/screenshots')`（此前相对路径导致写到 freeseek/freeseek）。
+
 ## 已知取舍
 
 

@@ -31,7 +31,9 @@ export const MobileHeader = ({
       </span>
       {title === undefined ? null : (
         <>
-          <div className={styles.title}>{title}</div>
+          <div className={styles.title}>
+            <span className={styles.titleText}>{title}</span>
+          </div>
           <span className={styles.action}>
             <IconButton
               size="m"

@@ -171,3 +171,11 @@
     transform: rotate(360deg);
   }
 }
+
+/* 手机版圆键与发送键同为 32px；必须放在基础规则之后（媒体查询不加优先级） */
+@media not all and (min-width: 768px) {
+  .button {
+    width: 32px;
+    height: 32px;
+  }
+}
