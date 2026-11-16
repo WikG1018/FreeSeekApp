@@ -80,14 +80,12 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     if (!toggles) {
       return
     }
-
-    const updateLabels = () => {
-      toggles.classList.remove(styles.collapsedToggles)
-      toggles.classList.toggle(styles.collapsedToggles, toggles.scrollWidth > toggles.clientWidth)
+    // 标签始终显示：只在极窄屏压缩字号，不隐藏文字
+    const update = () => {
+      toggles.classList.toggle(styles.tightToggles, toggles.scrollWidth > toggles.clientWidth)
     }
-
-    updateLabels()
-    const observer = new ResizeObserver(updateLabels)
+    update()
+    const observer = new ResizeObserver(update)
     observer.observe(toggles)
     return () => observer.disconnect()
   }, [t])

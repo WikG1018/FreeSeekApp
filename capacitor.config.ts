@@ -15,9 +15,10 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
   },
   plugins: {
-    // Capacitor 8 内置 SystemBars：css 模式下注入 --safe-area-inset-* 并允许内容全屏到状态栏/手势区
+    // Capacitor 8 内置 SystemBars：native 模式由原生把 WebView 放到安全区内，
+    // 避免旧版 WebView 无法提供 env(safe-area-inset-*) 时内容压到状态栏。
     SystemBars: {
-      insetsHandling: 'css',
+      insetsHandling: 'native',
       style: 'DEFAULT',
       hidden: false,
     },

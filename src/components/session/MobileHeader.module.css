@@ -42,6 +42,12 @@
   button {
     pointer-events: auto;
   }
+
+  /* 渐隐层在内容之后，避免遮住图标与标题 */
+  > * {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 .headerScrolled::before {

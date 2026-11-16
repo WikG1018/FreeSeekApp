@@ -278,12 +278,14 @@
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
-.collapsedToggles .toggleLabel {
-  display: none;
+/* 极窄屏：缩小字号与内边距，不隐藏标签、不折叠成圆钮 */
+.tightToggles .toggle {
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .toggle {
@@ -292,7 +294,7 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 34px;
+  height: 36px;
   padding: 0 12px;
   border-radius: 18px;
   border: 1px solid var(--dsw-alias-border-l2);

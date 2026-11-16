@@ -97,7 +97,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.6-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.7-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 

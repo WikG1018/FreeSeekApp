@@ -1,3 +1,4 @@
+import clsx from 'clsx'
 import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
@@ -15,7 +16,7 @@ export const MobileHeader = ({
 }) => {
   const t = useTranslate()
   return (
-    <div className={scrolled ? styles.headerScrolled : styles.header}>
+    <div className={clsx(styles.header, scrolled && styles.headerScrolled)}>
       <IconButton
         size="xl"
         tone="primary"
