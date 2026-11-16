@@ -305,7 +305,8 @@ export const toRequestMessages = (
   question: UserMessage,
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
-  latestReminder?: string
+  latestReminder?: string,
+  inheritedMessages?: Message[]
 ): MessageParam[] => {
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
@@ -316,7 +317,12 @@ export const toRequestMessages = (
       previousReminder = reminder
     }
   }
-  for (const [user, reply] of getContextRounds(history)) {
+  // 继承的上下文轮次置于本会话历史之前，同样只保留成对的可用轮次。
+  const rounds = [
+    ...(inheritedMessages ? getContextRounds(inheritedMessages) : []),
+    ...getContextRounds(history),
+  ]
+  for (const [user, reply] of rounds) {
     // 历史提问没有文字、附件也都没有 serverId 时，提问为空，连同回答一起省略。
     if (!user.content && toFileBlocks(user.files).length === 0) {
       continue

@@ -28,6 +28,40 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.inheritChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 100%;
+  margin-bottom: 16px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(5, 12, 20, 0.1));
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-fill-secondary, transparent);
+}
+
+.inheritText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inheritRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
 @media (max-width: 439px) {
   .greeting {
     font-size: 20px;

@@ -26,6 +26,7 @@ import {
   toSessionSummary,
   type AssistantMessage,
   type FileAttachment,
+  type InheritedContext,
   type Message,
   type Session,
   type SessionSummary,
@@ -71,6 +72,8 @@ type ChatState = {
   sessionSaveErrors: Record<string, boolean>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
+  /** 对话接续：待带入下一个新会话的来源上下文快照；null 表示未启用 */
+  inheritFrom: InheritedContext | null
   /** 正在生成回复的会话 */
   streaming: Record<string, AbortController>
 }
@@ -84,6 +87,7 @@ export const useChatStore = create<ChatState>(() => ({
   sessionLoadErrors: {},
   sessionSaveErrors: {},
   activeId: null,
+  inheritFrom: null,
   streaming: {},
 }))
 
@@ -442,9 +446,44 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
 
 export const newChat = () => {
   if (!get().importingHistory) {
-    set({ activeId: null })
+    set({ activeId: null, inheritFrom: null })
     trimSessionCache()
   }
+}
+
+/** 从指定会话继续：下一个新对话将携带其当前路径的上下文；消息快照在设置时加载 */
+export const startInheritSession = (id: string) => {
+  if (get().importingHistory) {
+    return
+  }
+  const summary = get().sessions.find((session) => session.id === id)
+  if (!summary) {
+    return
+  }
+  const attach = (messages: Message[]) => {
+    if (get().importingHistory) {
+      return
+    }
+    set({
+      inheritFrom: { fromId: summary.id, fromTitle: summary.title, messages },
+      activeId: null,
+    })
+    trimSessionCache()
+  }
+  const cached = getSession(id)
+  if (cached) {
+    attach(getVisibleMessages(cached))
+    return
+  }
+  void db
+    .loadSession(id)
+    .then((stored) => attach(stored ? getVisibleMessages(normalizeSession(stored)) : []))
+    .catch(db.reportStorageError('read session for inheritance'))
+}
+
+/** 取消对话接续 */
+export const cancelInherit = () => {
+  set({ inheritFrom: null })
 }
 
 export const selectSession = (id: string) => {
@@ -563,6 +602,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     return false
   }
   if (sessionId === null) {
+    const inherit = get().inheritFrom
     const session: Session = {
       id: createId(),
       title: '',
@@ -570,6 +610,7 @@ export const sendMessage = (targetSessionId: string | null) => {
       updatedAt: now,
       messages: [],
       rootMessageId: null,
+      ...(inherit && inherit.messages.length > 0 ? { inherited: inherit } : null),
     }
     sessionId = session.id
     touchSession(session.id)
@@ -577,6 +618,7 @@ export const sendMessage = (targetSessionId: string | null) => {
       sessions: [toSessionSummary(session), ...state.sessions],
       sessionCache: { ...state.sessionCache, [session.id]: session },
       activeId: session.id,
+      inheritFrom: null,
     }))
   }
   const current = getSession(sessionId)
@@ -611,7 +653,11 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   persist(sessionId)
   clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, { history, question })
+  void streamReply(sessionId, reply, {
+    history,
+    question,
+    inherited: current.inherited ?? null,
+  })
   return true
 }
 
@@ -638,7 +684,7 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history, question })
+  void streamReply(sessionId, reply, { history, question, inherited: session.inherited ?? null })
 }
 
 /** 编辑提问后新增同父版本，保留原文件；旧问题的所有回答与后续对话仍可切回。 */
@@ -670,7 +716,11 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history: path.slice(0, index), question })
+  void streamReply(sessionId, reply, {
+    history: path.slice(0, index),
+    question,
+    inherited: session.inherited ?? null,
+  })
   return true
 }
 
@@ -720,7 +770,12 @@ export const continueReply = (sessionId: string, messageId: string) => {
   updateReply(sessionId, reply)
   updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }))
   persist(sessionId)
-  void streamReply(sessionId, reply, { history: path.slice(0, -2), question, prefix: previous })
+  void streamReply(sessionId, reply, {
+    history: path.slice(0, -2),
+    question,
+    prefix: previous,
+    inherited: session.inherited ?? null,
+  })
 }
 
 /** 附件补传失败后重试：保留原回答位置，重新补传并请求 */
@@ -746,10 +801,20 @@ export const retryUpload = (sessionId: string, messageId: string) => {
   const reply: AssistantMessage = { ...previous, status: 'pending', error: undefined }
   updateReply(sessionId, reply)
   persist(sessionId)
-  void streamReply(sessionId, reply, { history: path.slice(0, index - 1), question })
+  void streamReply(sessionId, reply, {
+    history: path.slice(0, index - 1),
+    question,
+    inherited: session.inherited ?? null,
+  })
 }
 
-type Request = { history: Message[]; question: UserMessage; prefix?: AssistantMessage }
+type Request = {
+  history: Message[]
+  question: UserMessage
+  prefix?: AssistantMessage
+  /** 对话接续：置于请求上下文最前的继承轮次 */
+  inherited?: InheritedContext | null
+}
 
 /** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
 const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
@@ -804,6 +869,7 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
     history: request.history.map(pick),
     question: pick(request.question),
     prefix: request.prefix,
+    inherited: request.inherited,
   }
 }
 
@@ -872,6 +938,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
     history: request.history.map(resolve),
     question: resolve(request.question),
     prefix: request.prefix,
+    inherited: request.inherited,
   }
 }
 
@@ -994,7 +1061,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.question,
           prepared.prefix,
           initial.thinking ?? false,
-          latestReminder
+          latestReminder,
+          prepared.inherited?.messages
         )
         const events = streamMessage(
           useSettings.getState().apiKey ?? '',

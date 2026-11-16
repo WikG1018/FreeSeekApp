@@ -105,6 +105,13 @@ export type AssistantMessage = MessageBranch & {
 
 export type Message = UserMessage | AssistantMessage
 
+/** 对话接续：新会话创建时对来源会话当前路径消息的快照 */
+export type InheritedContext = {
+  fromId: string
+  fromTitle: string
+  messages: Message[]
+}
+
 export type Session = {
   id: string
   title: string
@@ -114,6 +121,8 @@ export type Session = {
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */
   rootMessageId?: string | null
+  /** 对话接续：请求时置于上下文最前，不在界面展示；历史导出 ZIP 不包含该字段。 */
+  inherited?: InheritedContext | null
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */
