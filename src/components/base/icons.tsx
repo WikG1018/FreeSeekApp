@@ -536,6 +536,59 @@ export const IconUserOutline16 = () => (
   </svg>
 )
 
+/** 字体大小：Aa 字形 */
+export const IconTextSizeOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M1.6 12.6 5.1 3.6h1.1l3.5 9M2.9 9.2h5.6"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9.9 12.6 12.3 6h.8l2.4 6.6M10.7 10.6h3.9"
+      stroke="currentColor"
+      strokeWidth={1.1}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      opacity={0.75}
+    />
+  </svg>
+)
+
+/** 密码显示 */
+export const IconEyeOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M1.8 8s2.2-4.2 6.2-4.2S14.2 8 14.2 8 12 12.2 8 12.2 1.8 8 1.8 8Z"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinejoin="round"
+    />
+    <circle cx={8} cy={8} r={2} stroke="currentColor" strokeWidth={1.3} />
+  </svg>
+)
+
+/** 密码隐藏 */
+export const IconEyeOffOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M2.5 2.5l11 11"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+    />
+    <path
+      d="M6.1 4.1c.6-.2 1.3-.3 1.9-.3 4 0 6.2 4.2 6.2 4.2a9.6 9.6 0 0 1-2.2 2.7M9.9 11.9c-.6.2-1.3.3-1.9.3-4 0-6.2-4.2-6.2-4.2a9.6 9.6 0 0 1 2.2-2.7"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 /** 关于：圆圈感叹信息 */
 export const IconInfoOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">

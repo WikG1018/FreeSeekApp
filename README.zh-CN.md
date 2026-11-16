@@ -36,6 +36,14 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 上一版 v1.1.1 带来了沉浸式布局、官方风格首页与设置页初版，详见 [CHANGELOG](CHANGELOG.md)。
 
+## v1.1.3 更新了什么
+
+- **返回键修复**：设置页逐级返回、会话页先回欢迎页、欢迎页双击才退出；不再一按就回桌面
+- **会话恢复**：重启 App 回到上次打开的对话
+- **图标重绘**：真正的一蓝一粉鲸鱼（横向尾鳍、胸鳍、喷水孔、安全边距）
+- **MiSans 字体**：界面全局改用 MiSans（400/500/600 三档），新增「字体大小」设置（小/标准/大/特大）
+- **设置细节**：语言选项补图标；API 服务页支持显示/隐藏与清除 Key，并展示当前模型与计费方式
+
 ## 功能
 
 **继承自官方 chat-demo 的全部能力：**
@@ -67,7 +75,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.2-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.3-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 
@@ -133,6 +141,11 @@ A：数据存在浏览器/WebView 的本地存储中。建议定期在「设置 
 
 **Q：iOS 能像安卓一样直接装 APK 吗？**
 A：不能。iOS 必须经过 Apple 签名（免费账号 7 天、付费账号长期），这是系统限制，不是 App 的问题。
+
+## 字体与第三方许可
+
+- 界面字体为 [MiSans](https://hyperos.mi.com/font/)（小米），按《MiSans 字体知识产权许可协议》使用，本应用已在「设置 → 关于」中注明；许可原文见 [docs/fonts/MiSans-License.pdf](docs/fonts/MiSans-License.pdf)。
+- 代码基于 DeepSeek 官方开源 chat-demo（MIT），详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 与官方 chat-demo 的关系 & 许可
 

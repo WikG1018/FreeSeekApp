@@ -1,3 +1,7 @@
+import { SettingsDialog } from '../components/settings/SettingsDialog.js'
+import { hasSettingsOpen } from '../components/settings/settingsDialogState.js'
+import { Toast } from '../components/base/Toast.js'
+import { showToast } from '../components/base/toastState.js'
 import { useEffect } from 'react'
 import { Capacitor, SystemBars, SystemBarsStyle, SystemBarType } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
@@ -19,9 +23,6 @@ import { closeTopModal, hasOpenModal } from '../components/base/Modal.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { SettingsDialog } from '../components/settings/SettingsDialog.js'
-import { Toast } from '../components/base/Toast.js'
-import { showToast } from '../components/base/toastState.js'
 import { onUploadNotice } from '../services/attachments.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
@@ -60,6 +61,12 @@ export const App = () => {
     document.documentElement.lang = locale
   }, [locale])
 
+  // 字体大小：写入根 CSS 变量，body 通过 zoom 整体缩放
+  const fontScale = useSettings((state) => state.fontScale)
+  useEffect(() => {
+    document.documentElement.style.setProperty('--fs-ui-scale', String(fontScale))
+  }, [fontScale])
+
   // 文件数、存储空间达到上限时，附件上只显示「上传失败」，原因用 toast 说明
   useEffect(() => onUploadNotice(showToast), [])
   useEffect(bindChatPersistence, [])
@@ -86,12 +93,17 @@ export const App = () => {
     void SystemBars.setStyle({ style, bar: SystemBarType.NavigationBar }).catch(() => {})
   }, [theme])
 
-  // Android 返回键：弹窗 → 搜索面板 → 侧边抽屉 → 回到欢迎页 → 退出 App
+  // Android 返回键：设置/弹窗 → 搜索面板 → 侧边抽屉 → 退出确认（双击），不吞掉任务栈返回
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return
     }
+    let lastBack = 0
     const subscription = CapacitorApp.addListener('backButton', () => {
+      // 1. 设置页打开时交由其内部返回（二级页 → 一级 → 关闭），绝不直接退出
+      if (hasSettingsOpen()) {
+        return // SettingsDialog 自己监听 Escape/返回关闭层级
+      }
       if (hasOpenModal() && closeTopModal()) {
         return
       }
@@ -103,11 +115,19 @@ export const App = () => {
         closeMobileSider()
         return
       }
+      // 2. 在会话页按返回：回到欢迎页（官方 App 行为），而不是退出
       if (useChatStore.getState().activeId !== null) {
         newChat()
         return
       }
-      void CapacitorApp.exitApp()
+      // 3. 已在欢迎页：2 秒内再按一次才退出，避免误触直接回桌面
+      const now = Date.now()
+      if (now - lastBack < 2000) {
+        void CapacitorApp.exitApp()
+        return
+      }
+      lastBack = now
+      showToast({ key: 'pressBackAgainToExit' })
     })
     return () => {
       void subscription.then((handle) => handle.remove())

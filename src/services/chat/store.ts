@@ -46,6 +46,28 @@ const SAFETY_CHECK = { level: 'high' } as const
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
+/** 上次打开的会话：重启 App 后恢复，避免总是回到欢迎页 */
+const ACTIVE_SESSION_KEY = 'freeseek:active-session'
+
+const readActiveSession = (): string | null => {
+  try {
+    return localStorage.getItem(ACTIVE_SESSION_KEY)
+  } catch {
+    return null
+  }
+}
+
+const writeActiveSession = (id: string | null) => {
+  try {
+    if (id) {
+      localStorage.setItem(ACTIVE_SESSION_KEY, id)
+    } else {
+      localStorage.removeItem(ACTIVE_SESSION_KEY)
+    }
+  } catch {
+    // 存储不可用时忽略，仅影响重启恢复
+  }
+}
 
 /** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
 const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
@@ -119,6 +141,8 @@ const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
 let accessSequence = 0
 let historyEpoch = 0
+/** 用于只在 activeId 变化时写入 localStorage */
+let lastActiveId: string | null = null
 let initTask: Promise<void> | undefined
 const sessionLoads = new Map<string, { promise: Promise<void> }>()
 
@@ -306,7 +330,15 @@ export const initChat = (): Promise<void> => {
     try {
       const summaries = await db.loadSessionSummaries()
       if (epoch === historyEpoch) {
-        set({ ready: true, sessions: sortSessions(summaries) })
+        // 恢复上次打开的会话；记录不存在（已删除）时回到欢迎页
+        const saved = readActiveSession()
+        const restore =
+          saved && summaries.some((session) => session.id === saved) ? saved : null
+        lastActiveId = restore
+        set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
+        if (restore) {
+          void ensureSessionLoaded(restore)
+        }
       }
     } catch (error) {
       if (epoch === historyEpoch) {
@@ -1177,3 +1209,12 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     persist(sessionId)
   }
 }
+
+// 会话选择变化时持久化，App 重启后恢复上次打开的会话
+useChatStore.subscribe((state) => {
+  if (state.activeId === lastActiveId) {
+    return
+  }
+  lastActiveId = state.activeId
+  writeActiveSession(state.activeId)
+})

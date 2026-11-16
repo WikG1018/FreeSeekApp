@@ -61,6 +61,17 @@
 - **验证**：E2E 18/18（含半宽抽屉、返回按钮 44、无 GitHub 链接、二级页导航、内嵌许可证）。
 - v1.1.2 已构建签名 APK 并发布。
 
+## v1.1.3 细节修复（2026-11-17）
+
+- 用户反馈：Android 返回键直接回桌面、重进不恢复界面、图标像金鱼、缺字体大小、要求全局 MiSans、语言页缺图标、API 页细节不足。
+- **返回键**：App.tsx 保留双击退出；设置页内新增 Capacitor backButton 监听，栈式 pop；确认弹窗优先关闭。根因：此前设置页打开时 App 直接 return，未处理返回；且欢迎页返回即 exitApp。
+- **会话恢复**：store.ts 新增 `freeseek:active-session`，initChat 恢复 activeId 并 ensureSessionLoaded；subscribe 同步写入。
+- **图标**：scripts/make_icons.py 改为 640 平滑绘制 → 64 格 BOX 量化 → alpha 二值化 → 4 格安全边距 → 1024 NEAREST；尾鳍横向双瓣、胸鳍、喷水孔。
+- **MiSans**：官方 zip（hyperos.mi.com/font-download/MiSans.zip）提取 woff2 Regular/Medium/Semibold 到 src/assets/fonts；theme.css @font-face + 字体栈；许可 PDF 存 docs/fonts，THIRD_PARTY_NOTICES.md 声明。
+- **字体大小**：settings.fontScale（0.85–1.25），body zoom 变量；设置「字体大小」二级页，四档。
+- **API 页**：显示/隐藏、清除 Key（确认）、模型/计费说明；语言两行均带图标。
+- 验证：E2E 23/23（MiSans check、zoom=1.1、API 掩码/清除、设置返回栈）。
+
 ## 已知取舍
 
 

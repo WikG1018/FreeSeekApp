@@ -40,6 +40,8 @@ body {
   font-feature-settings: 'kern';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 字体大小设置：整体 UI 等比缩放（Chromium / Android WebView 支持 zoom） */
+  zoom: var(--fs-ui-scale, 1);
 
   --scroll-color: rgba(0, 0, 0, 0.08);
   --scroll-color-hover: rgba(0, 0, 0, 0.15);

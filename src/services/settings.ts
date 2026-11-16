@@ -17,6 +17,8 @@ type Settings = {
   thinking: boolean
   search: boolean
   siderCollapsed: boolean
+  /** 正文与控件缩放；允许 0.85–1.25 之间任意微调 */
+  fontScale: number
 }
 
 const KEYS = {
@@ -28,6 +30,7 @@ const KEYS = {
   thinking: 'freeseek:thinking',
   search: 'freeseek:search',
   siderCollapsed: 'freeseek:sider-collapsed',
+  fontScale: 'freeseek:font-scale',
 } as const
 
 const read = (key: string) => {
@@ -96,6 +99,10 @@ export const useSettings = create<Settings>(() => ({
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
+  fontScale: (() => {
+    const value = Number(read(KEYS.fontScale))
+    return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
+  })(),
 }))
 
 export const setLocale = (locale: Locale) => {
@@ -132,6 +139,12 @@ export const setThinking = (thinking: boolean) => {
 export const setSearch = (search: boolean) => {
   write(KEYS.search, String(search))
   useSettings.setState({ search })
+}
+
+export const setFontScale = (fontScale: number) => {
+  const value = Math.min(1.25, Math.max(0.85, Number(fontScale.toFixed(2))))
+  write(KEYS.fontScale, String(value))
+  useSettings.setState({ fontScale: value })
 }
 
 export const setSiderCollapsed = (siderCollapsed: boolean) => {

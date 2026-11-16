@@ -6,6 +6,7 @@ export type SettingsPageId =
   | 'home'
   | 'account'
   | 'appearance'
+  | 'font'
   | 'language'
   | 'voice'
   | 'data'
@@ -21,6 +22,9 @@ export const openSettings = (page: SettingsPageId = 'home') =>
   useSettingsDialog.setState({ open: true, page })
 
 export const closeSettings = () => useSettingsDialog.setState({ open: false })
+
+/** 是否有设置页处于打开状态（Android 返回键应先关闭它，不能直接退出 App） */
+export const hasSettingsOpen = () => useSettingsDialog.getState().open
 
 /** 没有 API Key 时打开「API 服务」页，返回是否已有 Key */
 export const ensureApiKey = () => {
