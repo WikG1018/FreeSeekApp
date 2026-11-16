@@ -269,7 +269,10 @@
   bottom: 0;
   left: 0;
   z-index: 800;
-  width: 100%;
+  width: min(86vw, 360px);
+  overflow: hidden;
+  border-radius: 0 20px 20px 0;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.18);
   animation: drawerIn var(--fs-duration-slow) var(--fs-ease-out) both;
 }
 

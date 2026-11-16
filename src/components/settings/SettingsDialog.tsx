@@ -1,9 +1,13 @@
 import clsx from 'clsx'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import logo from '../../assets/logo.png'
+import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
+  IconCheckOutline16,
   IconChevronLeftOutline16,
   IconChevronRightOutline14,
   IconDarkOutline16,
+  IconDataOutline16,
   IconDownloadOutline16,
   IconFollowsystemOutline16,
   IconGlobeLanguageOutline14,
@@ -22,11 +26,8 @@ import {
   importHistory,
 } from '../../services/chat/backup.js'
 import { useChatStore } from '../../services/chat/store.js'
-import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
-  isChineseBrowser,
   setLocale,
-  setLocation,
   setThemePreference,
   setTtsVoice,
   useSettings,
@@ -35,48 +36,62 @@ import {
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
 import { hasOpenModal, Modal } from '../base/Modal.js'
-import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
-import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+import {
+  closeSettings,
+  useSettingsDialog,
+  type SettingsPageId,
+} from './settingsDialogState.js'
 import styles from './Settings.module.css'
-
-const REPO_URL = 'https://github.com/WikG1018/freeseek'
-const CHANGELOG_URL = `${REPO_URL}/blob/master/CHANGELOG.md`
-const LICENSE_URL = `${REPO_URL}/blob/master/LICENSE`
-const UPSTREAM_URL = 'https://github.com/deepseek-ai/chat-demo'
-const ISSUES_URL = `${REPO_URL}/issues`
 
 /** 构建期注入的应用版本（rspack HtmlRspackPlugin 的 application-version meta） */
 const APP_VERSION =
   document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? '—'
 
+/** DeepSeek 开放平台：申请与管理 API Key（唯一的必要外链） */
+const PLATFORM_URL = 'https://platform.deepseek.com/'
+
+const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
+  home: 'settings',
+  account: 'settingsApiService',
+  appearance: 'avatarMenuSettingsDialogThemeItemLabel',
+  language: 'settingsLocalePreference',
+  voice: 'settingsTtsVoice',
+  data: 'settingsDataManage',
+  about: 'settingsAboutApp',
+}
+
 /**
- * 设置页：参考官方 App 的「分组卡片」布局。
- * 移动端为全屏页面（返回圆钮 + 居中标题），桌面端为居中卡片；分组依次为账户 / 应用 / 数据 / 关于。
+ * 设置：一级目录 + 二级页面（路由栈）。
+ * 移动端为全屏页面、桌面端为居中卡片；所有行共用一套行组件与触控尺寸。
  */
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
-  return open ? <SettingsPage /> : null
+  return open ? <SettingsRoot /> : null
 }
 
-const SettingsPage = () => {
+const SettingsRoot = () => {
   const t = useTranslate()
-  // 打开时定位到调用方指定的分组
-  const [section] = useState(() => useSettingsDialog.getState().section)
+  const [stack, setStack] = useState<SettingsPageId[]>(() => {
+    const initial = useSettingsDialog.getState().page
+    return initial === 'home' ? ['home'] : ['home', initial]
+  })
+  const page = stack[stack.length - 1] ?? 'home'
+  const push = (next: SettingsPageId) => setStack((previous) => [...previous, next])
+  const back = () => {
+    setStack((previous) => (previous.length > 1 ? previous.slice(0, -1) : previous))
+    if (stack.length <= 1) {
+      closeSettings()
+    }
+  }
+
+  // 跨页面共享的表单与数据操作状态，切换二级页面不丢失输入
   const apiKeyEditor = useApiKeyEditor()
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const target = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-section="${section}"]`
-    )
-    target?.scrollIntoView({ block: 'start' })
-  }, [section])
 
   // Esc 关闭设置页；确认弹窗打开时交给弹窗自己处理
   useEffect(() => {
@@ -92,212 +107,174 @@ const SettingsPage = () => {
   return (
     <>
       <div className={styles.scrim} aria-hidden="true" />
-      <div className={styles.page} role="dialog" aria-modal="true" aria-label={t('settings')}>
+      <div
+        className={styles.page}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t(PAGE_TITLES[page])}
+      >
         <div className={styles.header}>
           <button
             type="button"
             className={styles.back}
-            aria-label={t('close')}
-            onClick={closeSettings}
+            aria-label={stack.length > 1 ? t('back') : t('close')}
+            onClick={back}
           >
             <IconChevronLeftOutline16 />
           </button>
-        <div className={styles.title}>{t('settings')}</div>
-        <span className={styles.backPlaceholder} />
-      </div>
-      <div ref={scrollRef} className={styles.scroll}>
-        <Section id="account" title={t('settingsSectionAccount')}>
-          <ApiKeySetting editor={apiKeyEditor} />
-        </Section>
-
-        <Section id="app" title={t('settingsSectionApp')}>
-          <Row
-            icon={<IconGlobeLanguageOutline14 />}
-            label={t('settingsLocalePreference')}
-            action={<LocaleSetting />}
-          />
-          <ThemeSetting />
-          <Row
-            icon={<IconPlayMediaOutline16 />}
-            label={t('settingsTtsVoice')}
-            action={<TtsVoiceSetting />}
-          />
-          <LocationSetting />
-        </Section>
-
-        <Section id="data" title={t('settingsSectionData')}>
-          <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-          <ExportHistory disabled={historyBusy} />
-          <DeleteAllSetting historyDelete={historyDelete} disabled={historyBusy} />
-        </Section>
-
-        <Section id="about" title={t('settingsSectionAbout')}>
-          <Row
-            icon={<IconInfoOutline16 />}
-            label={t('settingsVersion')}
-            value={APP_VERSION}
-          />
-          <Row
-            icon={<IconLinkOutline16 />}
-            label={t('settingsProjectHome')}
-            href={REPO_URL}
-          />
-          <Row label={t('settingsChangelog')} href={CHANGELOG_URL} />
-          <Row label={t('settingsLicense')} href={LICENSE_URL} />
-          <Row label={t('settingsUpstream')} href={UPSTREAM_URL} />
-          <Row label={t('settingsFeedback')} href={ISSUES_URL} />
-        </Section>
-
-        <div className={styles.footer}>{t('settingsFooter')}</div>
+          <div className={styles.title}>{t(PAGE_TITLES[page])}</div>
+          <span className={styles.backPlaceholder} />
+        </div>
+        <div className={styles.scroll}>
+          <div key={page} className={styles.pageBody}>
+            {page === 'home' ? <HomePage push={push} /> : null}
+            {page === 'account' ? <AccountPage editor={apiKeyEditor} /> : null}
+            {page === 'appearance' ? <AppearancePage /> : null}
+            {page === 'language' ? <LanguagePage /> : null}
+            {page === 'voice' ? <VoicePage /> : null}
+            {page === 'data' ? (
+              <DataPage
+                historyImport={historyImport}
+                historyDelete={historyDelete}
+                disabled={historyBusy}
+              />
+            ) : null}
+            {page === 'about' ? <AboutPage /> : null}
+          </div>
+        </div>
       </div>
       {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
-      </div>
     </>
   )
 }
 
-/** 分组：标题 + 白色卡片 */
-const Section = ({
-  id,
-  title,
-  children,
-}: {
-  id: SettingsSection
-  title: string
-  children: ReactNode
-}) => (
-  <section className={styles.section} data-section={id}>
-    <div className={styles.sectionTitle}>{title}</div>
-    <div className={styles.card}>{children}</div>
-  </section>
-)
-
-/** 行：可选图标、标签、右侧值/操作、箭头；href 为外链，onClick 为可点击行 */
-const Row = ({
-  icon,
-  label,
-  value,
-  action,
-  href,
-  onClick,
-  danger,
-  className,
-}: {
-  icon?: ReactNode
-  label: string
-  value?: string
-  action?: ReactNode
-  href?: string
-  onClick?: () => void
-  danger?: boolean
-  className?: string
-}) => {
-  const content = (
+/** 一级目录：只放导航行，不放输入框与操作按钮 */
+const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
+  const t = useTranslate()
+  const apiKey = useSettings((state) => state.apiKey)
+  const theme = useSettings((state) => state.themePreference)
+  const locale = useSettings((state) => state.locale)
+  const ttsVoice = useSettings((state) => state.ttsVoice)
+  const sessionCount = useChatStore((state) => state.sessions.length)
+  const themeLabel =
+    theme === 'light' ? t('themeLight') : theme === 'dark' ? t('themeDark') : t('themeSystem')
+  const localeLabel =
+    locale === 'zh-CN' ? t('settingsLocaleZhCN') : t('settingsLocaleEnUS')
+  const voiceLabel =
+    ttsVoice === 'stella' ? t('settingsTtsVoiceStella') : t('settingsTtsVoiceTide')
+  return (
     <>
-      {icon ? <span className={styles.rowIcon}>{icon}</span> : null}
-      <span className={clsx(styles.rowLabel, danger && styles.rowDanger)}>{label}</span>
-      {value !== undefined ? <span className={styles.rowValue}>{value}</span> : null}
-      {action ? <span className={styles.rowAction}>{action}</span> : null}
-      {href || onClick ? (
-        <span className={styles.rowChevron}>
-          <IconChevronRightOutline14 />
-        </span>
-      ) : null}
+      <Section title={t('settingsSectionAccount')}>
+        <Row
+          icon={<IconUserOutline16 />}
+          label={t('settingsApiService')}
+          value={apiKey ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
+          onClick={() => push('account')}
+        />
+      </Section>
+      <Section title={t('settingsSectionApp')}>
+        <Row
+          icon={<IconLightOutline16 />}
+          label={t('avatarMenuSettingsDialogThemeItemLabel')}
+          value={themeLabel}
+          onClick={() => push('appearance')}
+        />
+        <Row
+          icon={<IconGlobeLanguageOutline14 />}
+          label={t('settingsLocalePreference')}
+          value={localeLabel}
+          onClick={() => push('language')}
+        />
+        <Row
+          icon={<IconPlayMediaOutline16 />}
+          label={t('settingsTtsVoice')}
+          value={voiceLabel}
+          onClick={() => push('voice')}
+        />
+      </Section>
+      <Section title={t('settingsSectionData')}>
+        <Row
+          icon={<IconDataOutline16 />}
+          label={t('settingsDataManage')}
+          value={
+            sessionCount > 0 ? t('settingsSessionsCount', { count: sessionCount }) : undefined
+          }
+          onClick={() => push('data')}
+        />
+      </Section>
+      <Section title={t('settingsSectionAbout')}>
+        <Row
+          icon={<IconInfoOutline16 />}
+          label={t('settingsAboutApp')}
+          value={APP_VERSION}
+          onClick={() => push('about')}
+        />
+      </Section>
     </>
   )
-  if (href) {
-    return (
-      <a
-        className={clsx(styles.row, styles.rowInteractive, className)}
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-      >
-        {content}
-      </a>
-    )
-  }
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className={clsx(styles.row, styles.rowInteractive, className)}
-        onClick={onClick}
-      >
-        {content}
-      </button>
-    )
-  }
-  return <div className={clsx(styles.row, className)}>{content}</div>
 }
 
-/** API Key：未配置时直接显示输入框，已配置时显示状态与「更换」 */
-const ApiKeySetting = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
+/** 二级页：API 服务 */
+const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
   const t = useTranslate()
   const { apiKey, editing, setEditing, form, showInput } = editor
   return (
-    <div className={styles.apiKeyBlock}>
-      <Row
-        icon={<IconUserOutline16 />}
-        label={t('settingsApiKey')}
-        value={apiKey && !editing ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
-        action={
-          apiKey && !editing ? (
+    <Section>
+      <div className={styles.accountBlock}>
+        <div className={styles.accountStatus}>
+          <span className={styles.accountStatusLabel}>{t('settingsApiService')}</span>
+          <span
+            className={clsx(styles.accountStatusValue, apiKey && styles.accountStatusOk)}
+          >
+            {apiKey && !editing ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
+          </span>
+        </div>
+        {apiKey && !editing ? (
+          <div className={styles.maskRow}>
+            <span className={styles.keyMask}>{maskKey(apiKey)}</span>
             <button type="button" className={styles.textButton} onClick={() => setEditing(true)}>
               {t('changeApiKey')}
             </button>
-          ) : null
-        }
-      />
-      {showInput ? (
-        <div className={styles.apiKeyEditor}>
-          <input
-            className={styles.apiKeyInput}
-            type="password"
-            placeholder={t('apiKeyPlaceholder')}
-            autoComplete="off"
-            spellCheck={false}
-            value={form.value}
-            onChange={(event) => form.setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                void form.submit()
-              }
-            }}
-          />
-          <button
-            type="button"
-            className={styles.confirm}
-            disabled={form.verifying || !form.value.trim()}
-            onClick={() => void form.submit()}
-          >
-            {form.verifying ? t('apiKeyVerifying') : t('confirm')}
-          </button>
-        </div>
-      ) : null}
-      {showInput && form.error ? <div className={styles.error}>{form.error}</div> : null}
-      <div className={styles.hint}>{t('settingsApiKeyHint')}</div>
-    </div>
+          </div>
+        ) : null}
+        {showInput ? (
+          <div className={styles.apiKeyEditor}>
+            <input
+              className={styles.apiKeyInput}
+              type="password"
+              placeholder={t('apiKeyPlaceholder')}
+              autoComplete="off"
+              spellCheck={false}
+              value={form.value}
+              onChange={(event) => form.setValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                  void form.submit()
+                }
+              }}
+            />
+            <button
+              type="button"
+              className={styles.confirm}
+              disabled={form.verifying || !form.value.trim()}
+              onClick={() => void form.submit()}
+            >
+              {form.verifying ? t('apiKeyVerifying') : t('confirm')}
+            </button>
+          </div>
+        ) : null}
+        {showInput && form.error ? <div className={styles.error}>{form.error}</div> : null}
+        <div className={styles.hint}>{t('settingsApiKeyHint')}</div>
+      </div>
+      <Row icon={<IconLinkOutline16 />} label={t('settingsGetApiKey')} href={PLATFORM_URL} />
+    </Section>
   )
 }
 
-/** 语言选择 */
-const LocaleSetting = () => {
-  const t = useTranslate()
-  const locale = useSettings((state) => state.locale)
-  return (
-    <Select
-      ariaLabel={t('settingsLocalePreference')}
-      value={locale}
-      options={[
-        { value: 'zh-CN', label: t('settingsLocaleZhCN'), lang: 'zh-CN' },
-        { value: 'en-US', label: t('settingsLocaleEnUS'), lang: 'en' },
-      ]}
-      onChange={setLocale}
-    />
-  )
-}
+/** API Key 掩码：保留首尾便于辨认 */
+const maskKey = (key: string) =>
+  key.length <= 10 ? '••••••' : `${key.slice(0, 4)}••••${key.slice(-4)}`
 
 const themeOptions: { value: ThemePreference; label: TranslationKey; icon: ReactNode }[] = [
   {
@@ -317,119 +294,207 @@ const themeOptions: { value: ThemePreference; label: TranslationKey; icon: React
   },
 ]
 
-/** 外观：浅色 / 深色 / 跟随系统分段选择 */
-const ThemeSetting = () => {
+/** 二级页：外观 */
+const AppearancePage = () => {
   const t = useTranslate()
   const themePreference = useSettings((state) => state.themePreference)
-  const label = t('avatarMenuSettingsDialogThemeItemLabel')
   return (
-    <Row
-      icon={<IconLightOutline16 />}
-      label={label}
-      action={
-        <div className={styles.segmented} role="radiogroup" aria-label={label}>
-          {themeOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={themePreference === option.value}
-              className={clsx(
-                styles.segButton,
-                themePreference === option.value && styles.segButtonActive
-              )}
-              onClick={() => setThemePreference(option.value)}
-            >
-              {option.icon}
-              {t(option.label)}
-            </button>
-          ))}
-        </div>
-      }
-    />
+    <Section>
+      {themeOptions.map((option) => (
+        <ChoiceRow
+          key={option.value}
+          icon={option.icon}
+          label={t(option.label)}
+          selected={themePreference === option.value}
+          onSelect={() => setThemePreference(option.value)}
+        />
+      ))}
+    </Section>
   )
 }
 
-/** 朗读音色：stella（海星，女声）/ tide（暗潮，男声） */
-const TtsVoiceSetting = () => {
+/** 二级页：语言 */
+const LanguagePage = () => {
+  const t = useTranslate()
+  const locale = useSettings((state) => state.locale)
+  return (
+    <Section>
+      <ChoiceRow
+        icon={<IconGlobeLanguageOutline14 />}
+        label={t('settingsLocaleZhCN')}
+        selected={locale === 'zh-CN'}
+        onSelect={() => setLocale('zh-CN')}
+      />
+      <ChoiceRow
+        label={t('settingsLocaleEnUS')}
+        selected={locale === 'en-US'}
+        onSelect={() => setLocale('en-US')}
+      />
+    </Section>
+  )
+}
+
+/** 二级页：语音 */
+const VoicePage = () => {
   const t = useTranslate()
   const ttsVoice = useSettings((state) => state.ttsVoice)
   return (
-    <Select
-      ariaLabel={t('settingsTtsVoice')}
-      value={ttsVoice}
-      options={[
-        { value: 'stella', label: t('settingsTtsVoiceStella') },
-        { value: 'tide', label: t('settingsTtsVoiceTide') },
-      ]}
-      onChange={setTtsVoice}
-    />
+    <>
+      <Section>
+        <ChoiceRow
+          label={t('settingsTtsVoiceStella')}
+          selected={ttsVoice === 'stella'}
+          onSelect={() => setTtsVoice('stella')}
+        />
+        <ChoiceRow
+          label={t('settingsTtsVoiceTide')}
+          selected={ttsVoice === 'tide'}
+          onSelect={() => setTtsVoice('tide')}
+        />
+      </Section>
+      <div className={styles.hint}>{t('settingsVoiceHint')}</div>
+    </>
   )
 }
 
-/** 位置：中文浏览器选省/市，其他选择区域 */
-const LocationSetting = () => {
+/** 二级页：数据管理 */
+const DataPage = ({
+  historyImport,
+  historyDelete,
+  disabled,
+}: {
+  historyImport: ReturnType<typeof useHistoryImport>
+  historyDelete: ReturnType<typeof useHistoryDelete>
+  disabled: boolean
+}) => {
   const t = useTranslate()
-  const locale = useSettings((state) => state.locale)
-  const location = useSettings((state) => state.location)
-  const province =
-    location?.region === 'CN'
-      ? provinces.find((item) => item.code === location.province)
-      : undefined
-
   return (
-    <Row
-      icon={<IconGlobeLanguageOutline14 />}
-      label={t('settingsLocation')}
-      className={styles.locationRow}
-      action={
-        <div className={styles.locationSelectors}>
-          {isChineseBrowser() ? (
-            <>
-              <Select
-                ariaLabel={t('settingsLocationProvince')}
-                value={province?.code ?? ''}
-                placeholder={t('settingsLocationProvince')}
-                options={provinces.map((item) => ({ value: item.code, label: item.name }))}
-                onChange={(value) => {
-                  if (value !== province?.code) {
-                    setLocation({ region: 'CN', province: value })
-                  }
-                }}
-              />
-              <Select
-                ariaLabel={t('settingsLocationCity')}
-                value={province ? (location?.city ?? '') : ''}
-                disabled={!province?.cities.length}
-                placeholder={t('settingsLocationCity')}
-                options={
-                  province?.cities.map((item) => ({ value: item.code, label: item.name })) ?? []
-                }
-                onChange={(value) => {
-                  if (province) {
-                    setLocation({ region: 'CN', province: province.code, city: value })
-                  }
-                }}
-              />
-            </>
-          ) : (
-            <Select
-              ariaLabel={t('settingsLocationRegion')}
-              value={location?.region ?? ''}
-              placeholder={t('settingsLocationRegion')}
-              options={regionCodes
-                .map((code) => ({ value: code, label: getRegionName(code, locale) }))
-                .sort((a, b) => a.label.localeCompare(b.label, locale))}
-              onChange={(value) => setLocation({ region: value })}
-            />
-          )}
-        </div>
-      }
-    />
+    <>
+      <Section>
+        <ImportHistory historyImport={historyImport} disabled={disabled} />
+        <ExportHistory disabled={disabled} />
+      </Section>
+      <Section title={t('deleteAllSessions')}>
+        <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
+      </Section>
+    </>
   )
 }
 
-/** 删除确认保留在设置之上；失败可重试，成功只关闭确认弹窗。 */
+/** 二级页：关于（完全本地，不跳转私有仓库） */
+const AboutPage = () => {
+  const t = useTranslate()
+  const [licenseOpen, setLicenseOpen] = useState(false)
+  return (
+    <>
+      <div className={styles.brandBlock}>
+        <img className={styles.brandLogo} src={logo} alt="" draggable={false} />
+        <div className={styles.brandName}>FreeSeek</div>
+        <div className={styles.brandVersion}>
+          {t('settingsVersion')} {APP_VERSION}
+        </div>
+      </div>
+      <Section title={t('settingsPrivacyTitle')}>
+        <p className={styles.paragraph}>{t('settingsPrivacyText')}</p>
+      </Section>
+      <Section title={t('settingsUpstreamTitle')}>
+        <p className={styles.paragraph}>{t('settingsUpstreamText')}</p>
+      </Section>
+      <Section title={t('settingsLicense')}>
+        <Row label={t('settingsLicenseTextTitle')} onClick={() => setLicenseOpen(true)} />
+      </Section>
+      {licenseOpen ? (
+        <Modal
+          title={t('settingsLicenseTextTitle')}
+          closable
+          centered
+          onClose={() => setLicenseOpen(false)}
+        >
+          <pre className={styles.licenseText}>{LICENSE_TEXT}</pre>
+        </Modal>
+      ) : null}
+      <div className={styles.footer}>FreeSeek</div>
+    </>
+  )
+}
+
+/** 分组：可选标题 + 卡片 */
+const Section = ({ title, children }: { title?: string; children: ReactNode }) => (
+  <section className={styles.section}>
+    {title ? <div className={styles.sectionTitle}>{title}</div> : null}
+    <div className={styles.card}>{children}</div>
+  </section>
+)
+
+/** 导航行：图标 + 标题 + 右侧值/箭头 */
+const Row = ({
+  icon,
+  label,
+  value,
+  href,
+  onClick,
+  danger,
+}: {
+  icon?: ReactNode
+  label: string
+  value?: string
+  href?: string
+  onClick?: () => void
+  danger?: boolean
+}) => {
+  const content = (
+    <>
+      {icon ? <span className={styles.rowIcon}>{icon}</span> : null}
+      <span className={clsx(styles.rowLabel, danger && styles.rowDanger)}>{label}</span>
+      {value !== undefined ? <span className={styles.rowValue}>{value}</span> : null}
+      <span className={styles.rowChevron}>
+        <IconChevronRightOutline14 />
+      </span>
+    </>
+  )
+  if (href) {
+    return (
+      <a className={clsx(styles.row, styles.rowInteractive)} href={href} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    )
+  }
+  if (onClick) {
+    return (
+      <button type="button" className={clsx(styles.row, styles.rowInteractive)} onClick={onClick}>
+        {content}
+      </button>
+    )
+  }
+  return <div className={styles.row}>{content}</div>
+}
+
+/** 选项行：单选项，右侧对勾 */
+const ChoiceRow = ({
+  icon,
+  label,
+  selected,
+  onSelect,
+}: {
+  icon?: ReactNode
+  label: string
+  selected: boolean
+  onSelect: () => void
+}) => (
+  <button
+    type="button"
+    role="radio"
+    aria-checked={selected}
+    className={clsx(styles.row, styles.rowInteractive, selected && styles.choiceActive)}
+    onClick={onSelect}
+  >
+    {icon ? <span className={styles.rowIcon}>{icon}</span> : null}
+    <span className={styles.rowLabel}>{label}</span>
+    <span className={styles.choiceCheck}>{selected ? <IconCheckOutline16 /> : null}</span>
+  </button>
+)
+
+/** 删除确认：危险操作使用居中弹窗，而不是底部 Sheet */
 const DeleteAllConfirm = ({
   historyDelete,
 }: {
@@ -439,6 +504,7 @@ const DeleteAllConfirm = ({
   return (
     <Modal
       title={t('deleteAllSessionsModalTitle')}
+      centered
       onClose={historyDelete.cancel}
       footer={
         <div className={styles.deleteActions} aria-busy={historyDelete.busy}>
@@ -501,7 +567,7 @@ const useHistoryDelete = () => {
   }
 }
 
-/** 删除全部对话：危险操作行 */
+/** 删除全部对话：危险行 */
 const DeleteAllSetting = ({
   historyDelete,
   disabled,
@@ -515,21 +581,12 @@ const DeleteAllSetting = ({
       icon={<IconTrashOutline16 />}
       label={t('deleteAllSessions')}
       danger
-      action={
-        <Button
-          variant="dangerOutlined"
-          size="m"
-          disabled={disabled}
-          onClick={historyDelete.open}
-        >
-          {t('delete')}
-        </Button>
-      }
+      onClick={disabled ? undefined : historyDelete.open}
     />
   )
 }
 
-/** 覆盖导入的二次确认，叠在设置之上 */
+/** 覆盖导入的二次确认 */
 const ImportConfirm = ({
   historyImport,
 }: {
@@ -539,6 +596,7 @@ const ImportConfirm = ({
   return (
     <Modal
       title={t('historyImportConfirmTitle')}
+      centered
       onClose={historyImport.cancel}
       footer={
         <>
@@ -617,31 +675,24 @@ const ImportHistory = ({
       <Row
         icon={<IconUploadOutline14 />}
         label={t('historyImport')}
-        action={
-          <>
-            <Button
-              variant="outlined"
-              size="m"
-              disabled={disabled}
-              onClick={() => inputRef.current?.click()}
-            >
-              {t('upload')}
-            </Button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".zip,application/zip,application/x-zip-compressed"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (file) {
-                  historyImport.select(file)
-                }
-              }}
-            />
-          </>
-        }
+        onClick={() => {
+          if (!disabled) {
+            inputRef.current?.click()
+          }
+        }}
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip,application/x-zip-compressed"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file) {
+            historyImport.select(file)
+          }
+        }}
       />
       {historyImport.status ? (
         <div className={clsx(styles.rowNote, historyImport.status.error && styles.errorNote)}>
@@ -660,6 +711,9 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
   const [status, setStatus] = useState<Status>(null)
 
   const onExport = async () => {
+    if (disabled || busy || empty) {
+      return
+    }
     setBusy(true)
     setStatus(null)
     try {
@@ -682,16 +736,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
       <Row
         icon={<IconDownloadOutline16 />}
         label={t('exportAllLabel')}
-        action={
-          <Button
-            variant="outlined"
-            size="m"
-            disabled={disabled || busy || empty}
-            onClick={() => void onExport()}
-          >
-            {t('exportAllDownload')}
-          </Button>
-        }
+        onClick={() => void onExport()}
       />
       {status ? (
         <div className={clsx(styles.rowNote, styles.errorNote)}>{statusText(t, status)}</div>

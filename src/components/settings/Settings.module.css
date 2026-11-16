@@ -1,3 +1,5 @@
+/* 设置：一级目录 + 二级页面，统一行组件与触控尺寸 */
+
 .scrim {
   display: none;
 }
@@ -18,8 +20,6 @@
     opacity: 0;
   }
 }
-
-/* 设置页：参考官方 App 的分组卡片布局 */
 
 .page {
   position: fixed;
@@ -42,15 +42,16 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  padding: calc(var(--fs-safe-top) + 8px) 16px 8px;
+  padding: calc(var(--fs-safe-top) + 6px) 16px 6px;
 }
 
+/* 返回按钮：44px 触控区域 */
 .back {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -74,7 +75,7 @@
 }
 
 .backPlaceholder {
-  width: 34px;
+  width: 44px;
 }
 
 .scroll {
@@ -82,12 +83,24 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px 16px calc(var(--fs-safe-bottom) + 28px);
+  padding: 4px 16px calc(var(--fs-safe-bottom) + 28px);
   scrollbar-width: none;
 }
 
 .scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* 二级页面进入：轻微右移 + 淡入，不整页大幅滑动 */
+.pageBody {
+  animation: pageBodyIn var(--fs-duration-base) var(--fs-ease-out) both;
+}
+
+@keyframes pageBodyIn {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
 }
 
 .section {
@@ -151,7 +164,8 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: 24px;
+  height: 24px;
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -177,44 +191,99 @@
   text-overflow: ellipsis;
 }
 
-.rowAction {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-}
-
 .rowChevron {
   display: flex;
   flex-shrink: 0;
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* API Key */
-.apiKeyBlock {
-  padding-bottom: 4px;
+/* 选项行（外观 / 语言 / 语音） */
+.choiceActive .rowLabel {
+  color: var(--fs-brand);
+  font-weight: 500;
+}
+
+.choiceCheck {
+  display: flex;
+  flex-shrink: 0;
+  width: 24px;
+  justify-content: flex-end;
+  color: var(--fs-brand);
+}
+
+/* API 服务页 */
+.accountBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 6px;
+}
+
+.accountStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.accountStatusLabel {
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.accountStatusValue {
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.accountStatusOk {
+  color: var(--fs-brand);
+}
+
+.maskRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.keyMask {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .textButton {
-  padding: 0;
+  flex-shrink: 0;
+  padding: 4px 8px;
   border: none;
+  border-radius: 8px;
   background: none;
   font-size: 13px;
   color: var(--fs-brand);
   cursor: pointer;
 }
 
+.textButton:hover {
+  background: var(--fs-brand-soft);
+}
+
 .apiKeyEditor {
   display: flex;
   gap: 8px;
-  padding: 0 16px 6px;
 }
 
 .apiKeyInput {
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
@@ -231,7 +300,7 @@
 
 .confirm {
   flex-shrink: 0;
-  height: 38px;
+  height: 40px;
   padding: 0 16px;
   border: none;
   border-radius: 10px;
@@ -247,7 +316,6 @@
 }
 
 .error {
-  padding: 0 16px 6px;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
@@ -260,72 +328,54 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* 外观分段选择 */
-.segmented {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-skeleton);
-}
-
-.segButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: none;
-  border-radius: 999px;
-  background: none;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-  transition:
-    background-color var(--fs-duration-fast) var(--fs-ease-out),
-    color var(--fs-duration-fast) var(--fs-ease-out);
-}
-
-.segButton svg {
-  width: 13px;
-  height: 13px;
-}
-
-.segButtonActive {
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
-}
-
-/* 位置选择：窄屏时换到下一行，避免把标签挤断 */
-.locationRow {
-  flex-wrap: wrap;
-}
-
-.locationSelectors {
+/* 关于页 */
+.brandBlock {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  justify-content: flex-end;
-  max-width: 100%;
+  padding: 28px 0 8px;
 }
 
-@media (max-width: 519px) {
-  .locationRow .rowAction {
-    width: 100%;
-  }
-
-  .locationSelectors {
-    justify-content: flex-start;
-  }
+.brandLogo {
+  width: 64px;
+  height: 64px;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
-.locationSelectors :global(button) {
-  min-width: 96px;
-  max-width: 148px;
+.brandName {
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
 }
 
-/* 行内提示 / 错误 */
+.brandVersion {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.paragraph {
+  margin: 0;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.licenseText {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+}
+
 .rowNote {
   padding: 0 16px 10px;
   font-size: 12px;
@@ -381,10 +431,10 @@
   }
 
   .header {
-    padding: calc(var(--fs-safe-top) + 12px) 20px 8px;
+    padding: calc(var(--fs-safe-top) + 12px) 20px 6px;
   }
 
   .scroll {
-    padding: 8px 20px 24px;
+    padding: 4px 20px 24px;
   }
 }

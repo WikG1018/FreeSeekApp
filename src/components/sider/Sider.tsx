@@ -131,14 +131,16 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             <span className={styles.userMeta}>{t('settingsLocalMode')}</span>
             <div className={styles.userActions}>
               <IconButton
+                size="xl"
                 icon={<IconDataOutline16 />}
                 aria-label={t('usageTitle')}
                 onClick={() => setUsageOpen(true)}
               />
               <IconButton
+                size="xl"
                 icon={<IconSettingsOutline16 />}
                 aria-label={t('settings')}
-                onClick={() => openSettings('account')}
+                onClick={() => openSettings()}
               />
             </div>
           </div>
@@ -153,7 +155,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             <button
               type="button"
               className={styles.settings}
-              onClick={() => openSettings('account')}
+              onClick={() => openSettings()}
             >
               <span className={styles.settingsIcon}>
                 <IconSettingsOutline16 />

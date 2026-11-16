@@ -28,6 +28,7 @@ export const Modal = ({
   children,
   footer,
   closable = false,
+  centered = false,
   className,
   mainClassName,
   onClose,
@@ -37,6 +38,8 @@ export const Modal = ({
   footer?: ReactNode
   /** 标题栏右侧显示关闭按钮 */
   closable?: boolean
+  /** 居中弹窗：危险确认等场景在移动端也保持居中对话框，而不是底部 Sheet */
+  centered?: boolean
   className?: string
   /** 内容区的 class */
   mainClassName?: string
@@ -63,11 +66,11 @@ export const Modal = ({
 
   return createPortal(
     <div
-      className={styles.overlay}
+      className={clsx(styles.overlay, centered && styles.overlayCentered)}
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <div
-        className={clsx(styles.content, className)}
+        className={clsx(styles.content, centered && styles.centered, className)}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -67,12 +67,33 @@
     overflow-y: auto;
     overscroll-behavior: contain;
   }
+
+  /* 居中对话框：危险确认与许可证全文，覆盖 Sheet 样式 */
+  .overlayCentered {
+    align-items: center;
+  }
+
+  .centered {
+    width: min(400px, calc(100vw - 32px));
+    max-width: none;
+    max-height: calc(100dvh - var(--fs-safe-top) - 32px);
+    padding: 22px 24px 20px;
+    border-radius: 24px;
+    animation: dialogCenteredIn var(--fs-duration-slow) var(--fs-ease-out) both;
+  }
 }
 
 @keyframes sheetIn {
   from {
     transform: translateY(48px);
     opacity: 0.4;
+  }
+}
+
+@keyframes dialogCenteredIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
   }
 }
 

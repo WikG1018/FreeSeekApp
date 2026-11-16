@@ -49,6 +49,18 @@
 - **抽屉**：移动端全宽，顶部标题搜索框，底部头像用户区（用量/设置）。
 - 已知：设置 About 中版本取自构建 meta，dev server 启动时缓存旧版本号，正式构建正确。
 
+## v1.1.2 审核纠偏（2026-11-17）
+
+- 用户审核意见：抽屉不应全屏、按钮太小、设置堆在一页且统一性差、位置信息无必要、私有仓库链接不应出现在应用内。
+- **抽屉**：`.drawer` 改为 `min(86vw, 360px)`，右侧圆角 + 阴影，遮罩可点关闭；不再全屏。
+- **设置多级**：`settingsDialogState` 改为 `SettingsPageId = home | account | appearance | language | voice | data | about`；SettingsDialog 用路由栈渲染，一级只放导航行，二级页独立标题与返回；`openSettings()` 默认首页。
+- **删除位置设置**：移除 LocationSetting 及 location 相关 UI（services/location 仍用于 latestReminder）。
+- **移除私有仓库入口**：删除 REPO/CHANGELOG/LICENSE/ISSUES 外链；关于页改为品牌 + 版本 + 本地隐私说明 + 上游 MIT 致谢 + 应用内 MIT 全文（`src/assets/licenseText.ts`）；仅保留 DeepSeek 开放平台外链（申请 Key 必需）。
+- **弹窗规范**：Modal 增加 `centered` 变体，删除全部/覆盖导入用居中对话框；Sheet 仅用于人设、用量等。
+- **触控**：设置返回 44、发送 40、回到底部 44、人设 Chip 36、抽屉用户操作 44。
+- **验证**：E2E 18/18（含半宽抽屉、返回按钮 44、无 GitHub 链接、二级页导航、内嵌许可证）。
+- v1.1.2 已构建签名 APK 并发布。
+
 ## 已知取舍
 
 

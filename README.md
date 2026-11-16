@@ -15,20 +15,20 @@ Forked from DeepSeek's official open-source [chat-demo](https://github.com/deeps
   <img src="docs/screenshots/dark-welcome.png" width="49%" alt="Welcome (dark)" />
 </p>
 
-## v1.1.1 highlights
+## v1.1.2 highlights
 
-- True edge-to-edge layout (content under status & gesture bars, SystemBars integration)
-- Official-style home: centered whale mark, greeting, rounded input card; no auto-opened settings
-- Settings rebuilt as grouped full-screen card page (Account / App / Data / About) with version & links
-- Full-width drawer with title search and avatar footer
-- v1.1.0: pixel-whale icon, motion tokens, animations, back-to-bottom, Android back button
+- Sidebar restored to a partial-width drawer (86vw / 360px) with a clickable scrim
+- Settings split into a navigation home + second-level pages (API service, appearance, language, voice, data, about)
+- Location setting removed; no private-repository links in the app (local privacy notice, upstream credit, in-app MIT license)
+- Dangerous confirmations use centered dialogs; unified touch targets (44px back/actions, 40px send)
+- v1.1.1: edge-to-edge layout, official-style home, grouped settings, full-width drawer
 
 See the [Chinese README](README.zh-CN.md) for full documentation (installation, API key, build & signing, iOS, FAQ).
 
 ## Quick start
 
 1. Create an API key at [platform.deepseek.com](https://platform.deepseek.com/) (top up a small amount).
-2. Install `freeseek-v1.1.1-release.apk` from [Releases](https://github.com/WikG1018/freeseek/releases) (Android 7.0+), or build the web version: `pnpm install && pnpm build`, then serve `dist/`.
+2. Install `freeseek-v1.1.2-release.apk` from [Releases](https://github.com/WikG1018/freeseek/releases) (Android 7.0+), or build the web version: `pnpm install && pnpm build`, then serve `dist/`.
 3. Paste your key in Settings and chat. Usage is billed per token by DeepSeek — watch the built-in cost dashboard.
 
 ## Building
