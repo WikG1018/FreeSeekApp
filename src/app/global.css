@@ -77,8 +77,8 @@ body[data-ds-dark-theme] {
   --scroll-color: rgba(255, 255, 255, 0.15);
   --scroll-color-hover: rgba(255, 255, 255, 0.24);
 
-  --fs-glass-bg: rgba(38, 38, 40, 0.95);
-  --fs-glass-bg-strong: rgba(38, 38, 40, 0.985);
+  --fs-glass-bg: rgba(38, 38, 40, 0.985);
+  --fs-glass-bg-strong: rgba(38, 38, 40, 0.995);
   --fs-glass-border: rgba(255, 255, 255, 0.12);
   --fs-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
 }
