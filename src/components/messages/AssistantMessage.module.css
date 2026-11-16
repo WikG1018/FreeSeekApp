@@ -127,13 +127,13 @@
   margin-left: auto;
 }
 
-/* 网页引用：小尺寸胶囊，与用量、操作同一行 */
+/* 网页引用：小尺寸胶囊，与用量、操作同一行；高度与图标按钮一致 */
 .chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px 0 3px;
+  height: 28px;
+  padding: 0 10px 0 4px;
   border-radius: 100px;
   border: 1px solid var(--dsw-alias-border-l2);
   background-color: transparent;
@@ -150,6 +150,15 @@
   &.chipActive {
     background-color: var(--dsw-alias-interactive-bg-hover);
     --search-row-site-logo-color: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+
+  &:active {
+    transform: scale(0.97);
   }
 }
 

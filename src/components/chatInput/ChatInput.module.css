@@ -313,11 +313,21 @@
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition-property: border, background;
-  transition-duration: 0.2s;
+  transition-property: border, background, transform;
+  transition-duration: var(--fs-duration-fast);
+  transition-timing-function: var(--fs-ease-out);
 
   &:hover:not(:disabled) {
     background-color: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
   }
 
   &:disabled {
@@ -368,6 +378,13 @@
 
   &:not(.disabled):active {
     transform: scale(0.92);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--dsw-alias-bg-base),
+      0 0 0 4px var(--dsw-alias-button-primary-fill);
   }
 
   &.disabled {

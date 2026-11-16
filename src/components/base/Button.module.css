@@ -17,10 +17,16 @@
   outline: none;
   transition:
     background-color var(--ds-transition-duration) var(--ds-ease-in-out),
-    opacity var(--ds-transition-duration) var(--ds-ease-in-out);
+    opacity var(--ds-transition-duration) var(--ds-ease-in-out),
+    transform var(--fs-duration-fast) var(--fs-ease-out);
 
   &:focus-visible {
     box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+
+  /* 按压反馈：轻微缩放，松手回弹 */
+  &:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   &:disabled {

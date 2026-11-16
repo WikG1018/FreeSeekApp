@@ -14,6 +14,7 @@
   font-size: 12px;
   line-height: 1.5;
   pointer-events: none;
+  animation: tooltipIn var(--fs-duration-fast) var(--fs-ease-out) both;
 
   [data-ds-dark-theme] & {
     color: var(--dsw-alias-label-primary);
@@ -21,5 +22,12 @@
       0 6px 16px 0 rgba(0, 0, 0, 0.08),
       0 3px 6px -4px rgba(0, 0, 0, 0.12),
       0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  }
+}
+
+@keyframes tooltipIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
   }
 }

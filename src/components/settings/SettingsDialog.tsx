@@ -51,6 +51,7 @@ import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
 import {
   closeSettings,
+  finishCloseSettings,
   useSettingsDialog,
   type SettingsPageId,
 } from './settingsDialogState.js'
@@ -87,6 +88,7 @@ export const SettingsDialog = () => {
 
 const SettingsRoot = () => {
   const t = useTranslate()
+  const closing = useSettingsDialog((state) => state.closing)
   const [stack, setStack] = useState<SettingsPageId[]>(() => {
     const initial = useSettingsDialog.getState().page
     return initial === 'home' ? ['home'] : ['home', initial]
@@ -143,10 +145,16 @@ const SettingsRoot = () => {
     <>
       <div className={styles.scrim} aria-hidden="true" />
       <div
-        className={styles.page}
+        className={clsx(styles.page, closing && styles.pageClosing)}
         role="dialog"
         aria-modal="true"
         aria-label={t(PAGE_TITLES[page])}
+        onAnimationEnd={(event) => {
+          // 退出动画播完再卸载；pageOut/pageIn 都冒泡自 .page 自身，只认退出
+          if (closing && event.target === event.currentTarget) {
+            finishCloseSettings()
+          }
+        }}
       >
         <div className={styles.header}>
           <button

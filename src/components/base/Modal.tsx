@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
 import { IconCloseOutline16 } from './icons.js'
@@ -22,7 +22,14 @@ export const closeTopModal = (): boolean => {
   return true
 }
 
-/** 遮罩 + 居中卡片（移动端为底部 Sheet），Esc / 点遮罩关闭 */
+/** 退出动画时长：与 sheetOut/dialogOut 的 CSS 时长一致；reduced-motion 下动画瞬时完成 */
+const EXIT_MS = 200
+
+/**
+ * 遮罩 + 居中卡片（移动端为底部 Sheet），Esc / 点遮罩关闭。
+ * 关闭先播放退出动画再卸载：内部 closing 状态接管 Esc、遮罩、关闭按钮与返回键路径；
+ * 父组件按条件直接卸载（如确认按钮）则瞬时消失，不影响功能。
+ */
 export const Modal = ({
   title,
   children,
@@ -47,14 +54,28 @@ export const Modal = ({
 }) => {
   const t = useTranslate()
   const titleId = useId()
+  const [closing, setClosing] = useState(false)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const closingRef = useRef(false)
+
+  /** 播放退出动画后真正卸载；重复调用只生效一次 */
+  const requestCloseRef = useRef(() => {})
+  requestCloseRef.current = () => {
+    if (closingRef.current) {
+      return
+    }
+    closingRef.current = true
+    setClosing(true)
+    window.setTimeout(() => onCloseRef.current(), EXIT_MS)
+  }
+
   useEffect(() => {
-    const entry = { close: () => onCloseRef.current() }
+    const entry = { close: () => requestCloseRef.current() }
     openModals.push(entry)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && openModals.at(-1) === entry) {
-        onCloseRef.current()
+        requestCloseRef.current()
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -64,13 +85,24 @@ export const Modal = ({
     }
   }, [])
 
+  const requestClose = () => requestCloseRef.current()
+
   return createPortal(
     <div
-      className={clsx(styles.overlay, centered && styles.overlayCentered)}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      className={clsx(
+        styles.overlay,
+        centered && styles.overlayCentered,
+        closing && styles.overlayClosing
+      )}
+      onMouseDown={(event) => event.target === event.currentTarget && requestClose()}
     >
       <div
-        className={clsx(styles.content, centered && styles.centered, className)}
+        className={clsx(
+          styles.content,
+          centered && styles.centered,
+          closing && styles.contentClosing,
+          className
+        )}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -85,7 +117,7 @@ export const Modal = ({
               tone="primary"
               icon={<IconCloseOutline16 />}
               aria-label={t('close')}
-              onClick={onClose}
+              onClick={requestClose}
             />
           ) : null}
         </div>

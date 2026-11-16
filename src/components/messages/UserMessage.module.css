@@ -78,6 +78,13 @@
   }
 }
 
+/* 触屏没有 hover：操作按钮常显，否则历史消息无法编辑 */
+@media not all and (min-width: 768px) {
+  .actions {
+    opacity: 1;
+  }
+}
+
 .alwaysShow {
   opacity: 1;
 }

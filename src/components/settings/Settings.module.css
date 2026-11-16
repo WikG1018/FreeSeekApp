@@ -38,6 +38,19 @@
   }
 }
 
+/* 退出动画：与 pageIn 相反方向；动画结束后由 onAnimationEnd 真正卸载 */
+.pageClosing {
+  animation: pageOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+  pointer-events: none;
+}
+
+@keyframes pageOut {
+  to {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -291,6 +304,7 @@
   min-width: 0;
   box-sizing: border-box;
   height: 40px;
+  /* 右侧留出眼睛按钮的位置，避免文字压在按钮下 */
   padding: 0 38px 0 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
@@ -332,21 +346,6 @@
   font-size: 15px;
   line-height: 24px;
   color: var(--dsw-alias-label-primary);
-}
-
-.apiKeyInput {
-  flex: 1;
-  min-width: 0;
-  box-sizing: border-box;
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-base);
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 14px;
-  outline: none;
 }
 
 .apiKeyInput:focus {
@@ -485,11 +484,35 @@
     }
   }
 
+  .pageClosing {
+    animation: dialogOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+  }
+
+  @keyframes dialogOut {
+    to {
+      opacity: 0;
+      transform: translate(-50%, -50%) translateY(8px) scale(0.98);
+    }
+  }
+
   .header {
     padding: calc(var(--fs-safe-top) + 12px) 20px 6px;
   }
 
   .scroll {
     padding: 4px 20px 24px;
+    /* 桌面卡片内容多时显示细滚动条，便于发现可滚动 */
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-color) transparent;
+  }
+
+  .scroll::-webkit-scrollbar {
+    display: block;
+    width: 6px;
+  }
+
+  .scroll::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: var(--scroll-color);
   }
 }

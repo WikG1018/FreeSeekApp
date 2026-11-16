@@ -21,6 +21,18 @@
   }
 }
 
+/* 退出：遮罩淡出与内容退出同时进行 */
+.overlayClosing {
+  animation: overlayOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+  pointer-events: none;
+}
+
+@keyframes overlayOut {
+  to {
+    opacity: 0;
+  }
+}
+
 .content {
   display: flex;
   flex-direction: column;
@@ -48,6 +60,17 @@
   }
 }
 
+.contentClosing {
+  animation: dialogOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+}
+
+@keyframes dialogOut {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
 /* 移动端：弹窗改为底部 Sheet，从下往上滑入 */
 @media not all and (min-width: 768px) {
   .overlay {
@@ -58,9 +81,24 @@
     width: 100%;
     max-width: none;
     max-height: calc(100dvh - var(--fs-safe-top) - 24px);
-    padding: 18px 20px calc(20px + var(--fs-safe-bottom));
+    padding: 14px 20px calc(20px + var(--fs-safe-bottom));
     border-radius: 24px 24px 0 0;
     animation: sheetIn var(--fs-duration-slow) var(--fs-ease-out) both;
+  }
+
+  /* Sheet 顶部抓手：示意可下滑关闭（视觉件，不做手势） */
+  .content::before {
+    content: '';
+    flex-shrink: 0;
+    width: 36px;
+    height: 4px;
+    margin: 0 auto 10px;
+    border-radius: 2px;
+    background: var(--dsw-alias-border-l3);
+  }
+
+  .contentClosing {
+    animation: sheetOut var(--fs-duration-base) var(--fs-ease-in-out) both;
   }
 
   .main {
@@ -81,6 +119,14 @@
     border-radius: 24px;
     animation: dialogCenteredIn var(--fs-duration-slow) var(--fs-ease-out) both;
   }
+
+  .centered::before {
+    display: none;
+  }
+
+  .centered.contentClosing {
+    animation: dialogCenteredOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+  }
 }
 
 @keyframes sheetIn {
@@ -90,8 +136,22 @@
   }
 }
 
+@keyframes sheetOut {
+  to {
+    transform: translateY(48px);
+    opacity: 0.4;
+  }
+}
+
 @keyframes dialogCenteredIn {
   from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@keyframes dialogCenteredOut {
+  to {
     opacity: 0;
     transform: translateY(8px) scale(0.98);
   }

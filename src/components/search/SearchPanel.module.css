@@ -62,5 +62,14 @@
     width: auto;
     max-width: none;
     border-left: none;
+    /* 全屏面板：从右侧滑入，与抽屉的入场节奏一致 */
+    animation: panelIn var(--fs-duration-slow) var(--fs-ease-out) both;
+  }
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0.4;
+    transform: translateX(48px);
   }
 }

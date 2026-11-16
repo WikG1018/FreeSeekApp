@@ -90,6 +90,18 @@
 - **价格设置二级页**：`PricingForm`（`components/usage`）按空闲/高峰/联网搜索分组，输入失焦即写入 `freeseek:pricing` 并 toast「已保存」，底部「恢复默认」；用量页只留一行入口（官方默认 / 自定义），弹窗版用量面板也跳转到该二级页，不再内联表单。
 - 验证：E2E 26/26 + 用量 18/18；APK `aapt dump permissions` 已确认 RECORD_AUDIO + MODIFY_AUDIO_SETTINGS；versionCode 12 / versionName 1.2.0。
 
+## v1.2.1 全面 UI/动效审查（2026-11-17）
+
+用户要求全面审查完善，重点前端 UI 与动效。逐组件过一遍后的结论与修复：
+
+- **动效体系**：此前只有入场动画（Modal dialogIn/sheetIn、Settings pageIn、Toast enter、Drawer drawerIn），关闭全部瞬间消失。v1.2.1 补全退出：Modal 内部 `closing` 状态（`requestClose` 播放 200ms 退出后调 `onClose`，`openModals` 栈走同一入口，Esc/遮罩/返回键都有动画；父组件直接卸载仍瞬时）；Settings 加 `closing` 相位 + `finishCloseSettings`（onAnimationEnd + target 判断，pageBodyIn 冒泡不算）；Toast 在 toastState 里带 `duration`，CSS `toastOut` 用 `--toast-exit-delay` 变量延迟到时前 180ms 渐隐。
+- **触觉/焦点反馈**：所有可点元素统一 `:active` 缩放（Button 0.97 / IconButton 0.92 / 胶囊 0.96-0.97）+ `:focus-visible` 2px 焦点环。验证方式：Playwright 连按 Tab 检查 `document.activeElement` 的 computed boxShadow。
+- **真 bug 两处**：Settings `.apiKeyInput` 重复定义（后者把 `padding-right:38px` 覆盖成 12px，文字压在眼睛按钮下）；MobileHeader `.title` 用 flex 容器导致 `text-overflow: ellipsis` 无效（长标题不省略），改 `display:block; line-height:42px`。
+- **触屏可达性**：UserMessage `.actions` 此前 hover 才显示（触屏历史消息无法编辑/复制），加 `@media not all and (min-width:768px) { opacity:1 }`，与 AssistantMessage 一致。
+- **一致性**：底部工具行三件统一 28px；抽屉用户区圆键改 `--fs-glass-*` token；PersonaManager 按钮 ≥32px；桌面 Settings 显示细滚动条；搜索面板移动端 slide-in（panelIn）。
+- **验证脚本**：`.e2e/motion-check.mjs`（7 项：Sheet 抓手/退出动画、用量弹窗退出、Settings 退出、Toast 样式）与 `.e2e/ui-audit.mjs`（12 项：溢出、省略号裁剪、玻璃不透明度、工具行对齐、遮挡间距、焦点环、深浅色）。注意省略号断言：`scrollWidth > clientWidth` 在 overflow:hidden 下是正常裁剪，不能当失败，要断言 `overflowX==='hidden' && textOverflow==='ellipsis'` 且元素不撑破父容器。
+- 截图像素体检：PIL 算均值/方差防白屏（当前模型无图像输入，用此法 + DOM 计算样式审计替代肉眼看图）。
+
 ## 已知取舍
 
 
