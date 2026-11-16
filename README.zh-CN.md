@@ -1,75 +1,83 @@
-# chat-demo
+# 畅聊（FreeSeek）
 
 [English](README.md) | 简体中文
 
-基于 DeepSeek API 的静态聊天示例。无需应用后端，浏览器直接请求配置的 API 服务。
+**使用自己的 DeepSeek API Key，没有次数限制、没有每日额度、没有"7 天不活跃砍会话"的本地聊天 App。**
 
-点击 [在线体验](https://deepseek-ai.github.io/chat-demo/) 即可使用，也可以前往 [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases) 下载压缩包，解压后双击 `index.html` 在本地使用，无需安装或构建。首次使用时，请在设置中填写 API Key。
+基于 DeepSeek 官方开源的 [chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT 协议）二次开发，界面与官方 App 同源的完整体验，数据全部保存在你自己的设备上。
 
-## 运行
+## 为什么做这个
 
-准备 Node.js 22.12+ 和 pnpm：
+2026 年 11 月 15-16 日起，DeepSeek 官方 App 与网页版因算力紧张实施限额：长对话（超过 7 天不活跃不再支持）、每日使用额度、单次输入约 4 万字上限；此前 5 月底起修改/重新生成次数也被限制到个位数。大量用户在社交平台表达了不满。
 
-```sh
-git clone https://github.com/deepseek-ai/chat-demo.git
-cd chat-demo
-pnpm install
-pnpm dev
-```
-
-打开 http://localhost:8090 。
-
-生成静态产物：
-
-```sh
-pnpm build
-```
-
-产物位于 `dist/`，可部署到静态服务器，也可直接打开 `dist/index.html`。直接打开时，浏览器和 API 服务需允许 `file://` 页面的存储与跨域请求。
+畅聊的思路很简单：**自己带 Key，按 token 计费，把限制的权力拿回自己手里。** 没有次数墙、没有每日额度、会话永久保存在本地、随时导出迁移。
 
 ## 功能
 
-- 多会话、自动标题、重命名与删除；编辑提问、重新生成和切换消息分支。
-- 流式回答、深度思考、智能搜索、链接阅读与来源引用；支持停止和符合条件的继续生成。
-- 附件上传、粘贴与拖拽，语音输入和回复朗读；移动端录音时输入框首行显示实时频谱。
-- Markdown、代码高亮、KaTeX 公式和 Mermaid 图表。
-- 简体中文与英文、浅色与深色主题、移动端布局、位置设置、历史导入导出。
+**继承自官方 chat-demo 的全部能力：**
 
-## 数据
+- 多会话、自动标题、重命名与删除；编辑提问、重新生成与**消息分支**（一个回答可反复生成多个版本，随时切回）
+- 流式回答、深度思考、智能搜索（联网）、链接阅读与来源引用
+- 附件上传（图/文/PDF 等）、语音输入、回复朗读
+- Markdown、代码高亮、KaTeX 公式、Mermaid 图表
+- 中英文、深浅色主题、移动端布局、历史记录 ZIP 导入导出
 
-API Key 和设置保存在浏览器 localStorage，会话及附件原件保存在 IndexedDB，本地数据按浏览器用户配置和站点源（origin）隔离。发送对话、上传附件和使用语音功能时，相应内容会提交给配置的 API 服务。
+**畅聊新增：**
 
-设置中的历史导入导出使用 ZIP 格式。导入会在确认并校验成功后替换全部本地会话和附件；导出包含会话与本地可用的图片原件，不包含 API Key、设置或非图片附件原件。格式与保留范围见[历史导入导出](src/services/chat/history/README.md)。
+| 功能 | 说明 |
+| --- | --- |
+| 🔄 对话接续 | 任意会话菜单里选「从这里继续」，新对话自动携带其全部上下文——官方"对话长度到顶只能割裂重开"的痛点在这里不存在 |
+| 🎭 人设与提示词库 | 内置写作助手、翻译专家、编程助手、小红书文案、头脑风暴等人设，可自建；新对话按人设开场 |
+| 💰 用量与费用看板 | 按天统计 token 用量与联网搜索次数，按官方刊例价（区分高峰/空闲时段）估算费用，单价可自行修改 |
+| 🔓 无限制 | 提问/回答/修改/重新生成次数不限；无每日额度；不清理不活跃会话；输入长度只受 API 上下文（1M tokens）约束 |
 
-设置 → 数据管理 → 删除所有对话，会在确认后清空全部本地会话、附件原件和未发送的草稿，停止正在生成的回复并回到新对话。API Key 和其他设置保留，已上传到 API 服务的文件不受影响。
+> 提醒：无限制 ≠ 免费。畅聊直连 DeepSeek 官方 API，按 token 计费从你的账户余额扣除（flash 模型空闲时段输入约 1 元/百万 tokens，详见 App 内「用量与费用」）。量大的话请留意费用看板。
 
-## 开发
+## 快速开始
 
-| 命令          | 用途                |
-| ------------- | ------------------- |
-| `pnpm dev`    | 启动开发服务器      |
-| `pnpm build`  | 构建到 `dist/`      |
-| `pnpm type`   | TypeScript 类型检查 |
-| `pnpm lint`   | oxlint 检查         |
-| `pnpm format` | oxfmt 格式化        |
+### 1. 申请 API Key（约 3 分钟）
 
-[rspack.config.ts](rspack.config.ts) 默认连接 `https://api.deepseek.com`。`createConfig({ apiOrigin, devServer })` 支持自定义 API 地址和开发服务器代理。
+1. 打开 [platform.deepseek.com](https://platform.deepseek.com/)，注册并完成实名；
+2. 充值（最低充值金额以平台为准，日常聊天几块钱可用很久）；
+3. 左侧「API Keys」→ 创建，复制保存（只显示一次）。
 
-聊天默认使用 `deepseek-flash`，通过 Anthropic 兼容的 Messages / Files API 通信；语音使用 ASR / TTS 接口。请求使用搜索、链接阅读、标题和 `latest_reminder` 等扩展，接入服务需支持相应能力。附件实际支持的格式以服务端校验为准。
+### 2. 安装
 
-```text
-src/
-  app/                 应用布局、主题与全局样式
-  components/          聊天、设置、Markdown 等界面组件
-  i18n/                中英文文案
-  services/
-    api/               API 请求、SSE 与协议类型
-    chat/              会话、消息分支、本地存储与历史导入导出
-    markdown/          Markdown 解析、代码高亮与图表
-    speech/            录音与朗读
-  utils/               通用工具
+- **Android**：下载 Release 中的 APK 直接安装（允许未知来源即可）；或按下方自行构建。
+- **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
+- **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
+
+### 3. 使用
+
+首次打开 → 设置 → 填入 API Key → 开始聊天。所有数据（会话、附件、Key）仅保存在本机（IndexedDB / localStorage），不会上传到任何第三方服务器；发送对话时内容仅提交给 DeepSeek API。
+
+## 自行构建
+
+需要 Node.js 22.12+、pnpm 10、JDK 17 与 Android SDK（compileSdk 36）。
+
+```sh
+pnpm install
+pnpm build          # 产出 dist/
+npx cap sync android
+cd android && gradlew assembleDebug   # Windows 用 .\gradlew.bat
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## 许可证
+改完网页代码后：`pnpm build && npx cap sync android` 再重新出包。
 
-[MIT](LICENSE)。构建会将许可证复制到 `dist/LICENSE`，分发时请一并保留；第三方依赖遵循各自的许可证。
+### iOS 构建说明
+
+iOS 平台的生成与签名必须在 macOS 上进行（本仓库未提交 `ios/` 目录）：
+
+- **有 Mac**：`pnpm build && npx cap add ios`，打开 `ios/App/App.xcworkspace`，选择你的开发者团队后运行到 iPhone。
+- **没有 Mac**：把仓库推到 GitHub，手动触发 `.github/workflows/ios.yml`，产出未签名 `.xcarchive` 与完整 iOS 工程；再借一台 Mac 用 Xcode 打开签名安装。免费 Apple ID 签名 7 天有效，付费账号（$99/年）可长期使用。
+
+## 数据与隐私
+
+- 会话与附件原件存 IndexedDB，API Key 与设置存 localStorage，全部在本机；
+- 历史导入导出（ZIP）不包含 API Key；
+- 不内置任何统计、崩溃上报或第三方 SDK。
+
+## 与官方 chat-demo 的关系 & 许可
+
+本项目 fork 自 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT License），感谢 DeepSeek 开源。依 MIT 协议分发时保留原许可证（见 [LICENSE](LICENSE)，构建产物中亦会复制到 `dist/LICENSE`）。畅聊为个人自用客户端，与 DeepSeek 官方无隶属关系；请遵守 DeepSeek API 服务条款使用。
