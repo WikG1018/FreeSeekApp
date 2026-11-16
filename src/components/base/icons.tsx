@@ -510,6 +510,46 @@ export const IconPhotoErrorFill20 = () => (
   </svg>
 )
 
+/** 返回按钮：左尖括号 */
+export const IconChevronLeftOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M9.8 3.4 5.2 8l4.6 4.6"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+/** 账户：人形轮廓 */
+export const IconUserOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx={8} cy={5.2} r={2.6} stroke="currentColor" strokeWidth={1.4} />
+    <path
+      d="M2.8 13.4c.9-2.4 2.9-3.6 5.2-3.6s4.3 1.2 5.2 3.6"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+    />
+  </svg>
+)
+
+/** 关于：圆圈感叹信息 */
+export const IconInfoOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx={8} cy={8} r={6.3} stroke="currentColor" strokeWidth={1.4} />
+    <path
+      d="M8 7.2v4"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+    />
+    <circle cx={8} cy={4.9} r={0.9} fill="currentColor" />
+  </svg>
+)
+
 /** 错误提示图标：圆环 + 感叹号，颜色跟随 currentColor */
 export const IconToastError16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -523,3 +563,4 @@ export const IconToastError16 = () => (
     />
   </svg>
 )
+

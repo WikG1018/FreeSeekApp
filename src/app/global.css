@@ -2,6 +2,10 @@
   --message-list-max-width: 840px;
   --message-list-padding-horizontal: 44px;
 
+  /* 安全区：iOS 走 env()，Android（Capacitor SystemBars css 模式）走注入的 --safe-area-inset-* */
+  --fs-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --fs-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+
   /* 动效：统一时长与曲线，界面只引用这些 token */
   --fs-duration-fast: 120ms;
   --fs-duration-base: 200ms;

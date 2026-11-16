@@ -39,6 +39,16 @@
 - v1.1.0：package.json 1.1.0、Android versionCode 2 / versionName 1.1.0；APK 已在本地构建并发布 GitHub Release。
 - 文档：README.zh-CN 全面重写（截图/FAQ/签名）、新增 CHANGELOG.md；截图存 `docs/screenshots/`。
 
+## v1.1.1 官方化改版（2026-11-17）
+
+- 用户反馈三点：启动自动弹设置、上下不沉浸、设置界面需完善；并提供官方 App 截图（首页/抽屉/设置）作为参考。
+- **去掉启动自动弹设置**：App.tsx 不再调用 ensureApiKey；首页未配置 Key 时显示轻量 CTA，发送/附件时仍会引导到设置。
+- **沉浸式**：index.html 加 `viewport-fit=cover`；capacitor.config 配 `plugins.SystemBars { insetsHandling: 'css' }`（Capacitor 8 内置，注入 `--safe-area-inset-*`）；global.css 定义 `--fs-safe-top/bottom = max(env(), var())`；App 用 SystemBars.setStyle 跟随主题切换状态栏/导航栏图标颜色。
+- **设置页重做**：全屏分组卡片（返回圆钮+居中标题），分组 账户/应用/数据/关于；关于含版本（meta application-version）、项目主页/更新日志/许可/上游/反馈；桌面端居中卡片+遮罩。旧 SettingsDialog 的 tab 结构移除。
+- **首页**：鲸鱼标识+问候居中，底部输入卡片；提示语「发消息或按住说话」；人设条保留（差异化功能）。
+- **抽屉**：移动端全宽，顶部标题搜索框，底部头像用户区（用量/设置）。
+- 已知：设置 About 中版本取自构建 meta，dev server 启动时缓存旧版本号，正式构建正确。
+
 ## 已知取舍
 
 

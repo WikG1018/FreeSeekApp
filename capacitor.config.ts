@@ -14,6 +14,14 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: false,
   },
+  plugins: {
+    // Capacitor 8 内置 SystemBars：css 模式下注入 --safe-area-inset-* 并允许内容全屏到状态栏/手势区
+    SystemBars: {
+      insetsHandling: 'css',
+      style: 'DEFAULT',
+      hidden: false,
+    },
+  },
 }
 
 export default config

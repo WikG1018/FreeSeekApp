@@ -192,12 +192,84 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 44px;
+  margin: 0 4px 16px;
+  padding: 0 14px;
+  border-radius: 22px;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.searchIcon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  color: var(--dsw-alias-label-primary);
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 移动端底部：头像 + 名称 + 操作，贴近官方抽屉的用户区 */
+.userRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 4px;
+}
+
+.userAvatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-skeleton);
+  font-size: 18px;
+}
+
+.userName {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.userMeta {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.userActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
 .drawer {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
   z-index: 800;
+  width: 100%;
   animation: drawerIn var(--fs-duration-slow) var(--fs-ease-out) both;
 }
 
@@ -242,11 +314,22 @@
 }
 
 .mobile {
-  width: 300px;
-  max-width: calc(100vw - 48px);
+  width: 100%;
+  max-width: none;
+  border-right: none;
+  padding-top: calc(var(--fs-safe-top) + 6px);
 
   .listWrap {
-    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin-top: 8px;
+  }
+
+  .list {
+    flex: 1;
+    height: auto;
+    min-height: 0;
   }
 
   .sectionHeader {
@@ -257,7 +340,7 @@
 
   .bottom {
     height: auto;
-    padding: 12px 0;
+    padding: 12px 0 calc(var(--fs-safe-bottom) + 10px);
   }
 
   .settings {

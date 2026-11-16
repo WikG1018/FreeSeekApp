@@ -11,9 +11,10 @@
   <img src="docs/screenshots/dark-welcome.png" width="49%" alt="欢迎页（深色）" />
 </p>
 <p>
-  <img src="docs/screenshots/mobile-welcome.png" width="32%" alt="手机版" />
-  <img src="docs/screenshots/mobile-sheet.png" width="32%" alt="手机版底部弹层" />
-  <img src="docs/screenshots/desktop-usage.png" width="32%" alt="用量与费用" />
+  <img src="docs/screenshots/mobile-welcome.png" width="23%" alt="手机版首页" />
+  <img src="docs/screenshots/mobile-sider.png" width="23%" alt="抽屉与搜索" />
+  <img src="docs/screenshots/mobile-settings.png" width="23%" alt="设置页" />
+  <img src="docs/screenshots/desktop-settings.png" width="23%" alt="桌面设置" />
 </p>
 
 ## 为什么做这个
@@ -22,17 +23,17 @@
 
 FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的权力拿回自己手里。** 没有次数墙、没有每日额度、会话永久保存在本地、随时导出迁移。
 
-## v1.1.0 更新了什么
+## v1.1.1 更新了什么
 
-- 🐳 **全新品牌图标**：一蓝一粉两只像素小鲸鱼，相向而游；配套启动页与 Android 自适应图标
-- 🎨 **界面重构**：欢迎页品牌标识、单行人设滑动条、卡片式“对话接续”提示、全新浅蓝品牌色
-- ✨ **原生感动效**：页面淡入、新消息气泡入场、抽屉滑入滑出、移动端弹窗改为底部 Sheet、菜单缩放淡入、输入框聚焦光环
-- ↕️ **回到底部悬浮按钮**：上滑阅读长回答时出现
-- 📱 **Android 返回键**：依次关闭弹窗 → 搜索面板 → 侧边抽屉 → 回到欢迎页 → 退出 App
-- ♿ **减少动态效果**：系统开启“减弱动态效果”时自动关闭非必要动画
-- 🧭 **品牌统一**：应用名统一为 **FreeSeek**（包名不变：`app.freeseek.chat`）
+参考官方 App 的设计语言重做界面：
 
-完整记录见 [CHANGELOG](CHANGELOG.md)。
+- 🌊 **真沉浸式**：内容延伸到状态栏与手势区，接入 Capacitor 8 `SystemBars`，状态栏图标随深浅色主题自动切换
+- 🏠 **首页**：不再启动就弹设置；居中鲸鱼标识 +「你好，我能帮什么忙吗？」+ 底部圆角输入卡片
+- ⚙️ **设置页重做**：官方风格的全屏分组卡片（返回圆钮 + 居中标题），分为 账户 / 应用 / 数据 / 关于；新增版本号、项目主页、更新日志、开源许可、上游项目等入口
+- 📂 **抽屉**：移动端全宽抽屉，顶部搜索框（按标题过滤），底部头像用户区
+- 💬 输入框提示语改为「发消息或按住说话」
+
+更早的 v1.1.0 带来了全新像素鲸鱼图标、动效与品牌统一，详见 [CHANGELOG](CHANGELOG.md)。
 
 ## 功能
 
@@ -65,7 +66,7 @@ FreeSeek 的思路很简单：**自己带 Key，按 token 计费，把限制的�
 
 ### 2. 安装
 
-- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.0-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
+- **Android**：前往 [Releases](https://github.com/WikG1018/freeseek/releases) 下载 `freeseek-v1.1.1-release.apk` 直接安装（允许未知来源即可）。要求 Android 7.0+。
 - **iOS**：需要 Mac + Xcode + Apple ID（免费账号可 7 天自签，付费账号长期使用）。用 GitHub Actions 的 iOS 工作流生成工程后本地签名安装，详见 [iOS 构建说明](#ios-构建说明)。
 - **网页版（免安装）**：`pnpm install && pnpm build`，把 `dist/` 部署到任意静态服务器，或直接双击 `dist/index.html`。
 

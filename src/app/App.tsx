@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, SystemBars, SystemBarsStyle, SystemBarType } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
+import { useTheme } from './theme.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -18,7 +19,6 @@ import { closeTopModal, hasOpenModal } from '../components/base/Modal.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { ensureApiKey } from '../components/settings/settingsDialogState.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
@@ -73,9 +73,18 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key
-    ensureApiKey()
   }, [])
+
+  // 沉浸式：系统栏图标颜色跟随应用主题（浅色主题用深色图标，深色主题反之）
+  const theme = useTheme()
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return
+    }
+    const style = theme === 'dark' ? SystemBarsStyle.Dark : SystemBarsStyle.Light
+    void SystemBars.setStyle({ style }).catch(() => {})
+    void SystemBars.setStyle({ style, bar: SystemBarType.NavigationBar }).catch(() => {})
+  }, [theme])
 
   // Android 返回键：弹窗 → 搜索面板 → 侧边抽屉 → 回到欢迎页 → 退出 App
   useEffect(() => {

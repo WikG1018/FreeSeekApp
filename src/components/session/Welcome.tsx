@@ -6,9 +6,11 @@ import { useTranslate } from '../../i18n/index.js'
 import { getContextRounds } from '../../services/chat/reply.js'
 import { cancelInherit, useChatStore } from '../../services/chat/store.js'
 import { setDefaultPersona, usePersonas } from '../../services/personas.js'
+import { useSettings } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { IconCloseFill14 } from '../base/icons.js'
 import { PersonaManager } from '../personas/PersonaManager.js'
+import { openSettings } from '../settings/settingsDialogState.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
@@ -20,6 +22,7 @@ export const Welcome = () => {
   const inheritRounds = inherit ? getContextRounds(inherit.messages).length : 0
   const personas = usePersonas((state) => state.personas)
   const defaultPersonaId = usePersonas((state) => state.defaultId)
+  const apiKey = useSettings((state) => state.apiKey)
   const [managerOpen, setManagerOpen] = useState(false)
   return (
     <div className={styles.container}>
@@ -72,9 +75,17 @@ export const Welcome = () => {
           </div>
         ) : null}
         <div className={styles.inputArea}>
+          {apiKey ? null : (
+            <button
+              type="button"
+              className={styles.apiKeyCta}
+              onClick={() => openSettings('account')}
+            >
+              {t('welcomeSetApiKey')}
+            </button>
+          )}
           <ChatInput sessionId={null} />
         </div>
-        {isMobile ? <div className={styles.caveat}>{t('contentCaveat')}</div> : null}
       </div>
       {managerOpen ? <PersonaManager onClose={() => setManagerOpen(false)} /> : null}
     </div>

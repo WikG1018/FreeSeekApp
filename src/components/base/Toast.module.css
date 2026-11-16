@@ -1,6 +1,6 @@
 .toast {
   position: fixed;
-  top: calc(40px + env(safe-area-inset-top));
+  top: calc(var(--fs-safe-top) + 40px);
   right: 0;
   left: 0;
   z-index: 2000;

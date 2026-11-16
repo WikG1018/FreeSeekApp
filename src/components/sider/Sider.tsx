@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import {
   IconDataOutline16,
   IconPanelLeftOutline16,
+  IconSearchOutline16,
   IconSettingsOutline16,
   NewChatIcon,
 } from '../base/icons.js'
@@ -27,7 +28,17 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
   const [now, setNow] = useState(Date.now)
-  const groups = useMemo(() => groupSessions(sessions, now, t), [sessions, now, t])
+  const [query, setQuery] = useState('')
+  const filteredSessions = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    return keyword
+      ? sessions.filter((session) => (session.title || '').toLowerCase().includes(keyword))
+      : sessions
+  }, [sessions, query])
+  const groups = useMemo(
+    () => groupSessions(filteredSessions, now, t),
+    [filteredSessions, now, t]
+  )
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
@@ -68,6 +79,20 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           onClick={() => (mobile ? closeMobileSider() : setSiderCollapsed(true))}
         />
       </div>
+      {mobile ? (
+        <div className={styles.searchBox}>
+          <span className={styles.searchIcon}>
+            <IconSearchOutline16 />
+          </span>
+          <input
+            className={styles.searchInput}
+            type="search"
+            placeholder={t('siderSearchPlaceholder')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+      ) : null}
       <button
         type="button"
         className={styles.newChat}
@@ -99,18 +124,44 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </div>
       </div>
       <div className={styles.bottom}>
-        <button type="button" className={styles.settings} onClick={() => setUsageOpen(true)}>
-          <span className={styles.settingsIcon}>
-            <IconDataOutline16 />
-          </span>
-          <span className={styles.settingsLabel}>{t('usageTitle')}</span>
-        </button>
-        <button type="button" className={styles.settings} onClick={() => openSettings('general')}>
-          <span className={styles.settingsIcon}>
-            <IconSettingsOutline16 />
-          </span>
-          <span className={styles.settingsLabel}>{t('settings')}</span>
-        </button>
+        {mobile ? (
+          <div className={styles.userRow}>
+            <span className={styles.userAvatar}>🐳</span>
+            <span className={styles.userName}>FreeSeek</span>
+            <span className={styles.userMeta}>{t('settingsLocalMode')}</span>
+            <div className={styles.userActions}>
+              <IconButton
+                icon={<IconDataOutline16 />}
+                aria-label={t('usageTitle')}
+                onClick={() => setUsageOpen(true)}
+              />
+              <IconButton
+                icon={<IconSettingsOutline16 />}
+                aria-label={t('settings')}
+                onClick={() => openSettings('account')}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            <button type="button" className={styles.settings} onClick={() => setUsageOpen(true)}>
+              <span className={styles.settingsIcon}>
+                <IconDataOutline16 />
+              </span>
+              <span className={styles.settingsLabel}>{t('usageTitle')}</span>
+            </button>
+            <button
+              type="button"
+              className={styles.settings}
+              onClick={() => openSettings('account')}
+            >
+              <span className={styles.settingsIcon}>
+                <IconSettingsOutline16 />
+              </span>
+              <span className={styles.settingsLabel}>{t('settings')}</span>
+            </button>
+          </>
+        )}
       </div>
       {usageOpen ? <UsagePanel onClose={() => setUsageOpen(false)} /> : null}
       {deleting ? (
