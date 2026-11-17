@@ -154,6 +154,16 @@
 - **打赏**：About 页「支持开发者」分组 → `DonateDialog`（居中弹窗 + 二维码图片）。二维码是 PIL 生成的**占位图**（伪 QR 图案），换收款码只需替换 `src/assets/donate-qr.png`，无需改代码。
 - E2E：check.mjs 扩到 31 项（四步教学文案、两个直达入口、按钮真实打开 platform.deepseek.com（网页端 window.open popup 断言）、打赏入口与二维码可见）。
 
+
+## v1.4.1 打赏入口与求打赏动画（2026-11-17）
+
+用户要求：打赏功能放在侧边栏底部按钮上方，加求打赏动画。
+
+- `DonateDialog` 迁到独立组件 `components/donate/`（设置页 About 的入口移除，避免重复）。
+- Sider `.bottom` 改纵向排列：打赏行在最上（移动端在用户区上方、桌面在用量/设置两行上方）；原 `height:64px + margin-block:auto` 居中方案改为内容高度 + padding。
+- 动画两层：`.donateHeart` heartBeat 1.8s（两连跳节律）持续跑；`.donate donatePlead` 6s 周期在 4%–24% 区间 rotate ±1.6° 撒娇；`.donatePlea` pleaPulse 与撒娇同刻 1.12× 呼吸。文案「请我喝杯奶茶 🧋」（i18n donatePlea）。
+- E2E：check.mjs 35 项——打赏入口存在、几何位于底部按钮上方（donateBottom ≤ usageTop）、三个动画的 computed animationName、弹窗二维码。**教训：桌面流程里不能点「打开边栏」（移动端专属按钮），断言放移动段。**
+
 ## 已知取舍
 
 

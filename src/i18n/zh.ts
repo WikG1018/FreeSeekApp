@@ -67,6 +67,7 @@ export const zh = {
   donateTitle: '打赏开发者',
   donateIntro: '如果 FreeSeek 帮到了你，可以请开发者喝杯咖啡 ☕',
   donateScanHint: '用支付宝或微信「扫一扫」即可，金额随意',
+  donatePlea: '请我喝杯奶茶 🧋',
   settingsApiService: 'API 服务',
   settingsDataManage: '数据管理',
   settingsAboutApp: '关于 FreeSeek',

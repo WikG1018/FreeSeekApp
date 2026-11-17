@@ -140,8 +140,135 @@
 
 .bottom {
   display: flex;
+  flex-direction: column;
   flex-shrink: 0;
-  height: 64px;
+  padding-bottom: 8px;
+}
+
+/* 底部改为纵向排列后，设置行不再需要 auto 外边距居中 */
+.bottom .settings {
+  margin-block: 0;
+}
+
+.bottom .settings + .settings {
+  margin-top: 2px;
+}
+
+/*
+ * 打赏开发者：底部按钮上方的求打赏入口。
+ * 爱心持续小幅跳动（心跳节律）；每 6 秒整行「撒娇」一次：轻晃两下 + 爱心放大。
+ * prefers-reduced-motion 下由全局规则自动停用。
+ */
+.donate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  margin-block: auto 8px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(244, 114, 182, 0.55);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(244, 114, 182, 0.1), rgba(37, 99, 235, 0.06));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  animation: donatePlead 6s var(--fs-ease-in-out) infinite;
+  transition:
+    background-color var(--fs-duration-fast) var(--fs-ease-out),
+    border-color var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:hover {
+    border-color: rgba(244, 114, 182, 0.9);
+    background-color: rgba(244, 114, 182, 0.14);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+/* 撒娇：每 6 秒轻晃两下（4%–12% 与 16%–24% 两个来回） */
+@keyframes donatePlead {
+  0%, 4%, 12%, 16%, 24%, 100% {
+    transform: rotate(0deg);
+  }
+  8% {
+    transform: rotate(-1.6deg);
+  }
+  20% {
+    transform: rotate(1.4deg);
+  }
+}
+
+.donateHeart {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  color: var(--fs-accent-pink);
+  animation: heartBeat 1.8s ease-in-out infinite;
+}
+
+/* 心跳节律：两连跳后休息 */
+@keyframes heartBeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  12% {
+    transform: scale(1.28);
+  }
+  24% {
+    transform: scale(1.06);
+  }
+  36% {
+    transform: scale(1.34);
+  }
+  48% {
+    transform: scale(1);
+  }
+}
+
+.donateLabel {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+}
+
+.donatePlea {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--fs-accent-pink);
+  color: #fff;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  animation: pleaPulse 6s var(--fs-ease-in-out) infinite;
+}
+
+/* 与撒娇同步的胶囊呼吸：撒娇时刻微微放大提醒 */
+@keyframes pleaPulse {
+  0%, 4%, 24%, 100% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.12);
+  }
 }
 
 .settings {
@@ -386,8 +513,34 @@
   }
 
   .bottom {
-    height: auto;
-    padding: 12px 0 calc(var(--fs-safe-bottom) + 10px);
+    padding: 10px 0 calc(var(--fs-safe-bottom) + 10px);
+  }
+
+  /* 手机抽屉里：打赏行与用户区间距稍大，文字更大 */
+  .donate {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .donateHeart {
+    width: 30px;
+    height: 30px;
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  .donateLabel {
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .donatePlea {
+    font-size: 11px;
+    line-height: 18px;
   }
 
   .settings {

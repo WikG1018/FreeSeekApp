@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import logo from '../../assets/logo.png'
-import donateQr from '../../assets/donate-qr.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
   IconCheckOutline16,
@@ -16,7 +15,6 @@ import {
   IconEyeOutline16,
   IconFollowsystemOutline16,
   IconGlobeLanguageOutline14,
-  IconHeartOutline16,
   IconInfoOutline16,
   IconLightOutline16,
   IconLinkOutline16,
@@ -609,30 +607,10 @@ const ApiTutorial = () => {
   )
 }
 
-/** 打赏开发者：收款二维码（替换 src/assets/donate-qr.png 即可换成自己的码） */
-const DonateDialog = ({ onClose }: { onClose: () => void }) => {
-  const t = useTranslate()
-  return (
-    <Modal title={t('donateTitle')} centered closable onClose={onClose}>
-      <div className={styles.donate}>
-        <p className={styles.donateIntro}>{t('donateIntro')}</p>
-        <img
-          className={styles.donateQr}
-          src={donateQr}
-          alt={t('donateTitle')}
-          draggable={false}
-        />
-        <p className={styles.donateHint}>{t('donateScanHint')}</p>
-      </div>
-    </Modal>
-  )
-}
-
 /** 二级页：关于（完全本地，不跳转私有仓库） */
 const AboutPage = () => {
   const t = useTranslate()
   const [licenseOpen, setLicenseOpen] = useState(false)
-  const [donateOpen, setDonateOpen] = useState(false)
   return (
     <>
       <div className={styles.brandBlock}>
@@ -647,13 +625,6 @@ const AboutPage = () => {
       </Section>
       <Section title={t('settingsUpstreamTitle')}>
         <p className={styles.paragraph}>{t('settingsUpstreamText')}</p>
-      </Section>
-      <Section title={t('settingsSupportSection')}>
-        <Row
-          icon={<IconHeartOutline16 />}
-          label={t('donateTitle')}
-          onClick={() => setDonateOpen(true)}
-        />
       </Section>
       <Section title={t('settingsFontSize')}>
         <p className={styles.paragraph}>{t('settingsFontAttribution')}</p>
@@ -671,7 +642,6 @@ const AboutPage = () => {
           <pre className={styles.licenseText}>{LICENSE_TEXT}</pre>
         </Modal>
       ) : null}
-      {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}
       <div className={styles.footer}>FreeSeek</div>
     </>
   )

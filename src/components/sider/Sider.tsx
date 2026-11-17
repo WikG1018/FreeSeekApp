@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   IconDataOutline16,
+  IconHeartOutline16,
   IconPanelLeftOutline16,
   IconSearchOutline16,
   IconSettingsOutline16,
@@ -17,6 +18,7 @@ import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
+import { DonateDialog } from '../donate/DonateDialog.js'
 import { UsagePanel } from '../usage/UsagePanel.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
@@ -42,6 +44,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [donateOpen, setDonateOpen] = useState(false)
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>
@@ -124,6 +127,19 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </div>
       </div>
       <div className={styles.bottom}>
+        {/* 打赏开发者：放在底部按钮上方，爱心持续跳动偶尔撒娇求打赏 */}
+        <button
+          type="button"
+          className={styles.donate}
+          onClick={() => setDonateOpen(true)}
+          aria-label={t('donateTitle')}
+        >
+          <span className={styles.donateHeart}>
+            <IconHeartOutline16 />
+          </span>
+          <span className={styles.donateLabel}>{t('donateTitle')}</span>
+          <span className={styles.donatePlea}>{t('donatePlea')}</span>
+        </button>
         {mobile ? (
           <div className={styles.userRow}>
             <span className={styles.userAvatar}>🐳</span>
@@ -166,6 +182,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         )}
       </div>
       {usageOpen ? <UsagePanel onClose={() => setUsageOpen(false)} /> : null}
+      {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}
       {deleting ? (
         <Modal
           title={t('deleteSessionModalContentTitle')}

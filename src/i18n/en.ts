@@ -72,6 +72,7 @@ export const en = {
   donateTitle: 'Buy the developer a coffee',
   donateIntro: 'If FreeSeek helps you, a small tip keeps it going ☕',
   donateScanHint: 'Scan with Alipay or WeChat — any amount',
+  donatePlea: 'Buy me a bubble tea 🧋',
   settingsApiService: 'API service',
   settingsDataManage: 'Data management',
   settingsAboutApp: 'About FreeSeek',
