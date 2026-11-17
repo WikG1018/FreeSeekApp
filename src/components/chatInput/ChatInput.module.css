@@ -1,4 +1,5 @@
 .wrapper {
+  position: relative;
   --line-height: 24px;
   --input-padding-top: 12px;
   display: flex;
@@ -281,6 +282,11 @@
   gap: 8px;
   margin-top: 4px;
   padding: 12px;
+}
+
+:global([data-ime-compact]) .hasModelSwitcher .textarea,
+:global([data-ime-compact]) .hasModelSwitcher .mirror {
+  padding-right: 158px;
 }
 
 :global([data-ime-compact]) .wrapper {

@@ -39,6 +39,7 @@ import {
   setThemePreference,
   setTtsVoice,
   setShowUsage,
+  setShowModelSwitcher,
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
@@ -50,6 +51,7 @@ import { useDialogFocus } from '../base/useDialogFocus.js'
 import { saveBackup } from '../../services/saveBackup.js'
 import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { saveNativeDiagnostics } from '../../services/diagnostics/native.js'
+import { shareDiagnostics } from '../../services/shareDiagnostics.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
@@ -64,6 +66,9 @@ import {
   type SettingsPageId,
 } from './settingsDialogState.js'
 import styles from './Settings.module.css'
+import { ConnectionSelector, ProviderSettingsPage } from './ProviderSettings.js'
+import { modelLabel, useProviders } from '../../services/providers.js'
+import { PersonaLibrary } from '../personas/PersonaManager.js'
 
 /** 构建期注入的应用版本（rspack HtmlRspackPlugin 的 application-version meta） */
 const APP_VERSION =
@@ -77,6 +82,8 @@ const API_KEYS_URL = 'https://platform.deepseek.com/api_keys'
 const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
   home: 'settings',
   account: 'settingsApiService',
+  providers: 'providerAdvanced',
+  personas: 'personaManagerTitle',
   appearance: 'avatarMenuSettingsDialogThemeItemLabel',
   font: 'settingsFontSize',
   language: 'settingsLocalePreference',
@@ -185,7 +192,9 @@ const SettingsRoot = () => {
         <div className={styles.scroll}>
           <div key={page} className={styles.pageBody}>
             {page === 'home' ? <HomePage push={push} /> : null}
-            {page === 'account' ? <AccountPage editor={apiKeyEditor} /> : null}
+            {page === 'account' ? <AccountPage editor={apiKeyEditor} push={push} /> : null}
+            {page === 'providers' ? <ProviderSettingsPage /> : null}
+            {page === 'personas' ? <PersonaLibrary /> : null}
             {page === 'appearance' ? <AppearancePage /> : null}
             {page === 'font' ? <FontPage /> : null}
             {page === 'language' ? <LanguagePage /> : null}
@@ -219,6 +228,8 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   const ttsVoice = useSettings((state) => state.ttsVoice)
   const fontScale = useSettings((state) => state.fontScale)
   const showUsage = useSettings((state) => state.showUsage)
+  const showModelSwitcher = useSettings((state) => state.showModelSwitcher)
+  const selection = useProviders((state) => state.selection)
   const sessionCount = useChatStore((state) => state.sessions.length)
   const fontLabel =
     fontScale < 0.95
@@ -244,7 +255,7 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         const tokens = today.cacheReadTokens + today.cacheMissTokens + today.outputTokens
         const cost =
           today.costCny >= 0.01 ? `¥${today.costCny.toFixed(2)}` : `¥${today.costCny.toFixed(4)}`
-        setUsageValue(`${cost} · ${tokens.toLocaleString()} tok`)
+        setUsageValue(`${today.unpricedRequests ? '' : `${cost} · `}${tokens.toLocaleString()} tok`)
       })
       .catch(() => {})
     return () => {
@@ -261,7 +272,11 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         <Row
           icon={<IconUserOutline16 />}
           label={t('settingsApiService')}
-          value={apiKey ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
+          value={
+            selection.providerId !== 'deepseek' || apiKey
+              ? modelLabel(selection.model)
+              : t('settingsApiKeyMissing')
+          }
           onClick={() => push('account')}
         />
       </Section>
@@ -289,6 +304,23 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
           label={t('settingsTtsVoice')}
           value={voiceLabel}
           onClick={() => push('voice')}
+        />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showModelSwitcher}
+          className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
+          onClick={() => setShowModelSwitcher(!showModelSwitcher)}
+        >
+          <span className={styles.rowLabel}>{t('providerShowSwitcher')}</span>
+          <span className={styles.toggleTrack} aria-hidden="true">
+            <span className={styles.toggleThumb} />
+          </span>
+        </button>
+        <Row
+          icon={<IconUserOutline16 />}
+          label={t('personaManage')}
+          onClick={() => push('personas')}
         />
       </Section>
       <Section title={t('settingsSectionUsage')}>
@@ -332,15 +364,28 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
 }
 
 /** 二级页：API 服务 */
-const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
+const AccountPage = ({
+  editor,
+  push,
+}: {
+  editor: ReturnType<typeof useApiKeyEditor>
+  push: (page: SettingsPageId) => void
+}) => {
   const t = useTranslate()
   const { apiKey, editing, setEditing, form, showInput } = editor
   const [showKey, setShowKey] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
   return (
     <>
-      <ApiTutorial />
+      <Section title={t('providerDefaultModel')}>
+        <div className={styles.accountBlock}>
+          <ConnectionSelector />
+        </div>
+      </Section>
       <Section>
+        <Row label={t('providerAdvanced')} onClick={() => push('providers')} />
+      </Section>
+      <Section title={t('providerOfficial')}>
         <div className={styles.accountBlock}>
           <div className={styles.accountStatus}>
             <span className={styles.accountStatusLabel}>{t('settingsApiKey')}</span>
@@ -408,9 +453,12 @@ const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> })
       ) : null}
       {/* 直达链接只在顶部教学卡片里给一次，这里不再重复 */}
       <Section title={t('settingsApiService')}>
-        <Row label={t('settingsApiModelLabel')} value="deepseek-flash" />
         <Row label={t('settingsApiBillingLabel')} value={t('settingsApiBillingValue')} />
       </Section>
+      <details className={styles.tutorialDisclosure}>
+        <summary>{t('settingsApiTutorialTitle')}</summary>
+        <ApiTutorial />
+      </details>
       {clearOpen ? (
         <Modal
           title={t('settingsApiKeyClear')}
@@ -642,7 +690,7 @@ const AboutPage = () => {
   const [licenseOpen, setLicenseOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
-  const exportDiagnostics = async () => {
+  const exportDiagnostics = async (share = true) => {
     if (diagnosticsBusy) {
       return
     }
@@ -652,20 +700,26 @@ const AboutPage = () => {
       const { createDiagnosticBundle } = await import('../../services/diagnostics/export.js')
       const pack = await createDiagnosticBundle()
       bundleReady = true
-      const saved = await saveBackup(pack.name, pack.blob)
-      logEvent('diagnostics', saved ? 'export.saved' : 'export.cancelled', {
-        bytes: pack.blob.size,
-      })
+      const saved = await (share
+        ? shareDiagnostics(pack.name, pack.blob)
+        : saveBackup(pack.name, pack.blob).then((saved) => (saved ? ('saved' as const) : false)))
+      logEvent(
+        'diagnostics',
+        saved ? (saved === 'shared' ? 'export.share-opened' : 'export.saved') : 'export.cancelled',
+        {
+          bytes: pack.blob.size,
+        }
+      )
       if (saved) {
-        showToast({ key: 'diagnosticsExported' })
+        showToast({ key: saved === 'shared' ? 'diagnosticsShareOpened' : 'diagnosticsExported' })
       }
     } catch (error) {
       logEvent('diagnostics', 'export.failed', diagnosticError(error), 'error')
       if (Capacitor.getPlatform() === 'android' && !bundleReady) {
         showToast({ key: 'diagnosticsFallback' })
         try {
-          if (await saveNativeDiagnostics(error)) {
-            showToast({ key: 'diagnosticsExported' })
+          if (await saveNativeDiagnostics(error, share)) {
+            showToast({ key: share ? 'diagnosticsShareOpened' : 'diagnosticsExported' })
           }
         } catch (fallbackError) {
           logEvent(
@@ -677,7 +731,10 @@ const AboutPage = () => {
           showToast({ key: 'diagnosticsExportFailed', type: 'error' })
         }
       } else {
-        showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+        showToast({
+          key: share ? 'diagnosticsShareFailed' : 'diagnosticsExportFailed',
+          type: 'error',
+        })
       }
     } finally {
       setDiagnosticsBusy(false)
@@ -737,10 +794,19 @@ const AboutPage = () => {
           disabled={diagnosticsBusy}
           onClick={() => void exportDiagnostics()}
         >
-          <span className={styles.rowLabel}>{t('diagnosticsExport')}</span>
+          <span className={styles.rowLabel}>{t('diagnosticsShare')}</span>
           <span className={styles.rowValue}>
             {diagnosticsBusy ? t('diagnosticsPreparing') : null}
           </span>
+          <IconDownloadOutline16 />
+        </button>
+        <button
+          type="button"
+          className={styles.row}
+          disabled={diagnosticsBusy}
+          onClick={() => void exportDiagnostics(false)}
+        >
+          <span className={styles.rowLabel}>{t('diagnosticsSaveFile')}</span>
           <IconDownloadOutline16 />
         </button>
         <p className={styles.paragraph}>{t('diagnosticsPrivacy')}</p>

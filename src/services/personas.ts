@@ -1,5 +1,18 @@
 import { create } from 'zustand'
 import { createId } from '../utils/id.js'
+import { diagnosticError, logEvent } from './diagnostics/log.js'
+
+export class PersonaError extends Error {
+  constructor(readonly reason: 'invalid' | 'storage') {
+    super(`Persona ${reason}`)
+    this.name = 'PersonaError'
+  }
+}
+const validate = (name: string, prompt: string) => {
+  if (!name.trim() || name.trim().length > 80 || prompt.length > 100000) {
+    throw new PersonaError('invalid')
+  }
+}
 
 /** 人设：新会话创建时的 system 提示词快照来源；prompt 为空表示使用默认助手身份 */
 export type Persona = {
@@ -63,7 +76,16 @@ const isPersona = (value: unknown): value is Persona =>
 const loadCustom = (): Persona[] => {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-    return Array.isArray(parsed) ? parsed.filter(isPersona) : []
+    const seen = new Set<string>()
+    return Array.isArray(parsed)
+      ? parsed.filter(isPersona).filter((persona) => {
+          if (seen.has(persona.id) || persona.id.startsWith(BUILTIN_PREFIX)) {
+            return false
+          }
+          seen.add(persona.id)
+          return true
+        })
+      : []
   } catch {
     return []
   }
@@ -75,16 +97,18 @@ const persistCustom = (personas: Persona[]) => {
       STORAGE_KEY,
       JSON.stringify(personas.filter((persona) => !persona.id.startsWith(BUILTIN_PREFIX)))
     )
-  } catch {
-    // 存储不可用时只在内存中生效
+  } catch (error) {
+    logEvent('storage', 'personas.save-failed', diagnosticError(error), 'error')
+    throw new PersonaError('storage')
   }
 }
 
 const persistDefault = (id: string) => {
   try {
     localStorage.setItem(DEFAULT_KEY, id)
-  } catch {
-    // 同上
+  } catch (error) {
+    logEvent('storage', 'persona-default.save-failed', diagnosticError(error), 'error')
+    throw new PersonaError('storage')
   }
 }
 
@@ -118,25 +142,61 @@ export const restorePersonas = (custom: Persona[], defaultId: string): void => {
   const selected = personas.some((persona) => persona.id === defaultId)
     ? defaultId
     : 'builtin-default'
-  persistCustom(personas)
-  persistDefault(selected)
+  // 聊天数据库已完成恢复；偏好存储失败由日志记录，不能再把整次导入误报失败。
+  try {
+    persistCustom(personas)
+    persistDefault(selected)
+  } catch {
+    /* 保留本次进程内恢复结果。 */
+  }
   usePersonas.setState({ personas, defaultId: selected })
 }
 
 export const isBuiltin = (persona: Persona): boolean => persona.id.startsWith(BUILTIN_PREFIX)
 
-const commit = (personas: Persona[]) => {
-  persistCustom(personas)
-  usePersonas.setState({ personas })
+const commit = (personas: Persona[], defaultId = usePersonas.getState().defaultId) => {
+  let oldCustom: string | null, oldDefault: string | null
+  try {
+    oldCustom = localStorage.getItem(STORAGE_KEY)
+    oldDefault = localStorage.getItem(DEFAULT_KEY)
+  } catch {
+    throw new PersonaError('storage')
+  }
+  try {
+    persistCustom(personas)
+    persistDefault(defaultId)
+  } catch (error) {
+    try {
+      if (oldCustom === null) {
+        localStorage.removeItem(STORAGE_KEY)
+      } else {
+        localStorage.setItem(STORAGE_KEY, oldCustom)
+      }
+      if (oldDefault === null) {
+        localStorage.removeItem(DEFAULT_KEY)
+      } else {
+        localStorage.setItem(DEFAULT_KEY, oldDefault)
+      }
+    } catch {
+      /* 持续不可写时保持内存中的旧状态。 */
+    }
+    throw error
+  }
+  usePersonas.setState({ personas, defaultId })
 }
 
 export const addPersona = (name: string, prompt: string): string => {
+  validate(name, prompt)
+  if (usePersonas.getState().personas.filter((p) => !isBuiltin(p)).length >= 200) {
+    throw new PersonaError('invalid')
+  }
   const persona: Persona = { id: createId(), name: name.trim(), prompt: prompt.trim() }
   commit([...usePersonas.getState().personas, persona])
   return persona.id
 }
 
 export const updatePersona = (id: string, name: string, prompt: string): void => {
+  validate(name, prompt)
   commit(
     usePersonas
       .getState()
@@ -153,17 +213,15 @@ export const removePersona = (id: string): void => {
     return
   }
   const { personas, defaultId } = usePersonas.getState()
-  commit(personas.filter((persona) => persona.id !== id))
-  if (defaultId === id) {
-    persistDefault('builtin-default')
-    usePersonas.setState({ defaultId: 'builtin-default' })
-  }
+  commit(
+    personas.filter((persona) => persona.id !== id),
+    defaultId === id ? 'builtin-default' : defaultId
+  )
 }
 
 export const setDefaultPersona = (id: string): void => {
   if (usePersonas.getState().personas.some((persona) => persona.id === id)) {
-    persistDefault(id)
-    usePersonas.setState({ defaultId: id })
+    commit(usePersonas.getState().personas, id)
   }
 }
 
@@ -173,5 +231,71 @@ export const activePersona = (): { name: string; prompt: string } | null => {
   const persona = personas.find((item) => item.id === defaultId)
   return persona && persona.prompt.trim() !== ''
     ? { name: persona.name, prompt: persona.prompt }
+    : null
+}
+
+/** 全量校验后追加，外部 ID 和默认选择不覆盖本机设置。 */
+export const importPersonas = async (file: File): Promise<number> => {
+  if (file.size > 16 * 1024 * 1024) {
+    throw new PersonaError('invalid')
+  }
+  const text = await file.text()
+  let items: unknown
+  if (/\.(txt|md|markdown)$/i.test(file.name)) {
+    items = [{ name: file.name.replace(/\.[^.]+$/, ''), prompt: text }]
+  } else {
+    try {
+      const data = JSON.parse(text) as unknown
+      if (Array.isArray(data)) {
+        items = data
+      } else if (data && typeof data === 'object') {
+        const object = data as Record<string, unknown>
+        if (
+          object.freeseek_personas_version !== undefined &&
+          object.freeseek_personas_version !== 1
+        ) {
+          throw new PersonaError('invalid')
+        }
+        items = object.personas ?? [object]
+      }
+    } catch {
+      throw new PersonaError('invalid')
+    }
+  }
+  if (!Array.isArray(items) || !items.length || items.length > 200) {
+    throw new PersonaError('invalid')
+  }
+  const additions = items.map((item) => {
+    if (!item || typeof item !== 'object') {
+      throw new PersonaError('invalid')
+    }
+    const value = item as Record<string, unknown>,
+      name = value.name ?? value.act,
+      prompt = value.prompt ?? value.systemPrompt
+    if (typeof name !== 'string' || typeof prompt !== 'string') {
+      throw new PersonaError('invalid')
+    }
+    validate(name, prompt)
+    return { id: createId(), name: name.trim(), prompt: prompt.trim() }
+  })
+  const current = usePersonas.getState().personas
+  if (current.filter((p) => !isBuiltin(p)).length + additions.length > 200) {
+    throw new PersonaError('invalid')
+  }
+  commit([...current, ...additions])
+  return additions.length
+}
+export const exportPersonas = (): { name: string; blob: Blob } | null => {
+  const personas = usePersonas
+    .getState()
+    .personas.filter((p) => !isBuiltin(p))
+    .map(({ name, prompt }) => ({ name, prompt }))
+  return personas.length
+    ? {
+        name: `freeseek-personas-${new Date().toISOString().slice(0, 10)}.json`,
+        blob: new Blob([JSON.stringify({ freeseek_personas_version: 1, personas }, null, 2)], {
+          type: 'application/json',
+        }),
+      }
     : null
 }

@@ -1,5 +1,6 @@
 import { createId } from '../../utils/id.js'
 import { openDB, type DBSchema } from 'idb'
+import { apiLimitCounts, describeKnownApiError } from '../api/knownErrors.js'
 
 export type LogScope =
   | 'app'
@@ -124,7 +125,6 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
     ['invalid-image', /unsupported|invalid.*image|image.*large/i],
     ['quota', /quota|count limit|storage.*limit/i],
     ['invalid-file-id', /file_id|file data not found/i],
-    ['context-limit', /context.{0,30}(?:length|limit|exceed)|maximum.*token/i],
     ['timeout', /timeout|timed out/i],
     ['json-format', /json/i],
     ['no-space', /ENOSPC|QuotaExceeded/i],
@@ -133,6 +133,7 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
     item.localMessage && typeof item.localMessage === 'object'
       ? (item.localMessage as Record<string, unknown>)
       : {}
+  const limitKey = describeKnownApiError(message)?.key
   return {
     name: typeof item.name === 'string' && /^[\w.]{1,100}$/.test(item.name) ? item.name : 'Error',
     ...(typeof item.status === 'number' ? { status: item.status } : {}),
@@ -140,7 +141,13 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
       ? { kind: item.kind }
       : {}),
     ...(typeof local.key === 'string' ? { localKey: local.key } : {}),
-    reason: reasons.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unclassified',
+    reason:
+      limitKey === 'replyContextTooLong'
+        ? 'context-limit'
+        : limitKey === 'replyOutputLimitInvalid'
+          ? 'output-limit'
+          : (reasons.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unclassified'),
+    ...(limitKey ? { limits: apiLimitCounts(message) } : {}),
     field: /\bmessages\.\d+(?:\.[\w]+|\.\d+)*/.exec(message)?.[0],
     frames:
       typeof item.stack === 'string'

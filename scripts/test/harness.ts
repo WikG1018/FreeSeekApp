@@ -94,6 +94,11 @@ const response = (
 import * as db from '../../src/services/chat/db.js'
 import * as store from '../../src/services/chat/store.js'
 import * as settings from '../../src/services/settings.js'
+import * as providers from '../../src/services/providers.js'
+import * as providerClient from '../../src/services/api/providerClient.js'
+import * as providerContent from '../../src/services/api/providerContent.js'
+import * as providerTransport from '../../src/services/api/providerTransport.js'
+import * as diagnosticShare from '../../src/services/shareDiagnostics.js'
 import * as drafts from '../../src/services/chat/drafts.js'
 import * as uploads from '../../src/services/attachments.js'
 import * as reply from '../../src/services/chat/reply.js'
@@ -116,6 +121,7 @@ Object.assign(window, {
     db,
     store,
     settings,
+    providers, providerClient, providerContent, providerTransport, diagnosticShare,
     drafts,
     uploads,
     reply,

@@ -5,7 +5,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { newChat } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
-import { computeMessageUsage, usePricing } from '../../services/usage.js'
+import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
 import { useSettings } from '../../services/settings.js'
 import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
@@ -56,12 +56,15 @@ export const SessionView = ({
         if (message.role !== 'assistant' || !message.usage) {
           return total
         }
-        return total + computeMessageUsage(message.usage, message.createdAt, pricing).costCny
+        return total + computeReplyUsage(message, pricing).costCny
       }, 0),
     [session, pricing]
   )
   // 滚动后才浮现顶栏渐隐（dsh-Go：静止时是一整块干净页面）
   const [scrolled, setScrolled] = useState(false)
+  const priced = getVisibleMessages(session).every(
+    (message) => message.role !== 'assistant' || hasKnownPricing(message)
+  )
   const onScrolledChange = useCallback((value: boolean) => setScrolled(value), [])
   return (
     <div className={styles.view}>
@@ -73,7 +76,7 @@ export const SessionView = ({
             <div className={styles.title}>{title}</div>
             {showUsage && tokens > 0 ? (
               <span className={styles.usage} title={t('usageTokensTitle')}>
-                {formatTokens(tokens)} tok · {formatCost(cost)}
+                {formatTokens(tokens)} tok{priced ? ` · ${formatCost(cost)}` : ''}
               </span>
             ) : null}
           </div>

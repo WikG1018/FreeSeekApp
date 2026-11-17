@@ -325,6 +325,12 @@ export const cancelUpload = (id: string) => {
   setTask(id, null)
 }
 
+export const markAttachmentLocal = (id: string) => {
+  cancelUpload(id)
+  pending.delete(id)
+  setTask(id, { status: 'done', serverId: `local:${id}` })
+}
+
 /** 本次进程内不反复提交已证实无法解析的原件；原件与消息元数据均保留。 */
 export const markAttachmentInvalid = (id: string) =>
   setTask(id, { status: 'error', retryable: false, error: { key: 'uploadParseFailed' } })

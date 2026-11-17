@@ -40,6 +40,8 @@ import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
 import styles from './ChatInput.module.css'
+import { useProviders } from '../../services/providers.js'
+import { ModelPicker } from '../settings/ProviderSettings.js'
 
 /** 输入框：自适应高度的文本框 + 文件 + 深度思考与智能搜索开关 + 语音输入 + 发送 / 停止 */
 export const ChatInput = memo(function ChatInput({ sessionId }: { sessionId: string | null }) {
@@ -60,6 +62,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
+  const custom = useProviders((state) => state.selection.providerId !== 'deepseek')
+  const showModelSwitcher = useSettings((state) => state.showModelSwitcher)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
@@ -157,6 +161,12 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   // 欢迎页导入后会话 ID 不变，不能依赖卸载取消语音；订阅开始事件也覆盖快速完成的导入。
   const cancelVoice = voice.cancel
+  useEffect(() => {
+    if (custom) {
+      cancelVoice()
+      stopReadAloud()
+    }
+  }, [custom, cancelVoice])
   useEffect(
     () =>
       useChatStore.subscribe((state, previous) => {
@@ -196,7 +206,11 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   return (
     <div
       ref={wrapperRef}
-      className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
+      className={clsx(
+        styles.wrapper,
+        sessionId === null ? styles.home : styles.session,
+        showModelSwitcher && styles.hasModelSwitcher
+      )}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           textareaRef.current?.focus({ preventScroll: true })
@@ -204,6 +218,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       }}
     >
       <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+      {showModelSwitcher ? <ModelPicker disabled={streaming || importingHistory} /> : null}
       <div ref={textareaWrapperRef} className={styles.textareaWrapper}>
         <textarea
           ref={textareaRef}
@@ -289,34 +304,38 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       <div className={styles.functionRow}>
         {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
         <div ref={togglesRef} className={styles.toggles}>
-          <Tooltip content={t('deactivatedThinkTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, thinking && styles.selected)}
-              aria-label={t('thinkingSwitch')}
-              aria-pressed={thinking}
-              onClick={() => setThinking(!thinking)}
-            >
-              <IconThinkOutline14 />
-              <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
-            </button>
-          </Tooltip>
-          <Tooltip content={t('deactivatedSearchTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, search && styles.selected)}
-              aria-label={t('search')}
-              aria-pressed={search}
-              onClick={() => setSearch(!search)}
-            >
-              <IconGlobeLanguageOutline14 />
-              <span className={styles.toggleLabel}>{t('search')}</span>
-            </button>
-          </Tooltip>
+          {custom ? null : (
+            <>
+              <Tooltip content={t('deactivatedThinkTooltip')}>
+                <button
+                  type="button"
+                  className={clsx(styles.toggle, thinking && styles.selected)}
+                  aria-label={t('thinkingSwitch')}
+                  aria-pressed={thinking}
+                  onClick={() => setThinking(!thinking)}
+                >
+                  <IconThinkOutline14 />
+                  <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
+                </button>
+              </Tooltip>
+              <Tooltip content={t('deactivatedSearchTooltip')}>
+                <button
+                  type="button"
+                  className={clsx(styles.toggle, search && styles.selected)}
+                  aria-label={t('search')}
+                  aria-pressed={search}
+                  onClick={() => setSearch(!search)}
+                >
+                  <IconGlobeLanguageOutline14 />
+                  <span className={styles.toggleLabel}>{t('search')}</span>
+                </button>
+              </Tooltip>
+            </>
+          )}
         </div>
         <div className={styles.right}>
           {/* 桌面保留三个并列按钮；手机把「麦克风 / 发送」合并成一个位置 */}
-          {isMobile ? null : (
+          {isMobile || custom ? null : (
             <VoiceButton
               status={voice.status}
               disabled={!voice.available}
@@ -394,6 +413,16 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
                 type="button"
                 className={styles.sendButton}
                 aria-label={t('send')}
+                onClick={send}
+              >
+                <IconSendOutline16 />
+              </button>
+            ) : custom ? (
+              <button
+                type="button"
+                className={clsx(styles.sendButton, styles.disabled)}
+                aria-label={t('send')}
+                aria-disabled="true"
                 onClick={send}
               >
                 <IconSendOutline16 />

@@ -38,6 +38,7 @@ import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import styles from './App.module.css'
+import { hasChatConnection } from '../services/providers.js'
 
 /** 字体大小原生插件（Android WebView textZoom） */
 const FontScale = registerPlugin<{ setFontScale(options: { scale: number }): Promise<void> }>(
@@ -53,7 +54,7 @@ export const App = () => {
   const ready = useChatStore((state) => state.ready)
   // 首次使用：没绑 Key 且没看过引导时弹一次
   const [onboarding, setOnboarding] = useState(() =>
-    shouldShowOnboarding(useSettings.getState().apiKey)
+    shouldShowOnboarding(hasChatConnection() ? 'configured' : useSettings.getState().apiKey)
   )
   const initError = useChatStore((state) => state.initError)
   const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))

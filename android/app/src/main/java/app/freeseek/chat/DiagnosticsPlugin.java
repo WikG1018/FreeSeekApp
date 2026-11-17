@@ -97,6 +97,7 @@ public class DiagnosticsPlugin extends Plugin {
     @PluginMethod
     public void exportStartup(PluginCall call) {
         DiagnosticsLog.record(getContext(), "diagnostics", "startup-export.requested", new JSObject());
+        if (call.getBoolean("share", false)) { shareFallback(call); return; }
         SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US); format.setTimeZone(TimeZone.getTimeZone("UTC"));
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT); intent.addCategory(Intent.CATEGORY_OPENABLE);
         String prefix = "fallback".equals(call.getString("mode")) ? "freeseek-native-diagnostics-" : "freeseek-startup-diagnostics-";
@@ -113,6 +114,31 @@ public class DiagnosticsPlugin extends Plugin {
         report.put("line", Math.max(0, Math.min(1_000_000, call.getInt("line", 0))));
         report.put("column", Math.max(0, Math.min(1_000_000, call.getInt("column", 0))));
         return report;
+    }
+    private void shareFallback(PluginCall call) {
+        DiagnosticsLog.afterPending(() -> {
+            java.io.File file = null;
+            try {
+                file = ShareFiles.create(getContext(), "freeseek-native-diagnostics-" + System.currentTimeMillis() + ".zip");
+                JSObject snapshot;
+                try { snapshot = snapshotNow(); } catch (Exception error) { snapshot = DiagnosticsLog.snapshot(getContext()); }
+                JSObject report = startupReport(call), env = new JSObject(); env.put("native", snapshot.opt("environment"));
+                JSObject manifest = new JSObject(); manifest.put("diagnostic_format_version", 1); manifest.put("diagnostic_mode", "native-fallback");
+                JSONArray events = snapshot.getJSONArray("events"); StringBuilder lines = new StringBuilder();
+                for (int i = 0; i < events.length(); i++) lines.append(events.getJSONObject(i)).append('\n');
+                try (ZipOutputStream zip = new ZipOutputStream(new java.io.FileOutputStream(file))) {
+                    zipEntry(zip, "manifest.json", manifest.toString()); zipEntry(zip, "environment.json", env.toString());
+                    zipEntry(zip, "summary.json", report.toString()); zipEntry(zip, "client-events.jsonl", "");
+                    zipEntry(zip, "native-events.jsonl", lines.toString());
+                    zipEntry(zip, "README.txt", "FreeSeek 基础诊断，不含 Key、正文、附件原件、录音或原始异常消息。\n");
+                }
+                java.io.File shared = file;
+                getActivity().runOnUiThread(() -> {
+                    try { ShareFiles.open(getActivity(), shared); JSObject result = new JSObject(); result.put("launched", true); call.resolve(result); }
+                    catch (Exception error) { shared.delete(); call.reject("Cannot share native diagnostics"); }
+                });
+            } catch (Exception error) { if (file != null) file.delete(); call.reject("Cannot prepare native diagnostics"); }
+        });
     }
     private void zipEntry(ZipOutputStream zip, String name, String value) throws Exception {
         zip.putNextEntry(new ZipEntry(name)); zip.write(value.getBytes(StandardCharsets.UTF_8)); zip.closeEntry();

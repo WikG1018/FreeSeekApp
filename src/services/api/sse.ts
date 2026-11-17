@@ -44,6 +44,7 @@ export class ServerSentEventDecoder {
       lineStart = LINE_BREAK.lastIndex
     }
     this.buffer = this.buffer.slice(lineStart)
+    if (this.buffer.length > 2 * 1024 * 1024) { throw new Error('SSE line exceeds size limit') }
     return events
   }
 
@@ -73,6 +74,7 @@ export class ServerSentEventDecoder {
     switch (field) {
       case 'data':
         this.data = this.hasData ? `${this.data}\n${value}` : value
+        if (this.data.length > 2 * 1024 * 1024) { throw new Error('SSE event exceeds size limit') }
         this.hasData = true
         break
       case 'event':

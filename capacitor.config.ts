@@ -8,6 +8,8 @@ const config: CapacitorConfig = {
   appId: 'app.freeseek.chat',
   appName: 'FreeSeek',
   webDir: 'dist',
+  // 桥接参数可能含第三方密钥；诊断只使用独立的脱敏结构化日志。
+  loggingBehavior: 'none',
   server: {
     androidScheme: 'https',
   },

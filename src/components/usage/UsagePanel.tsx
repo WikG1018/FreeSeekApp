@@ -78,7 +78,8 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
             {t('usageToday')} {compactCost(today?.costCny ?? 0)}
           </span>
         </div>
-        <div className={styles.heroValue}>{compactCost(stats.total.costCny)}</div>
+        <div className={styles.heroValue}>{stats.total.unpricedRequests === stats.total.requests ? '—' : compactCost(stats.total.costCny)}</div>
+        {stats.total.unpricedRequests > 0 ? <p className={styles.sectionHint}>{t('usagePartialCost', { count: stats.total.unpricedRequests })}</p> : null}
         <div className={styles.heroMeta}>
           <span>{t('usageRequests')} {formatTokens(stats.total.requests)}</span>
           <span className={styles.heroDot} />
@@ -144,7 +145,7 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
               <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
               <span className={styles.sessionMeta}>
                 {compactTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok
-                <span className={styles.sessionCost}>{formatCost(item.costCny)}</span>
+                <span className={styles.sessionCost}>{item.unpricedRequests === item.requests ? '—' : formatCost(item.costCny)}</span>
               </span>
             </div>
           ))}

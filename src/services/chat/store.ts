@@ -35,6 +35,16 @@ import {
 import { createLatestReminder } from './latestReminder.js'
 import { activePersona } from '../personas.js'
 import {
+  activeConnectionRef,
+  resolveConnection,
+  useProviders,
+  ProviderConfigError,
+  validModel,
+  type Connection,
+} from '../providers.js'
+import { streamProviderMessage } from '../api/providerClient.js'
+import { prepareProviderMessages } from '../api/providerContent.js'
+import {
   applyEvent,
   canContinueReply,
   getContextRounds,
@@ -319,15 +329,23 @@ export const bindChatPersistence = () => {
 }
 
 /** 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。 */
-const createReply = (): AssistantMessage => {
+const createReply = (persona?: { name: string; prompt: string } | null): AssistantMessage => {
   const { thinking, search } = useSettings.getState()
+  const { selection } = useProviders.getState()
+  const official = selection.providerId === 'deepseek'
   return {
     id: createId(),
     role: 'assistant',
     createdAt: Date.now(),
-    model: MODEL,
-    thinking,
-    search,
+    model: selection.model,
+    connection: activeConnectionRef(),
+    systemPrompt: persona?.prompt.trim()
+      ? persona.prompt
+      : official
+        ? SYSTEM_PROMPT
+        : 'You are a helpful assistant.',
+    thinking: official && thinking,
+    search: official && search,
     prefix: true,
     status: 'pending',
     blocks: [],
@@ -726,7 +744,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     })),
     createdAt: now,
   }
-  const reply = createReply()
+  const reply = createReply(current.persona)
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
     updatedAt: now,
@@ -765,7 +783,7 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     return
   }
   const history = path.slice(0, index - 1)
-  const reply = createReply()
+  const reply = createReply(session.persona)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, question.id, [reply]),
     updatedAt: Date.now(),
@@ -802,7 +820,7 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     files: previous.files,
     createdAt: Date.now(),
   }
-  const reply = createReply()
+  const reply = createReply(session.persona)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
@@ -938,11 +956,11 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
  * 本地也没有原件（导入的文档附件只有元数据）时返回 null，该附件只展示、不进入请求。
  */
 const ensureServerId = async (apiKey: string, file: FileAttachment): Promise<string | null> => {
-  if (file.serverId) {
+  if (file.serverId && !file.serverId.startsWith('local:')) {
     return file.serverId
   }
   const task = useUploads.getState().tasks[file.id]
-  if (task?.status === 'done') {
+  if (task?.status === 'done' && !task.serverId.startsWith('local:')) {
     return task.serverId
   }
   if (
@@ -986,14 +1004,14 @@ const prepareFiles = async (
   sessionId: string,
   request: Request,
   signal: AbortSignal,
-  omitted: Map<string, FileAttachment>
+  omitted: Map<string, FileAttachment>,
+  apiKey: string
 ) => {
   signal.throwIfAborted()
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
   request = refreshRequest(sessionId, request)
-  const apiKey = useSettings.getState().apiKey ?? ''
   const serverIds = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   let onAbort: () => void = () => {}
@@ -1034,7 +1052,7 @@ const prepareFiles = async (
     for (const [user] of context.toReversed()) {
       for (const file of user.files) {
         if (
-          !file.serverId &&
+          (!file.serverId || file.serverId.startsWith('local:')) &&
           !serverIds.has(file.id) &&
           !pending.has(file.id) &&
           !omitted.has(file.id)
@@ -1290,14 +1308,31 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   const usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
   const requestStartedAt = Date.now()
+  let connection: Connection | undefined
 
   try {
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
-      let preparing = true
+      let preparing = false
       let receivedContent = false
       try {
-        const prepared = await prepareFiles(sessionId, request, controller.signal, omitted)
+        connection ??= resolveConnection(initial.connection, initial.model)
+        if (
+          connection.kind === 'deepseek' &&
+          connection.model === 'deepseek-v4-pro' &&
+          [
+            request.question,
+            ...getContextRounds(request.history).map(([q]) => q),
+            ...getContextRounds(request.inherited?.messages ?? []).map(([q]) => q),
+          ].some((q) => q.files.some((file) => file.isImage))
+        ) {
+          throw new ApiError('protocol', { key: 'providerProNoImages' })
+        }
+        preparing = connection.kind === 'deepseek'
+        const prepared =
+          connection.kind === 'deepseek'
+            ? await prepareFiles(sessionId, request, controller.signal, omitted, connection.apiKey)
+            : refreshRequest(sessionId, request)
         if (!prepared.question.content.trim() && prepared.question.files.length === 0) {
           throw new ApiError('protocol', { key: 'replyNoReadableAttachment' })
         }
@@ -1326,22 +1361,46 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           bodyBytes: new Blob([JSON.stringify(messages)]).size,
           omittedFiles: omitted.size,
         })
-        const events = streamMessage(
-          useSettings.getState().apiKey ?? '',
-          {
-            model: initial.model ?? MODEL,
-            // 人设提示词覆盖默认助手身份说明
-            system: request.persona?.prompt.trim() ? request.persona.prompt : SYSTEM_PROMPT,
-            messages,
-            thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            safety_check: SAFETY_CHECK,
-            tools: serverTools(initial.search ?? false),
-            ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
-          },
-          controller.signal
-        )
+        const events =
+          connection.kind === 'custom'
+            ? streamProviderMessage(
+                connection.profile,
+                connection.model,
+                await prepareProviderMessages(
+                  connection.profile,
+                  prepared,
+                  controller.signal,
+                  async (id) =>
+                    pendingFiles.get(sessionId)?.find((file) => file.id === id)?.blob ??
+                    db.loadFile(id)
+                ),
+                initial.systemPrompt ??
+                  (request.persona?.prompt.trim()
+                    ? request.persona.prompt
+                    : 'You are a helpful assistant.'),
+                controller.signal
+              )
+            : streamMessage(
+                connection.apiKey,
+                {
+                  model: initial.model ?? MODEL,
+                  // 人设提示词覆盖默认助手身份说明
+                  system:
+                    initial.systemPrompt ??
+                    (request.persona?.prompt.trim() ? request.persona.prompt : SYSTEM_PROMPT),
+                  messages,
+                  thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
+                  safety_check: SAFETY_CHECK,
+                  tools: serverTools(initial.search ?? false),
+                  ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
+                },
+                controller.signal
+              )
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
+          if (event.type === 'message_start' && validModel(event.message.model)) {
+            reply = { ...reply, responseModel: event.message.model }
+          }
           receivedContent ||= event.type === 'content_block_start'
           if (
             event.type === 'message_delta' &&
@@ -1366,7 +1425,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             reply = {
               ...reply,
               usage: sumMessageUsage(usageBase, usage),
-              usageHistory: [...usageHistory, { createdAt: requestStartedAt, usage }],
+              usageHistory: [
+                ...usageHistory,
+                {
+                  createdAt: requestStartedAt,
+                  usage,
+                  model: reply.responseModel ?? reply.model ?? undefined,
+                },
+              ],
             }
           }
           if (document.visibilityState === 'hidden') {
@@ -1376,6 +1442,20 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           }
         }
         reply = settleReply(reply, 'done', Date.now())
+        if (connection.kind === 'custom' && titleRequests.has(controller)) {
+          updateSession(sessionId, (session) =>
+            session.title
+              ? session
+              : {
+                  ...session,
+                  title: (
+                    request.question.content.trim() ||
+                    request.question.files[0]?.name ||
+                    ''
+                  ).slice(0, 40),
+                }
+          )
+        }
         break
       } catch (error) {
         logEvent(
@@ -1407,6 +1487,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         }
         // 附件失效：重新补传后重发。收到过内容块（含丢弃的客户端工具）后不自动重发。
         if (
+          connection?.kind === 'deepseek' &&
           attempt < FILE_RETRY_LIMIT &&
           !receivedContent &&
           reuploadInvalidatedFiles(sessionId, request, error)
@@ -1421,6 +1502,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         // 图片被判定不可用：多为导入记录里的 BMP/HEIC/损坏图。
         // 定位到具体哪张就只处理它；救不回来直接移除该附件，别让一张图卡死整个对话。
         if (
+          connection?.kind === 'deepseek' &&
           attempt < IMAGE_HEAL_ATTEMPTS &&
           !receivedContent &&
           isUnsupportedImageError(error) &&
@@ -1442,6 +1524,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             message: error.message,
             status: error.status,
             localMessage: error.localMessage,
+          })
+        } else if (error instanceof ProviderConfigError) {
+          reply = settleReply(reply, 'error', Date.now(), {
+            kind: 'protocol',
+            message: '',
+            localMessage: {
+              key: error.reason === 'changed' ? 'providerConfigChanged' : 'providerConfigMissing',
+            },
           })
         } else {
           reply = settleReply(reply, 'error', Date.now(), {
@@ -1491,6 +1581,35 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     }))
     persist(sessionId)
   }
+}
+
+/** 应用人设仅影响后续生成，已有回复及续写快照保留。 */
+export const setSessionPersona = (
+  sessionId: string,
+  persona: { name: string; prompt: string } | null
+): boolean => {
+  if (get().importingHistory || getStreamController(sessionId) || !getSession(sessionId)) {
+    return false
+  }
+  updateSession(sessionId, (session) => ({
+    ...session,
+    messages: session.messages.map((message) =>
+      message.role === 'assistant' && message.systemPrompt === undefined
+        ? {
+            ...message,
+            systemPrompt:
+              session.persona?.prompt ||
+              (!message.connection || message.connection.providerId === 'deepseek'
+                ? SYSTEM_PROMPT
+                : 'You are a helpful assistant.'),
+          }
+        : message
+    ),
+    persona,
+    updatedAt: Date.now(),
+  }))
+  persist(sessionId)
+  return true
 }
 
 // 会话选择变化时持久化，App 重启后恢复上次打开的会话

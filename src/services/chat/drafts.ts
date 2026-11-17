@@ -3,6 +3,7 @@ import type { TranslationMessage } from '../../i18n/index.js'
 import { createId } from '../../utils/id.js'
 import {
   cancelUpload,
+  markAttachmentLocal,
   isImage,
   resolveMimeType,
   uploadAttachment,
@@ -11,6 +12,7 @@ import {
 } from '../attachments.js'
 import type { FileAttachment } from './types.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
+import { useProviders } from '../providers.js'
 
 export type DraftAttachment = {
   /** 本地标识，也是 IndexedDB 原件与上传任务的 key */
@@ -97,6 +99,10 @@ export const setDraftText = (sessionId: string | null, text: string) =>
   updateDraft(sessionId, (draft) => ({ ...draft, text }))
 
 const upload = (attachment: DraftAttachment, apiKey: string) => {
+  if (useProviders.getState().selection.providerId !== 'deepseek') {
+    markAttachmentLocal(attachment.id)
+    return
+  }
   // 上传任务负责记录错误，输入框的附件卡片展示失败及重试入口。
   void uploadAttachment(
     apiKey,
@@ -119,6 +125,13 @@ export const addDraftFiles = (
   const error = validateFiles(files, getDraft(sessionId).attachments.length)
   if (error) {
     return error
+  }
+  if (
+    useProviders.getState().selection.providerId === 'deepseek' &&
+    useProviders.getState().selection.model === 'deepseek-v4-pro' &&
+    files.some((file) => isImage(resolveMimeType(file)))
+  ) {
+    return { key: 'providerProNoImages' }
   }
   const added = files.map((file): DraftAttachment => {
     const image = isImage(resolveMimeType(file))
@@ -151,15 +164,19 @@ export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTa
   if (!text && draft.attachments.length === 0) {
     return null
   }
-  const files: (FileAttachment & { serverId: string; blob: Blob })[] = []
+  const local = useProviders.getState().selection.providerId !== 'deepseek'
+  const files: (FileAttachment & { blob: Blob })[] = []
   for (const attachment of draft.attachments) {
     const task = tasks[attachment.id]
-    if (task?.status !== 'done' || !task.serverId) {
+    if (!local && (task?.status !== 'done' || !task.serverId)) {
       return null
     }
     files.push({
       id: attachment.id,
-      serverId: task.serverId,
+      serverId:
+        !local && task?.status === 'done' && !task.serverId.startsWith('local:')
+          ? task.serverId
+          : null,
       name: attachment.file.name,
       size: attachment.file.size,
       isImage: attachment.isImage,
@@ -212,3 +229,16 @@ export const clearAllDrafts = () => {
   useDrafts.setState({ drafts: new Map() })
   flushDraftTexts()
 }
+
+useProviders.subscribe((state, previous) => {
+  if (
+    state.selection.providerId !== previous.selection.providerId &&
+    state.selection.providerId !== 'deepseek'
+  ) {
+    for (const draft of useDrafts.getState().drafts.values()) {
+      for (const attachment of draft.attachments) {
+        markAttachmentLocal(attachment.id)
+      }
+    }
+  }
+})

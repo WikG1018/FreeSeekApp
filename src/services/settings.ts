@@ -22,6 +22,7 @@ type Settings = {
   fontScale: number
   /** 对话内显示 Token 用量与估算费用。 */
   showUsage: boolean
+  showModelSwitcher: boolean
 }
 
 const KEYS = {
@@ -35,6 +36,7 @@ const KEYS = {
   siderCollapsed: 'freeseek:sider-collapsed',
   fontScale: 'freeseek:font-scale',
   showUsage: 'freeseek:show-usage',
+  showModelSwitcher: 'freeseek:show-model-switcher',
 } as const
 
 const read = (key: string) => {
@@ -116,6 +118,7 @@ export const useSettings = create<Settings>(() => ({
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
   showUsage: read(KEYS.showUsage) !== 'false',
+  showModelSwitcher: read(KEYS.showModelSwitcher) === 'true',
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
@@ -176,4 +179,9 @@ export const setShowUsage = (showUsage: boolean) => {
   write(KEYS.showUsage, String(showUsage))
   useSettings.setState({ showUsage })
   logEvent('ui', 'usage-display.changed', { enabled: showUsage })
+}
+
+export const setShowModelSwitcher = (showModelSwitcher: boolean) => {
+  write(KEYS.showModelSwitcher, String(showModelSwitcher))
+  useSettings.setState({ showModelSwitcher })
 }

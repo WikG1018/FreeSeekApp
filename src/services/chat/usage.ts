@@ -2,11 +2,19 @@ import type { MessageUsage } from '../api/types.js'
 import type { AssistantMessage } from './types.js'
 
 export const usageEntries = (message: AssistantMessage) =>
-  message.usageHistory?.length
+  (message.usageHistory?.length
     ? message.usageHistory
     : message.usage
       ? [{ createdAt: message.createdAt, usage: message.usage }]
       : []
+  ).map((entry) => ({
+    ...entry,
+    model:
+      ('model' in entry ? entry.model : undefined) ??
+      message.responseModel ??
+      message.model ??
+      undefined,
+  }))
 
 export const sumMessageUsage = (
   base: MessageUsage | undefined,

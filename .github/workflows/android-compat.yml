@@ -80,8 +80,8 @@ jobs:
           adb shell input keyevent 82
           adb install -r apks/debug/app-debug.apk
           adb install -r apks/androidTest/debug/app-debug-androidTest.apk
-          adb shell am instrument -w -e class app.freeseek.chat.AndroidCompatibilityTest app.freeseek.chat.test/androidx.test.runner.AndroidJUnitRunner | tee instrumentation.txt
-          grep -q 'OK (1 test)' instrumentation.txt
+          adb shell am instrument -w -e class app.freeseek.chat.AndroidCompatibilityTest,app.freeseek.chat.AndroidProviderTest app.freeseek.chat.test/androidx.test.runner.AndroidJUnitRunner | tee instrumentation.txt
+          grep -q 'OK (3 tests)' instrumentation.txt
           adb shell dumpsys webviewupdate > webview.txt
           adb shell getconf PAGESIZE > page-size.txt
       - uses: actions/upload-artifact@v4

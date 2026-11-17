@@ -12,16 +12,18 @@ export const NativeDiagnostics = registerPlugin<{
     mode: 'fallback'
     phase: 'diagnostics'
     errorName: string
-  }) => Promise<{ saved?: boolean; cancelled?: boolean }>
+    share?: boolean
+  }) => Promise<{ saved?: boolean; cancelled?: boolean; launched?: boolean }>
 }>('Diagnostics')
 
 /** JS 归档生成失败时由原生保存最小诊断，仍排除原始错误消息与会话数据。 */
-export const saveNativeDiagnostics = async (error: unknown): Promise<boolean> => {
+export const saveNativeDiagnostics = async (error: unknown, share = false): Promise<boolean> => {
   const safe = diagnosticError(error)
   const result = await NativeDiagnostics.exportStartup({
     mode: 'fallback',
     phase: 'diagnostics',
     errorName: String(safe.name),
+    share,
   })
-  return result.saved === true
+  return result.saved === true || result.launched === true
 }

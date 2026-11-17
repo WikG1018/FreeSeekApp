@@ -12,7 +12,7 @@ import { readEntry, type ArchiveEntry } from './zipReader.js'
 import { writeArchive } from './zipWriter.js'
 import { readJsonEntry, MAX_JSON_BYTES } from './readJson.js'
 
-const VERSION = 1
+const VERSION = 2
 const sessionPath = (id: string) => `freeseek/sessions/${encodeURIComponent(id)}.json`
 const filePath = (id: string) => `freeseek/files/${encodeURIComponent(id)}.bin`
 const json = (data: unknown) => new Blob([JSON.stringify(data)], { type: 'application/json' })
@@ -30,7 +30,7 @@ export const isNativeManifest = (value: unknown): boolean =>
 
 export const readNativeManifest = (value: unknown): Manifest => {
   const item = record(value)
-  if (item.freeseek_backup_version !== VERSION) {
+  if (![1, VERSION].includes(item.freeseek_backup_version as number)) {
     return fail(
       typeof item.freeseek_backup_version === 'number' && item.freeseek_backup_version > VERSION
         ? 'backupNewerVersion'

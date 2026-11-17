@@ -44,6 +44,38 @@ export const DEFAULT_PRICING: FlashPricing = {
   searchPer1k: 5,
 }
 
+/** https://api-docs.deepseek.com/zh-cn/quick_start/pricing/，2026-11-17 核对。 */
+export const PRO_PRICING: FlashPricing = {
+  offPeakHit: 0.15,
+  offPeakMiss: 4.5,
+  offPeakOut: 13.5,
+  peakHit: 0.3,
+  peakMiss: 9,
+  peakOut: 27,
+  searchPer1k: 5,
+}
+const UNPRICED: FlashPricing = {
+  offPeakHit: 0,
+  offPeakMiss: 0,
+  offPeakOut: 0,
+  peakHit: 0,
+  peakMiss: 0,
+  peakOut: 0,
+  searchPer1k: 0,
+}
+export const hasKnownPricing = (
+  message: AssistantMessage,
+  model = message.responseModel ?? message.model
+) =>
+  (!message.connection || message.connection.providerId === 'deepseek') &&
+  (!model || ['deepseek-flash', 'deepseek-v4-pro'].includes(model))
+const messagePricing = (
+  message: AssistantMessage,
+  flash: FlashPricing,
+  model = message.responseModel ?? message.model
+) =>
+  !hasKnownPricing(message, model) ? UNPRICED : model === 'deepseek-v4-pro' ? PRO_PRICING : flash
+
 const PRICING_KEY = 'freeseek:pricing'
 
 const isPricing = (value: unknown): value is FlashPricing => {
@@ -96,6 +128,7 @@ const isPeakBeijing = (timestamp: number): boolean => {
 }
 
 export type UsageTotals = {
+  unpricedRequests: number
   requests: number
   /** 缓存命中输入 tokens */
   cacheReadTokens: number
@@ -110,6 +143,7 @@ export type UsageTotals = {
 export type DayUsage = UsageTotals & { date: string }
 
 const emptyTotals = (): UsageTotals => ({
+  unpricedRequests: 0,
   requests: 0,
   cacheReadTokens: 0,
   cacheMissTokens: 0,
@@ -122,7 +156,8 @@ const addUsage = (
   totals: UsageTotals,
   usage: MessageUsage,
   peak: boolean,
-  pricing: FlashPricing
+  pricing: FlashPricing,
+  priced = true
 ) => {
   const read = usage.cache_read_input_tokens ?? 0
   const miss = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
@@ -132,6 +167,9 @@ const addUsage = (
     ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }
     : { hit: pricing.offPeakHit, miss: pricing.offPeakMiss, out: pricing.offPeakOut }
   totals.requests += 1
+  if (!priced) {
+    totals.unpricedRequests += 1
+  }
   totals.cacheReadTokens += read
   totals.cacheMissTokens += miss
   totals.outputTokens += output
@@ -210,13 +248,15 @@ export const collectUsage = async (): Promise<UsageStats> => {
         continue
       }
       for (const entry of usageEntries(message)) {
+        const effectivePricing = messagePricing(message, pricing, entry.model),
+          priced = hasKnownPricing(message, entry.model)
         const key = dayKey(entry.createdAt)
         const day = days.get(key) ?? emptyTotals()
         const peak = isPeakBeijing(entry.createdAt)
-        addUsage(day, entry.usage, peak, pricing)
+        addUsage(day, entry.usage, peak, effectivePricing, priced)
         days.set(key, day)
-        addUsage(total, entry.usage, peak, pricing)
-        addUsage(sessionTotals, entry.usage, peak, pricing)
+        addUsage(total, entry.usage, peak, effectivePricing, priced)
+        addUsage(sessionTotals, entry.usage, peak, effectivePricing, priced)
       }
     }
     if (sessionTotals.requests > 0) {
@@ -268,7 +308,11 @@ export const computeReplyUsage = (
     costCny: 0,
   }
   for (const entry of usageEntries(message)) {
-    const detail = computeMessageUsage(entry.usage, entry.createdAt, pricing)
+    const detail = computeMessageUsage(
+      entry.usage,
+      entry.createdAt,
+      messagePricing(message, pricing, entry.model)
+    )
     for (const key of Object.keys(total) as (keyof MessageUsageDetail)[]) {
       total[key] += detail[key]
     }

@@ -14,6 +14,7 @@ import { useUploads } from '../attachments.js'
 import { useUpdate } from '../update.js'
 import { API_ORIGIN } from '../api/client.js'
 import { writeArchive } from '../chat/history/zipWriter.js'
+import { useProviders } from '../providers.js'
 
 const bounded = async <T>(
   task: Promise<T>,
@@ -45,6 +46,11 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   const started = performance.now(),
     settings = useSettings.getState()
   registerLogSecret(settings.apiKey)
+  const providers = useProviders.getState()
+  providers.profiles.forEach((profile) => {
+    registerLogSecret(profile.apiKey)
+    Object.values(profile.headers).forEach(registerLogSecret)
+  })
   logEvent('diagnostics', 'export.started')
   const [client, storage, browserStorage, native] = await Promise.all([
     readDiagnosticLogs(),
@@ -106,6 +112,12 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       theme: settings.themePreference,
       fontScale: settings.fontScale,
       showUsage: settings.showUsage,
+      showModelSwitcher: settings.showModelSwitcher,
+      customProvider: providers.selection.providerId !== 'deepseek',
+      providerCount: providers.profiles.length,
+      protocol:
+        providers.profiles.find((profile) => profile.id === providers.selection.providerId)
+          ?.protocol ?? 'deepseek',
       thinking: settings.thinking,
       search: settings.search,
       voice: settings.ttsVoice,

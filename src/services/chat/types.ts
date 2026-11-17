@@ -1,5 +1,6 @@
 import type { TranslationMessage } from '../../i18n/index.js'
 import type { ApiErrorKind } from '../api/client.js'
+import type { ConnectionRef } from '../providers.js'
 import type {
   ChatModel,
   MessageUsage,
@@ -77,6 +78,12 @@ export type AssistantMessage = MessageBranch & {
   createdAt: number
   /** 未记录模型时为 null，续写使用当前默认模型。 */
   model: ChatModel | null
+  /** 服务响应声明的模型；请求模型保持不变，供别名转发时估算费用。 */
+  responseModel?: string
+  /** 仅保存配置引用与修订号，不保存服务地址、密钥或请求头。 */
+  connection?: ConnectionRef
+  /** 续写沿用该轮的人设，即使后来更改了会话人设。 */
+  systemPrompt?: string
   /** 请求时是否开启深度思考 */
   thinking?: boolean
   /** 请求时是否声明 deepseek_web_search；关闭时仍声明 deepseek_read_url */
@@ -93,7 +100,7 @@ export type AssistantMessage = MessageBranch & {
   /** 本条回复历次请求的累计用量；逐次明细见 usageHistory。 */
   usage?: MessageUsage
   /** 每次请求分别保存用量与时间，续写不覆盖已产生的费用。 */
-  usageHistory?: { createdAt: number; usage: MessageUsage }[]
+  usageHistory?: { createdAt: number; usage: MessageUsage; model?: string }[]
   /** 本轮未能读取的附件提示；原始消息与原件仍保留。 */
   contextWarnings?: TranslationMessage[]
   error?: {

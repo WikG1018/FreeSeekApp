@@ -163,7 +163,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
             {copyText ? <CopyButton text={copyText} /> : null}
             {responseText && !refused ? (
-              <ReadAloudButton messageId={message.id} text={responseText} />
+              <ReadAloudButton messageId={message.id} text={responseText} allowed={!message.connection || message.connection.providerId === 'deepseek'} />
             ) : null}
             <IconButton
               icon={<IconRefreshOutline16 />}

@@ -10,6 +10,7 @@ import { openSettings } from '../settings/settingsDialogState.js'
 import { MobileHeader } from './MobileHeader.js'
 import { PersonaPicker } from './PersonaPicker.js'
 import styles from './Welcome.module.css'
+import { useProviders } from '../../services/providers.js'
 
 /** 新对话：品牌标识 + 问候语 + 人设选择（收起为一行，点开选项栏）+ 输入框 */
 export const Welcome = () => {
@@ -18,6 +19,7 @@ export const Welcome = () => {
   const inherit = useChatStore((state) => state.inheritFrom)
   const inheritRounds = inherit ? getContextRounds(inherit.messages).length : 0
   const apiKey = useSettings((state) => state.apiKey)
+  const custom = useProviders(state => state.selection.providerId !== 'deepseek')
   return (
     <div className={styles.container}>
       {isMobile ? <MobileHeader /> : null}
@@ -46,7 +48,7 @@ export const Welcome = () => {
           </div>
         ) : null}
         <div className={styles.inputArea}>
-          {apiKey ? null : (
+          {apiKey || custom ? null : (
             <button
               type="button"
               className={styles.apiKeyCta}

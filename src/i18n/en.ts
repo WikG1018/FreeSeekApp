@@ -1,6 +1,117 @@
 import type { zh } from './zh.js'
 
 export const en = {
+  replyOutputLimitInvalid:
+    'The service rejected the requested output token limit. Adjust the output limit and retry; existing messages are retained.',
+  providerStreamUsage: 'Request streaming token usage (OpenAI compatible; disable if unsupported)',
+  providerInvalidResponse:
+    'The service returned an invalid or empty response. Check the protocol and model.',
+  providerResponseTooLarge: 'Response too large. Reduce the output limit and retry.',
+  providerFileTooLarge:
+    'Attachments or request are too large. Reduce attachments and retry; originals are retained.',
+  providerHttpError:
+    'Service returned HTTP {status}. Check the URL, key, model access and parameters.',
+  providerNetworkError:
+    'Cannot reach the service. Check the URL, network and local network permission. Web browsers also require CORS support.',
+  providerModelsEmpty: 'No models found. Enter a model ID manually and test it.',
+  providerRemoteError:
+    'The model service returned an error. Check the configuration or try another model.',
+  providerInterrupted: 'The response ended unexpectedly. Received content is retained.',
+  providerToolUnsupported: 'The model requested a client tool. Remove tool parameters and retry.',
+  providerFileUnsupported:
+    'Cannot read this attachment locally. Use text or DOCX, or enable image/PDF input for a capable model.',
+  providerOriginalMissing:
+    'An original attachment is missing locally. Reattach it or start a new chat.',
+  providerVisionDisabled:
+    'Image input is disabled. Enable it for a capable model in advanced settings, or switch models.',
+  providerPdfDisabled:
+    'PDF input is disabled. Enable it in advanced settings if the service supports it.',
+  providerProNoImages:
+    'DeepSeek V4 Pro does not support images. Use Flash for this chat, or start a text-only chat.',
+  providerConfigChanged: 'The original configuration has changed. Select a model and regenerate.',
+  providerConfigMissing:
+    'The original service configuration is unavailable. Configure it or select a model and regenerate.',
+  providerAdvanced: 'Advanced API configuration',
+  providerOfficial: 'Official DeepSeek',
+  providerDefaultModel: 'Default chat model',
+  providerSelectService: 'Service',
+  providerModel: 'Model name / ID',
+  providerSwitch: 'Switch model',
+  providerShowSwitcher: 'Show model switcher in chat',
+  providerNew: 'New configuration',
+  providerProfile: 'Saved configurations',
+  providerName: 'Configuration name',
+  providerUrl: 'API URL',
+  providerUrlHint: 'Enter a base URL (including /v1 if needed) or a complete chat endpoint.',
+  providerKey: 'API key',
+  providerKeyHint: 'Stored only on this device. Leave blank for services without authentication.',
+  providerProtocol: 'API protocol',
+  providerFetchModels: 'Fetch models',
+  providerTesting: 'Testing…',
+  providerFetching: 'Fetching…',
+  providerTestModel: 'Test model',
+  providerTestHint: 'Sends a short test message and may incur a small API charge.',
+  providerTestSuccess: 'Test passed · {ms} ms',
+  providerModelsCount: 'Fetched {count} models',
+  providerChooseFetched: 'Choose a fetched model',
+  providerSave: 'Save configuration',
+  providerSaveUse: 'Save and use',
+  providerSaved: 'Configuration saved',
+  providerActive: 'Active',
+  providerDelete: 'Delete configuration',
+  providerDeleteHint:
+    'Chat history is retained. Select another configuration to regenerate replies using this service.',
+  providerParameters: 'More parameters and input capabilities',
+  providerMaxOutput: 'Maximum output tokens',
+  providerTemperature: 'Temperature (blank uses service default)',
+  providerTokenParameter: 'Output limit parameter',
+  providerStreaming: 'Stream responses',
+  providerVision: 'Model supports images',
+  providerPdf: 'Model supports PDF files',
+  providerCapabilitiesHint:
+    'Enable capabilities supported by the model. Text and DOCX are read locally; images and PDFs are sent to the selected service.',
+  providerModelsUrl: 'Model list URL (optional)',
+  providerHeaders: 'Additional headers (JSON; can override authentication)',
+  providerExtraBody: 'Additional request parameters (JSON)',
+  providerExtraHint:
+    'Model, messages, streaming and output limits use the fields above. Follow the service documentation for other parameters.',
+  providerHttpHint:
+    'This HTTP endpoint does not encrypt messages or keys. Use HTTPS for public services.',
+  providerPrivacy:
+    'Requests go directly to the selected service. Keys and URLs are excluded from chat backups and diagnostics. DeepSeek tools, audio services and file IDs are not forwarded.',
+  providerErrorUrl: 'Enter a valid HTTP(S) URL without embedded credentials or a fragment.',
+  providerErrorModel: 'Select a protocol and enter a valid model ID.',
+  providerErrorParameters: 'Invalid parameters. Check JSON, output limit and temperature.',
+  providerErrorStorage: 'Could not save the configuration. Check available storage and retry.',
+  providerCustomHint: 'Custom model capabilities depend on the protocol and parameters.',
+  providerOfficialHint:
+    'Flash accepts images; V4 Pro is text-only. Costs are estimated separately.',
+  usageUnpriced: 'Pricing unavailable',
+  usagePartialCost:
+    'Cost excludes {count} unpriced requests. Tokens are counted; refer to the service bill for actual charges.',
+  diagnosticsShare: 'Export and share diagnostics',
+  diagnosticsSaveFile: 'Save diagnostics to a file',
+  diagnosticsShareOpened: 'Share sheet opened',
+  diagnosticsShareFailed: 'Could not open the share sheet. Use Save to a file.',
+  personaSearch: 'Search personas or prompts',
+  personaCopy: 'Copy as custom persona',
+  personaCopyName: '{name} copy',
+  personaImport: 'Import personas',
+  personaExport: 'Export custom personas',
+  personaImportHint:
+    'Import FreeSeek persona JSON, name/prompt arrays, or one TXT/Markdown prompt. Imports append to existing personas.',
+  personaImported: 'Imported {count} personas',
+  personaExportEmpty: 'No custom personas yet',
+  personaInvalid: 'Invalid or oversized persona file. Check names and prompts.',
+  personaSaveFailed: 'Could not save personas. Check device storage.',
+  personaLimits: 'Up to 80 characters for the name and 100,000 for the prompt',
+  personaApplyCurrent: 'Apply to current chat',
+  personaApplied: 'Applied to future replies in this chat',
+  personaCurrentHint:
+    'Applying to this chat affects future requests. Existing replies remain; continuation uses the original persona.',
+  personaBusy: 'Wait for the current reply before applying a persona',
+  personaEmptyResults: 'No matching personas',
+  personaUnsaved: 'Discard unsaved persona changes?',
   welcomeMessageChat250808: 'Hello, how can I help you?',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
@@ -110,7 +221,7 @@ export const en = {
   settingsAboutApp: 'About FreeSeek',
   settingsPrivacyTitle: 'Data & privacy',
   settingsPrivacyText:
-    "Chats and attachments live only in this device's IndexedDB; your API key stays in localStorage. Message content is sent only to the DeepSeek API, never to any third-party server. Export a backup from Data management now and then.",
+    'Chats and attachments stay in local IndexedDB; API configurations and keys stay in localStorage. Messages go directly to the selected API service. Diagnostics and chat backups exclude configuration keys. Export backups regularly from Data management.',
   settingsUpstreamTitle: 'Upstream',
   settingsUpstreamText:
     "Built on DeepSeek's open-source chat-demo (MIT License). Its copyright and license notice are retained.",
@@ -172,7 +283,7 @@ export const en = {
   usageSave: 'Save pricing',
   usageSaved: 'Saved',
   usagePricingHint:
-    'Local estimate only: computed per reply with peak/off-peak rates. Public holidays, file parsing and speech are not included. Your DeepSeek bill is authoritative.',
+    'These prices apply to Flash. V4 Pro uses its built-in official rates; custom services count tokens only. Estimates exclude public holidays, document parsing and speech. Refer to the service bill for actual charges.',
   more: 'More',
   close: 'Close',
   sessionHistoryTimelineLabelToday: 'Today',
@@ -333,7 +444,7 @@ export const en = {
   collapseFullContent: 'Collapse content',
   loadEarlierMessages: 'Load earlier messages ({count} remaining)',
   replyContextTooLong:
-    'This request exceeds the model context window (1M tokens, including input and output). Shorten the input or start without history. Records are preserved. Continuing a chat still carries its history and does not reduce the context.',
+    'This request exceeds the current model context window. History, extracted attachment content and output allowance all use that window. Shorten the input or start without history. Records are preserved. Continuing a chat still carries its history.',
   newChatWithoutHistory: 'Start without history',
   diagnosticsExport: 'Export diagnostic package',
   diagnosticsPreparing: 'Preparing…',

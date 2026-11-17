@@ -6,6 +6,7 @@ import { IconCheckOutline16, IconChevronDownOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { PersonaManager } from '../personas/PersonaManager.js'
 import styles from './PersonaPicker.module.css'
+import { showToast } from '../base/toastState.js'
 
 /**
  * 人设选择：默认只显示当前人设的一行按钮，点击弹出选项栏（不再把人设平铺在首页）。
@@ -52,8 +53,12 @@ export const PersonaPicker = () => {
                   aria-checked={selected}
                   className={clsx(styles.option, selected && styles.optionActive)}
                   onClick={() => {
-                    setDefaultPersona(persona.id)
-                    setOpen(false)
+                    try {
+                      setDefaultPersona(persona.id)
+                      setOpen(false)
+                    } catch {
+                      showToast({ key: 'personaSaveFailed', type: 'error' })
+                    }
                   }}
                 >
                   <span className={styles.optionText}>

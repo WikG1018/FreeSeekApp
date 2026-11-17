@@ -712,7 +712,7 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
     async (page) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('about'))
       const waiting = page.waitForEvent('download')
-      await page.getByRole('button', { name: '导出诊断包', exact: true }).click()
+      await page.getByRole('button', { name: '保存诊断包到文件', exact: true }).click()
       const download = await waiting,
         path = resolve(root, 'tmp/regression/diagnostics-web.zip')
       await download.saveAs(path)
@@ -723,7 +723,7 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
       await page.waitForFunction(
         () =>
           !Array.from(document.querySelectorAll('button')).find((e) =>
-            e.textContent.includes('导出诊断包')
+            e.textContent.includes('保存诊断包到文件')
           )?.disabled
       )
     }

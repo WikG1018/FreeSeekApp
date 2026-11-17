@@ -1,10 +1,12 @@
 import { create } from 'zustand'
-import { useSettings } from '../../services/settings.js'
+import { hasChatConnection } from '../../services/providers.js'
 
 /** 设置页路由：一级目录与各二级页面 */
 export type SettingsPageId =
   | 'home'
   | 'account'
+  | 'providers'
+  | 'personas'
   | 'appearance'
   | 'font'
   | 'language'
@@ -49,7 +51,7 @@ export const hasSettingsOpen = () => useSettingsDialog.getState().open
 
 /** 没有 API Key 时打开「API 服务」页，返回是否已有 Key */
 export const ensureApiKey = () => {
-  if (useSettings.getState().apiKey) {
+  if (hasChatConnection()) {
     return true
   }
   openSettings('account')

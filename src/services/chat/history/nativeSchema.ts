@@ -3,6 +3,7 @@ import type { MessageUsage } from '../../api/types.js'
 import type { FileAttachment, Message, ReplyBlock, Session } from '../types.js'
 import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
+import { validModel } from '../../providers.js'
 
 const invalid = (): never => fail('backupIncomplete')
 export const record = (value: unknown): Record<string, unknown> =>
@@ -117,7 +118,7 @@ const message = (value: unknown): Message => {
   if (
     item.role !== 'assistant' ||
     !['pending', 'streaming', 'done', 'stopped', 'error'].includes(string(item.status)) ||
-    (item.model !== null && !['deepseek-flash', 'deepseek-v4-pro'].includes(string(item.model)))
+    (item.model !== null && !validModel(item.model))
   ) {
     return invalid()
   }
@@ -156,7 +157,17 @@ const message = (value: unknown): Message => {
   return {
     ...base,
     role: 'assistant',
-    model: item.model as 'deepseek-flash' | 'deepseek-v4-pro' | null,
+    model: item.model as string | null,
+    responseModel: optional(item.responseModel, (value) => (validModel(value) ? value : invalid())),
+    connection: optional(item.connection, (value) => {
+      const ref = record(value),
+        providerId = id(ref.providerId)
+      if (providerId !== 'deepseek' && !/^custom-[\w-]+$/.test(providerId)) {
+        return invalid()
+      }
+      return { providerId, revision: optional(ref.revision, id) }
+    }),
+    systemPrompt: optional(item.systemPrompt, string),
     status: item.status as 'pending' | 'streaming' | 'done' | 'stopped' | 'error',
     prefix: boolean(item.prefix),
     blocks: list(item.blocks, block),
@@ -196,7 +207,11 @@ const message = (value: unknown): Message => {
     usageHistory: optional(item.usageHistory, (value) =>
       list(value, (raw) => {
         const entry = record(raw)
-        return { createdAt: number(entry.createdAt), usage: usage(entry.usage) }
+        return {
+          createdAt: number(entry.createdAt),
+          usage: usage(entry.usage),
+          model: optional(entry.model, (value) => (validModel(value) ? value : invalid())),
+        }
       })
     ),
     ...(error

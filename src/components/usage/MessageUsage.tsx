@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { computeReplyUsage, usePricing } from '../../services/usage.js'
+import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
 import { useSettings } from '../../services/settings.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
@@ -31,7 +31,8 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
   const detail = computeReplyUsage(message, pricing)
   const input = detail.input + detail.cacheRead + detail.cacheWrite
   const total = input + detail.output
-  const cost = formatCost(detail.costCny)
+  const priced = hasKnownPricing(message)
+  const cost = priced ? formatCost(detail.costCny) : t('usageUnpriced')
   const full = t('usageMessageInline', {
     input: formatNumber(input),
     output: formatNumber(detail.output),
@@ -47,7 +48,7 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
         onClick={() => setExpanded((value) => !value)}
       >
         <span className={styles.summaryText}>
-          {t('usageMessageCompact', { tokens: compactNumber(total), cost })}
+          {priced ? t('usageMessageCompact', { tokens: compactNumber(total), cost }) : `${compactNumber(total)} tok`}
         </span>
         <span className={clsx(styles.chevron, expanded && styles.chevronOpen)}>
           <IconChevronDownOutline14 />

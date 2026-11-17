@@ -894,3 +894,11 @@
   line-height: 17px;
   color: var(--dsw-alias-label-tertiary);
 }
+.tutorialDisclosure > summary {
+  min-height: 44px;
+  padding: 10px 4px;
+  box-sizing: border-box;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--dsw-alias-label-secondary);
+}

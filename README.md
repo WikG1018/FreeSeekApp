@@ -1,6 +1,6 @@
 # FreeSeek 畅聊
 
-**自带 DeepSeek API Key 的安卓聊天客户端：没有次数限制、没有每日额度、不清理你的会话，数据只存在本机。**
+**自带 API Key 的安卓聊天客户端：支持 DeepSeek 与兼容 API，自主管理模型，对话与附件保存在本机。**
 
 [![Downloads](https://img.shields.io/github/downloads/WikG1018/FreeSeekApp/total.svg)](https://github.com/WikG1018/FreeSeekApp/releases) [![Latest release](https://img.shields.io/github/v/release/WikG1018/FreeSeekApp.svg)](https://github.com/WikG1018/FreeSeekApp/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -29,7 +29,7 @@ DeepSeek 官方 App 在算力紧张时会限制使用：每日额度、长对话
 
 ## 功能
 
-Android 10–17 兼容目标：2.3.0 使用 compileSdk/targetSdk 37，保留旧 WebView 兼容层。构建使用 JDK 21、AGP 9.2.1 与 Gradle 9.4.1。运行验证和具体边界见 [Android 10–17 自审记录](docs/reviews/2026-11-17-android10-17.md)，系统版本覆盖不等同于全部厂商实机验收。
+Android 10–17 兼容目标：使用 compileSdk/targetSdk 37，保留旧 WebView 兼容层。构建使用 JDK 21、AGP 9.2.1 与 Gradle 9.4.1。运行验证和具体边界见 [Android 10–17 自审记录](docs/reviews/2026-11-17-android10-17.md) 及 [2.4.0 功能验收](docs/reviews/2026-11-18-models-personas-share.md)，系统版本覆盖不等同于全部厂商实机验收。
 
 文字草稿在本机自动保存，重启后可继续输入；未发送附件需要重新选择。录音/朗读在应用进入后台时停止。导入或导出的单条会话/索引 JSON 限制为 32MiB；过大时提示拆分，原记录继续保留，附件仍分块处理。
 
@@ -37,19 +37,27 @@ Android 10–17 兼容目标：2.3.0 使用 compileSdk/targetSdk 37，保留旧 
 
 | 功能 | 说明 |
 | --- | --- |
+| 模型与第三方 API | API 服务页选择 Flash/V4 Pro；高级页可保存多个服务、获取模型、发送短消息测试，支持 OpenAI Chat Completions、Responses、Anthropic Messages、Gemini |
+| 对话内模型切换 | 设置 → 应用 → 在对话框显示模型切换按钮，默认关闭；切换影响后续请求 |
 | 对话接续 | 任意会话菜单选「从这里继续」，新对话自动携带它之前的上下文 |
-| 人设与提示词库 | 内置写作、翻译、编程、小红书文案、头脑风暴；可自建，新对话按人设开场 |
+| 人设与提示词库 | 自建/编辑、复制内置、搜索、JSON/TXT/Markdown 导入、JSON 导出、设为默认或应用到当前对话；续写保留原人设 |
 | 用量与费用 | 每条回复的 token 与花费、会话累计、近 14 天图表、会话排行；单价按官方刊例（区分高峰/空闲） |
 | 深度思考 / 智能搜索 | 与官方一致的开关，搜索结果带来源与引用 |
 | 附件与文件 | 图片、文档、PDF 等，上传即进入对话上下文 |
 | 语音 | 语音输入（ASR）与朗读（TTS），Android 端已适配权限 |
 | 本机存储 | 会话和附件保存在本机，不提供云端会话同步 |
 | 应用内更新 | 检查 GitHub Release，国内可切换镜像；下载后核验完整性、签名、包名和版本，再由侧边栏安装 |
-| 诊断日志 | 设置 → 关于 FreeSeek → 导出诊断包；记录运行状态、上传重试和原生异常，便于排障 |
-| 长上下文 | 完整历史按模型 1M token 上限发送；界面分批显示，超长内容可展开，复制与备份保留全文 |
+| 诊断日志 | 设置 → 关于 FreeSeek → 导出并分享诊断包；直接打开系统分享面板，也可保存到文件，记录运行状态、上传重试和原生异常 |
+| 长上下文 | 不静默裁剪历史；DeepSeek 支持 1M，第三方以各模型窗口为准，界面分批显示。上下文缓存不会绕过窗口上限，本版未提供摘要压缩 |
 | 深色模式 / 字体大小 | 跟随系统或手动切换；字体四档（Android 用原生 textZoom） |
 
 ## 安装
+
+第三方配置入口为 **设置 → API 服务 → 高级自定义配置**。地址可填基础 URL（含服务要求的 `/v1` 等前缀）或标准聊天接口完整地址。模型列表接口不可用时，可直接填模型 ID 后测试。测试会发送一条短消息，可能产生 API 费用。额外参数中可配置服务支持的推理强度等能力。
+
+Android 通过原生网络支持第三方流式请求；网页版仍要求服务允许 CORS。自托管 HTTP 地址可用，但内容和密钥不加密；Android 17 访问局域网会申请对应权限。第三方附件支持本机文本/DOCX 解析，以及按模型能力启用图片/PDF；不调用 DeepSeek 的上传、联网或语音接口。第三方未知定价仅统计 Token。
+
+完整聊天备份 v2 保存消息、附件、人设及模型引用，继续导入旧 v1；API 配置 URL、密钥和请求头不随聊天备份或诊断导出，换机需要重新配置。旧版 FreeSeek 不支持 v2 备份，请先升级。系统分享面板显示哪些应用取决于本机安装情况及接收 ZIP 的能力；打开面板不代表文件已发送。
 
 1. 到 [Releases](https://github.com/WikG1018/FreeSeekApp/releases/latest) 下载最新 `freeseek-v*-release.apk`
 2. 安装时允许「未知来源」；Android 7.0 及以上

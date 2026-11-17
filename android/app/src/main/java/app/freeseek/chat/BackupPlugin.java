@@ -38,13 +38,13 @@ public class BackupPlugin extends Plugin {
         DiagnosticsLog.record(getContext(), "backup", "save.started", meta);
         String name = call.getString("fileName", "freeseek-backup.zip");
         double expected = call.getDouble("size", -1.0);
-        if (!name.matches("[A-Za-z0-9_.-]+\\.zip") || !Double.isFinite(expected) || expected < 0 || expected > 0xffffffffL || expected != Math.floor(expected)) {
+        if (!name.matches("[A-Za-z0-9_.-]+\\.(zip|json)") || !Double.isFinite(expected) || expected < 0 || expected > 0xffffffffL || expected != Math.floor(expected)) {
             call.reject("invalid backup"); return;
         }
         if (!choosing.compareAndSet(false, true)) { call.reject("save picker already open"); return; }
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/zip");
+        intent.setType(name.endsWith(".json") ? "application/json" : "application/zip");
         intent.putExtra(Intent.EXTRA_TITLE, name);
         try { startActivityForResult(call, intent, "created"); }
         catch (Exception error) { choosing.set(false); call.reject("cannot open save picker", error); }
