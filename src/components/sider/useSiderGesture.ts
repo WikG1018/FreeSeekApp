@@ -51,6 +51,7 @@ export const useSiderGesture = (frameRef: RefObject<HTMLDivElement>, enabled: bo
       suppressClickUntil = performance.now() + 350
     }
     const start = (event: TouchEvent) => {
+      suppressClickUntil = 0
       if (
         event.touches.length !== 1 ||
         hasSettingsOpen() ||
@@ -68,9 +69,10 @@ export const useSiderGesture = (frameRef: RefObject<HTMLDivElement>, enabled: bo
       const target = event.target instanceof Element ? event.target : null
       if (
         !target ||
-        target.closest(
-          'button,a,input,textarea,select,video,audio,[contenteditable="true"],[role="slider"],[role="menu"]'
-        )
+        (!target.closest('[data-sider-swipe-row]') &&
+          target.closest(
+            'button,a,input,textarea,select,video,audio,[contenteditable="true"],[role="slider"],[role="menu"]'
+          ))
       ) {
         return
       }

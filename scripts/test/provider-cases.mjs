@@ -605,7 +605,7 @@ export const runProviderCases = async ({ run }) => {
     'settings exposes official Pro, advanced profile persistence and optional chat model switching',
     async (page) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
-      await page.getByLabel('模型名称 / ID', { exact: true }).selectOption('deepseek-v4-pro')
+      await page.getByRole('radio', { name: /DeepSeek V4 Pro/ }).check()
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
       await page.getByLabel('配置名称', { exact: true }).fill('My gateway')
       await page.getByLabel('API 地址', { exact: true }).fill('https://custom.example.test/v1')

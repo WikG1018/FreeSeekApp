@@ -15,7 +15,6 @@
   margin: auto;
   padding: 0 32px 64px;
   gap: 18px;
-  animation: welcomeRise var(--fs-duration-slow) var(--fs-ease-out) both;
 }
 
 .brand {
@@ -55,11 +54,10 @@
   padding: 8px 8px 8px 14px;
   border: 1px solid rgba(37, 99, 235, 0.18);
   border-radius: 14px;
-  background: var(--fs-brand-soft);
-  font-size: 12px;
+  background: var(--fs-accent-wash);
+  font-size: 14px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
-  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 80ms both;
 }
 
 .inheritText {
@@ -95,7 +93,6 @@
 
 .inputArea {
   width: 100%;
-  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 60ms both;
 }
 
 /* 横屏软键盘留给内容的高度很小，聚焦期间优先保留输入与发送操作。 */
@@ -116,19 +113,19 @@
 /* 未配置 API Key 时的轻量入口，不打断首屏 */
 .apiKeyCta {
   display: block;
-  width: fit-content;
+  width: auto;
   min-height: 44px;
-  margin: 0 auto 10px;
+  margin: 5px auto 0;
   padding: 0 16px;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(37, 99, 235, 0.24);
+  border: 1px solid var(--fs-accent-line);
   border-radius: 999px;
-  background: var(--fs-brand-soft);
-  font-size: 12px;
+  background: var(--fs-accent-wash);
+  font-size: 14px;
   line-height: 18px;
-  color: var(--fs-brand);
+  color: var(--fs-accent-text);
   cursor: pointer;
   transition:
     background-color var(--fs-duration-fast) var(--fs-ease-out),
@@ -147,13 +144,6 @@
   &:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
-}
-
-@keyframes welcomeRise {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
   }
 }
 
@@ -183,7 +173,8 @@
     justify-content: flex-end;
     max-width: none;
     margin: 0;
-    padding: 0 16px calc(var(--fs-safe-bottom) + 8px);
+    padding: var(--fs-safe-top) calc(var(--fs-safe-right) + 16px) calc(var(--fs-safe-bottom) + 8px)
+      calc(var(--fs-safe-left) + 16px);
     gap: 12px;
   }
 
@@ -196,4 +187,8 @@
     width: 48px;
     height: 48px;
   }
+}
+
+[data-ds-dark-theme] .logo {
+  filter: brightness(0) invert(0.89);
 }

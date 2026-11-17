@@ -19,7 +19,7 @@ export const Welcome = () => {
   const inherit = useChatStore((state) => state.inheritFrom)
   const inheritRounds = inherit ? getContextRounds(inherit.messages).length : 0
   const apiKey = useSettings((state) => state.apiKey)
-  const custom = useProviders(state => state.selection.providerId !== 'deepseek')
+  const custom = useProviders((state) => state.selection.providerId !== 'deepseek')
   return (
     <div className={styles.container}>
       {isMobile ? <MobileHeader /> : null}
@@ -27,6 +27,15 @@ export const Welcome = () => {
         <div className={styles.brand}>
           <img className={styles.logo} src={logo} alt="" draggable={false} />
           <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
+          {apiKey || custom ? null : (
+            <button
+              type="button"
+              className={styles.apiKeyCta}
+              onClick={() => openSettings('account')}
+            >
+              {t('welcomeSetApiKey')}
+            </button>
+          )}
         </div>
         <PersonaPicker />
         {inherit ? (
@@ -48,15 +57,6 @@ export const Welcome = () => {
           </div>
         ) : null}
         <div className={styles.inputArea}>
-          {apiKey || custom ? null : (
-            <button
-              type="button"
-              className={styles.apiKeyCta}
-              onClick={() => openSettings('account')}
-            >
-              {t('welcomeSetApiKey')}
-            </button>
-          )}
           <ChatInput sessionId={null} />
         </div>
       </div>

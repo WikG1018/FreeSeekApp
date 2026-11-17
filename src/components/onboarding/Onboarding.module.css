@@ -77,7 +77,7 @@
 .stepBody {
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 .primary {
@@ -125,7 +125,7 @@
   background: none;
   font: inherit;
   font-size: 14px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
   cursor: pointer;
 
   &:active {
@@ -138,5 +138,13 @@
   font-size: 11px;
   line-height: 17px;
   text-align: center;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
+}
+
+[data-ds-dark-theme] .logo {
+  filter: brightness(0) invert(0.89);
+}
+.primary,
+.ghost {
+  min-height: 44px;
 }

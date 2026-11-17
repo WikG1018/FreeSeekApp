@@ -12,6 +12,7 @@ import { runProviderCases } from './test/provider-cases.mjs'
 import { runImmersiveCases } from './test/immersive-cases.mjs'
 import { runImportCases } from './test/import-cases.mjs'
 import { runNavigationCases } from './test/navigation-cases.mjs'
+import { runInterfaceCases } from './test/interface-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -165,6 +166,7 @@ try {
   await runImmersiveCases({ run })
   await runImportCases({ run })
   await runNavigationCases({ run })
+  await runInterfaceCases({ run })
   await runStabilityCases({
     run,
     root,

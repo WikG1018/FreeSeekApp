@@ -28,6 +28,7 @@ import {
 import { SearchPanel } from '../components/search/SearchPanel.js'
 import { closeSearchPanel, useSearchPanel } from '../components/search/searchPanelState.js'
 import { closeTopModal, hasOpenModal } from '../components/base/Modal.js'
+import { closeActiveMenu } from '../components/base/Menu.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
@@ -159,6 +160,9 @@ export const App = () => {
         return // SettingsDialog 自己监听 Escape/返回关闭层级
       }
       if (hasOpenModal() && closeTopModal()) {
+        return
+      }
+      if (closeActiveMenu()) {
         return
       }
       if (useSearchPanel.getState().entry !== null) {

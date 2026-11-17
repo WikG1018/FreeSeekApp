@@ -6,15 +6,32 @@ export type SettingsPageId =
   | 'home'
   | 'account'
   | 'providers'
+  | 'chat'
   | 'personas'
+  | 'personaEdit'
   | 'appearance'
-  | 'font'
-  | 'language'
-  | 'voice'
   | 'data'
   | 'usage'
   | 'usagePricing'
   | 'about'
+  | 'aboutInfo'
+
+/** 可直接打开任意设置，返回路径始终与从目录进入时一致。 */
+export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
+  if (page === 'personaEdit') {
+    return 'personas'
+  }
+  if (page === 'providers') {
+    return 'account'
+  }
+  if (page === 'usagePricing') {
+    return 'usage'
+  }
+  if (page === 'aboutInfo') {
+    return 'about'
+  }
+  return 'home'
+}
 
 /**
  * 设置页状态：open 控制挂载，closing 播放退出动画后再真正卸载。

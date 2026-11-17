@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { ApiError } from '../../services/api/errorTypes.js'
 import { fetchProviderModels, testProviderModel } from '../../services/api/providerClient.js'
@@ -19,6 +19,7 @@ import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
 import styles from './ProviderSettings.module.css'
+import { useSettingsLeave } from './useSettingsLeave.js'
 
 const configErrors: Record<ProviderConfigError['reason'], TranslationKey> = {
   url: 'providerErrorUrl',
@@ -35,10 +36,17 @@ const errorMessage = (error: unknown, t: ReturnType<typeof useTranslate>) =>
       ? t(error.localMessage.key, error.localMessage.params)
       : t('providerNetworkError')
 
-export const ConnectionSelector = ({ disabled = false }: { disabled?: boolean }) => {
+export const ConnectionSelector = ({
+  disabled = false,
+  layout = 'picker',
+}: {
+  disabled?: boolean
+  layout?: 'settings' | 'picker'
+}) => {
   const t = useTranslate(),
     { profiles, selection } = useProviders()
   const [error, setError] = useState('')
+  const groupId = useId()
   const profile = profiles.find((p) => p.id === selection.providerId)
   const models = profile
     ? [...new Set([profile.model, selection.model, ...profile.models])]
@@ -53,46 +61,80 @@ export const ConnectionSelector = ({ disabled = false }: { disabled?: boolean })
   }
   return (
     <div className={styles.fields}>
-      <label className={styles.field}>
-        <span>{t('providerSelectService')}</span>
-        <select
-          aria-label={t('providerSelectService')}
-          value={selection.providerId}
-          disabled={disabled}
-          onChange={(event) => {
-            const id = event.target.value
-            choose(
-              id,
-              id === 'deepseek'
-                ? 'deepseek-flash'
-                : (profiles.find((p) => p.id === id)?.model ?? '')
-            )
-          }}
+      {(layout === 'picker' || profiles.length > 0) && (
+        <label className={styles.field}>
+          <span>{t('providerSelectService')}</span>
+          <select
+            aria-label={t('providerSelectService')}
+            value={selection.providerId}
+            disabled={disabled}
+            onChange={(event) => {
+              const id = event.target.value
+              choose(
+                id,
+                id === 'deepseek'
+                  ? 'deepseek-flash'
+                  : (profiles.find((p) => p.id === id)?.model ?? '')
+              )
+            }}
+          >
+            <option value="deepseek">{t('providerOfficial')}</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {layout === 'settings' && !profile ? (
+        <div
+          role="radiogroup"
+          aria-label={t('providerDefaultModel')}
+          className={styles.modelChoices}
         >
-          <option value="deepseek">{t('providerOfficial')}</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
+          {OFFICIAL_MODELS.map((model) => (
+            <label key={model} data-selected={selection.model === model}>
+              <input
+                type="radio"
+                name={groupId}
+                disabled={disabled}
+                checked={selection.model === model}
+                onChange={() => choose('deepseek', model)}
+              />
+              <span>
+                <b>{modelLabel(model)}</b>
+                <small>
+                  {t(
+                    model === 'deepseek-flash' ? 'providerFlashCapability' : 'providerProCapability'
+                  )}
+                </small>
+              </span>
+            </label>
           ))}
-        </select>
-      </label>
-      <label className={styles.field}>
-        <span>{t('providerModel')}</span>
-        <select
-          aria-label={t('providerModel')}
-          value={selection.model}
-          disabled={disabled}
-          onChange={(event) => choose(selection.providerId, event.target.value)}
-        >
-          {models.map((model) => (
-            <option key={model} value={model}>
-              {modelLabel(model)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className={styles.hint}>{t(profile ? 'providerCustomHint' : 'providerOfficialHint')}</p>
+        </div>
+      ) : (
+        <label className={styles.field}>
+          <span>{t('providerModel')}</span>
+          <select
+            aria-label={t('providerModel')}
+            value={selection.model}
+            disabled={disabled}
+            onChange={(event) => choose(selection.providerId, event.target.value)}
+          >
+            {models.map((model) => (
+              <option key={model} value={model}>
+                {modelLabel(model)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <p className={styles.hint}>
+        {layout === 'settings' && !profile
+          ? t('settingsApiBillingValue')
+          : t(profile ? 'providerCustomHint' : 'providerOfficialHint')}
+      </p>
       {error ? (
         <p className={styles.error} role="alert">
           {error}
@@ -142,6 +184,12 @@ export const ProviderSettingsPage = () => {
   )
   const [headers, setHeaders] = useState(() => JSON.stringify(form.headers, null, 2))
   const [body, setBody] = useState(() => JSON.stringify(form.extraBody, null, 2))
+  const saved = useRef({ profile: JSON.stringify(form), headers, body })
+  const dirty =
+    JSON.stringify(form) !== saved.current.profile ||
+    headers !== saved.current.headers ||
+    body !== saved.current.body
+  const leave = useSettingsLeave(dirty)
   const [showKey, setShowKey] = useState(false),
     [error, setError] = useState(''),
     [result, setResult] = useState('')
@@ -150,6 +198,11 @@ export const ProviderSettingsPage = () => {
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
   const edit = (profile: ProviderProfile) => {
+    saved.current = {
+      profile: JSON.stringify(profile),
+      headers: JSON.stringify(profile.headers, null, 2),
+      body: JSON.stringify(profile.extraBody, null, 2),
+    }
     controller.current?.abort()
     setBusy(null)
     setForm(profile)
@@ -219,17 +272,19 @@ export const ProviderSettingsPage = () => {
   }
   return (
     <div className={styles.page}>
-      <div className={styles.savedHeader}>
-        <span>{t('providerProfile')}</span>
-        <Button
-          variant="outlined"
-          size="s"
-          disabled={Boolean(busy)}
-          onClick={() => edit(emptyProfile())}
-        >
-          {t('providerNew')}
-        </Button>
-      </div>
+      {profiles.length > 0 && (
+        <div className={styles.savedHeader}>
+          <span>{t('providerProfile')}</span>
+          <Button
+            variant="outlined"
+            size="s"
+            disabled={Boolean(busy)}
+            onClick={() => leave.request(() => edit(emptyProfile()))}
+          >
+            {t('providerNew')}
+          </Button>
+        </div>
+      )}
       {profiles.length ? (
         <div className={styles.profileList}>
           {profiles.map((profile) => (
@@ -238,7 +293,7 @@ export const ProviderSettingsPage = () => {
               key={profile.id}
               disabled={Boolean(busy)}
               aria-pressed={form.id === profile.id}
-              onClick={() => edit(profile)}
+              onClick={() => leave.request(() => edit(profile))}
             >
               <span>{profile.name}</span>
               {selection.providerId === profile.id ? <small>{t('providerActive')}</small> : null}
@@ -246,7 +301,9 @@ export const ProviderSettingsPage = () => {
           ))}
         </div>
       ) : null}
-      <fieldset className={styles.fields} disabled={Boolean(busy)}>
+      {leave.dialog}
+      <fieldset className={styles.fieldGroup} disabled={Boolean(busy)}>
+        <legend>{t('providerConnectionGroup')}</legend>
         <label className={styles.field}>
           <span>{t('providerName')}</span>
           <input
@@ -304,6 +361,9 @@ export const ProviderSettingsPage = () => {
             {t(showKey ? 'settingsApiKeyHide' : 'settingsApiKeyShow')}
           </button>
         </div>
+      </fieldset>
+      <fieldset className={styles.fieldGroup} disabled={Boolean(busy)}>
+        <legend>{t('providerModelGroup')}</legend>
         <label className={styles.field}>
           <span>{t('providerModel')}</span>
           <input
@@ -343,6 +403,26 @@ export const ProviderSettingsPage = () => {
           </Button>
         </div>
         <p className={styles.hint}>{t('providerTestHint')}</p>
+      </fieldset>
+      {busy && (
+        <div className={styles.feedback} role="status">
+          <span>{t(busy === 'test' ? 'providerTesting' : 'providerFetching')}</span>
+          <Button variant="outlined" onClick={() => controller.current?.abort()}>
+            {t('cancel')}
+          </Button>
+        </div>
+      )}
+      {error && (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      )}
+      {result && (
+        <p className={styles.result} role="status">
+          {result}
+        </p>
+      )}
+      <fieldset className={styles.fields} disabled={Boolean(busy)}>
         <details className={styles.advanced}>
           <summary>{t('providerParameters')}</summary>
           <div className={styles.fields}>
@@ -445,24 +525,6 @@ export const ProviderSettingsPage = () => {
           </div>
         </details>
       </fieldset>
-      {busy ? (
-        <div className={styles.actions} role="status">
-          <span>{t(busy === 'test' ? 'providerTesting' : 'providerFetching')}</span>
-          <Button variant="outlined" onClick={() => controller.current?.abort()}>
-            {t('cancel')}
-          </Button>
-        </div>
-      ) : null}
-      {error ? (
-        <p className={styles.error} role="alert">
-          {error}
-        </p>
-      ) : null}
-      {result ? (
-        <p className={styles.result} role="status">
-          {result}
-        </p>
-      ) : null}
       <div className={styles.actions}>
         <Button disabled={Boolean(busy)} variant="outlined" onClick={() => save(false)}>
           {t('providerSave')}
@@ -473,7 +535,7 @@ export const ProviderSettingsPage = () => {
       </div>
       <p className={styles.hint}>{t('providerPrivacy')}</p>
       {form.id ? (
-        <Button variant="danger" disabled={Boolean(busy)} onClick={() => setDeleting(true)}>
+        <Button variant="dangerOutlined" disabled={Boolean(busy)} onClick={() => setDeleting(true)}>
           {t('providerDelete')}
         </Button>
       ) : null}

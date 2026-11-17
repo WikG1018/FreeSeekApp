@@ -27,7 +27,7 @@
   margin: 0;
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
   text-align: center;
 }
 
@@ -146,17 +146,17 @@
 }
 
 .stepPending {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 
   &::before {
     content: '·';
-    color: var(--dsw-alias-label-tertiary);
+    color: var(--fs-secondary-text);
   }
 }
 
 .stepNext {
   margin-top: 2px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 
   &::before {
     content: '→';

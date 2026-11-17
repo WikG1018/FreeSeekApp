@@ -99,6 +99,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           <input
             className={styles.searchInput}
             type="search"
+            aria-label={t('siderSearchPlaceholder')}
             placeholder={t('siderSearchPlaceholder')}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -133,6 +134,11 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             }
           }}
         >
+          {groups.length === 0 && (
+            <p className={styles.emptyList} role="status">
+              {t(query.trim() ? 'siderEmptySearch' : 'siderEmptyHistory')}
+            </p>
+          )}
           {groups.map((group) => (
             <div key={group.key} className={styles.section}>
               <div className={styles.sectionHeader}>{group.label}</div>

@@ -17,11 +17,9 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
   },
   plugins: {
-    // Capacitor 8 内置 SystemBars：native 模式由原生把 WebView 放到安全区内，
-    // 避免旧版 WebView 无法提供 env(safe-area-inset-*) 时内容压到状态栏。
+    // WindowEdges 提供原生安全区与键盘尺寸，SystemBars 继续管理图标明暗。
     SystemBars: {
-      insetsHandling: 'native',
-      initialViewportFitValueHint: 'auto',
+      insetsHandling: 'disable',
       style: 'DEFAULT',
       hidden: false,
     },

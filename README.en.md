@@ -18,13 +18,13 @@ DeepSeek's official app throttles heavy users: daily quotas, long conversations 
 ## Features
 
 - **Continue from any chat** — a new conversation inherits all context of an old one
-- **Model selection** — choose DeepSeek Flash or V4 Pro in API settings. Advanced settings support OpenAI Chat Completions, Responses, Anthropic Messages and Gemini endpoints, model discovery and a test request. Enable the model switcher in Settings to choose a model from the composer.
+- **Model selection** — choose DeepSeek Flash or V4 Pro in API settings. Advanced settings support OpenAI Chat Completions, Responses, Anthropic Messages and Gemini endpoints, model discovery and a test request. Enable the model switcher in Settings → Chat preferences. The original API key guide is at the top of API service; advanced third-party configuration is at the bottom.
 - **Personas** — built-in writer / translator / coder / copywriter / brainstorm presets, plus your own
 - **Usage & cost** — per-reply tokens and cost, per-conversation totals, 14-day chart, session ranking at official peak/off-peak rates
 - **Thinking & web search**, attachments, speech input and read-aloud
 - **Local history** — chats and files live in IndexedDB, with no cloud conversation sync
 - **In-app updates** — checks GitHub Releases, falls back to mirrors in mainland China, pre-downloads the APK and installs from the sidebar
-- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Pin chats from their menus. Settings and donations are in the footer.
+- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Chat content and the drawer extend behind Android system bars while controls respect cutouts and navigation. Pin chats from their menus. Settings and donations are in the footer.
 - **Backup import** — streams official DeepSeek chat records up to 128 MiB each. Existing data is replaced after the archive and record counts pass validation. Older Android WebViews can restore multiple chats and attachments.
 
 ## Install

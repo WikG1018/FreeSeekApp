@@ -38,7 +38,8 @@
   flex-direction: column;
   box-sizing: border-box;
   width: 380px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 32px - var(--fs-safe-left) - var(--fs-safe-right));
+  max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - var(--fs-safe-bottom) - 24px);
   padding: 22px 24px;
   border-radius: 24px;
   font-size: 14px;
@@ -81,7 +82,8 @@
     width: 100%;
     max-width: none;
     max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - 24px);
-    padding: 14px 20px calc(20px + var(--fs-safe-bottom));
+    padding: 14px calc(20px + var(--fs-safe-right)) calc(20px + var(--fs-safe-bottom))
+      calc(20px + var(--fs-safe-left));
     border-radius: 24px 24px 0 0;
     animation: sheetIn var(--fs-duration-slow) var(--fs-ease-out) both;
   }
@@ -109,6 +111,7 @@
   /* 居中对话框：危险确认与许可证全文，覆盖 Sheet 样式 */
   .overlayCentered {
     align-items: center;
+    padding: var(--fs-safe-top) var(--fs-safe-right) var(--fs-safe-bottom) var(--fs-safe-left);
   }
 
   .centered {
@@ -182,11 +185,15 @@
 
 .main {
   color: var(--dsw-alias-label-secondary);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .footer {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 20px;
 }

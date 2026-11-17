@@ -10,6 +10,37 @@ export const IconPinOutline16 = () => (
   </svg>
 )
 
+export const IconBookOutline16 = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M3 4.75c3.25-.8 6.2-.45 9 1.05 2.8-1.5 5.75-1.85 9-1.05V18.6c-3.35-.8-6.3-.4-9 1.2-2.7-1.6-5.65-2-9-1.2V4.75ZM12 5.8v14"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+export const IconShareOutline16 = () => (
+  <svg
+    width="18"
+    height="18"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.65"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="6" cy="12" r="2.5" />
+    <circle cx="17.5" cy="5.5" r="2.5" />
+    <circle cx="17.5" cy="18.5" r="2.5" />
+    <path d="m8.2 10.7 7.1-4M8.2 13.3l7.1 4" />
+  </svg>
+)
+
 export const IconCheckOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

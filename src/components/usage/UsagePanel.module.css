@@ -16,15 +16,15 @@
   font-size: 13px;
   line-height: 20px;
   text-align: center;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 主卡：总花费 */
 .hero {
   padding: 16px 18px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(37, 99, 235, 0.03));
-  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: var(--fs-accent-wash);
+  border: 1px solid var(--fs-accent-line);
 }
 
 .heroTop {
@@ -43,7 +43,7 @@
 .heroToday {
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
   white-space: nowrap;
 }
 
@@ -64,7 +64,7 @@
   margin-top: 8px;
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 .heroDot {
@@ -95,7 +95,7 @@
 .tileLabel {
   font-size: 11px;
   line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 .tileValue {
@@ -111,7 +111,7 @@
   margin-top: 2px;
   font-size: 11px;
   line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 区块 */
@@ -139,7 +139,7 @@
 .sectionHint {
   font-size: 11px;
   line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 柱状图 */
@@ -181,7 +181,7 @@
   line-height: 12px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 会话排行 */
@@ -221,7 +221,7 @@
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 .sessionRow:first-child .rank {
@@ -247,7 +247,7 @@
   flex-shrink: 0;
   font-size: 11px;
   line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -298,5 +298,5 @@
 .pricingRowValue {
   flex-shrink: 0;
   font-size: 12px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }

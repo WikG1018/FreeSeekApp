@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useAnchoredPosition, useDismiss } from './anchored.js'
 import styles from './Menu.module.css'
@@ -13,6 +13,15 @@ export type MenuOption = {
 }
 
 /** 点击触发，向下展开；点外部或 Esc 关闭 */
+let dismissMenu: (() => void) | null = null
+export const closeActiveMenu = () => {
+  if (!dismissMenu) {
+    return false
+  }
+  dismissMenu()
+  return true
+}
+
 export const Menu = ({
   options,
   children,
@@ -27,7 +36,31 @@ export const Menu = ({
     open,
     { align: 'start', alignOffset: -5, offset: 4 }
   )
+  const returnFocus = () => {
+    close()
+    anchorRef.current?.querySelector('button')?.focus({ preventScroll: true })
+  }
   useDismiss(open, [anchorRef, floatingRef], close)
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const previous = dismissMenu
+    previous?.()
+    const dismiss = () => {
+      setOpen(false)
+      anchorRef.current?.querySelector('button')?.focus({ preventScroll: true })
+    }
+    dismissMenu = dismiss
+    floatingRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]')
+      ?.focus({ preventScroll: true })
+    return () => {
+      if (dismissMenu === dismiss) {
+        dismissMenu = null
+      }
+    }
+  }, [open, anchorRef, floatingRef])
 
   return (
     <>
@@ -41,9 +74,35 @@ export const Menu = ({
               className={styles.menu}
               style={position ?? undefined}
               role="menu"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  returnFocus()
+                  return
+                }
+                const items = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+                )
+                const index = items.indexOf(document.activeElement as HTMLButtonElement)
+                const offsets: Record<string, number> = {
+                  ArrowDown: (index + 1) % items.length,
+                  ArrowUp: (index + items.length - 1) % items.length,
+                  Home: 0,
+                  End: items.length - 1,
+                }
+                if (event.key in offsets) {
+                  event.preventDefault()
+                  items[offsets[event.key]]?.focus()
+                }
+                if (event.key === 'Tab') {
+                  returnFocus()
+                }
+              }}
             >
               {options.map((option) => (
-                <div
+                <button
+                  type="button"
                   key={option.key}
                   role="menuitem"
                   className={clsx(styles.option, option.danger && styles.danger)}
@@ -54,7 +113,7 @@ export const Menu = ({
                 >
                   <span className={styles.icon}>{option.icon}</span>
                   {option.label}
-                </div>
+                </button>
               ))}
             </div>,
             document.body

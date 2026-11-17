@@ -2,9 +2,10 @@
   --message-list-max-width: 840px;
   --message-list-padding-horizontal: 44px;
 
-  /* 安全区：iOS 走 env()，Android（Capacitor SystemBars css 模式）走注入的 --safe-area-inset-* */
-  --fs-safe-top: 0px;
-  --fs-safe-bottom: 0px;
+  --fs-safe-top: env(safe-area-inset-top, 0px);
+  --fs-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --fs-safe-left: env(safe-area-inset-left, 0px);
+  --fs-safe-right: env(safe-area-inset-right, 0px);
   --fs-viewport-height: 100vh;
 
   /* 动效：统一时长与曲线，界面只引用这些 token */
@@ -14,6 +15,17 @@
   --fs-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fs-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --fs-ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --fs-settings-canvas: #f5f6f8;
+  --fs-settings-surface: #fff;
+  --fs-secondary-text: #56606e;
+  --fs-line: #e2e5eb;
+  --fs-field-line: #a7afbd;
+  --fs-accent-text: #264fae;
+  --fs-accent-fill: #345dcc;
+  --fs-accent-wash: #edf2ff;
+  --fs-accent-line: #cedbf9;
+  --fs-focus: #416bda;
+  --fs-switch-off: #757e8d;
 
   /* 品牌色（FreeSeek 蓝 / 鲸鱼粉） */
   --fs-brand: rgb(37, 99, 235);
@@ -34,11 +46,11 @@
   --fs-floating-shadow: 0 4px 18px rgba(15, 23, 42, 0.08);
 }
 
-@supports (top: max(0px, 1px)) {
-  :root {
-    --fs-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
-    --fs-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
-  }
+:root[data-android-window] {
+  --fs-safe-top: var(--fs-native-top, 24px);
+  --fs-safe-bottom: var(--fs-native-bottom, 24px);
+  --fs-safe-left: var(--fs-native-left, 0px);
+  --fs-safe-right: var(--fs-native-right, 0px);
 }
 @supports (height: 100dvh) {
   :root {
@@ -90,6 +102,17 @@ body.dark {
 }
 
 body[data-ds-dark-theme] {
+  --fs-settings-canvas: #18191c;
+  --fs-settings-surface: #222428;
+  --fs-secondary-text: #b5bbc6;
+  --fs-line: #393c43;
+  --fs-field-line: #636a78;
+  --fs-accent-text: #adc4ff;
+  --fs-accent-fill: #415fb8;
+  --fs-accent-wash: #252e43;
+  --fs-accent-line: #404f72;
+  --fs-focus: #aac0ff;
+  --fs-switch-off: #626b79;
   --scroll-color: rgba(255, 255, 255, 0.15);
   --scroll-color-hover: rgba(255, 255, 255, 0.24);
 

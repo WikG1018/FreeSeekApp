@@ -9,6 +9,7 @@ import {
   type UsageStats,
 } from '../../services/usage.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
+import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import styles from './UsagePanel.module.css'
@@ -33,10 +34,13 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
   const pricing = usePricing((state) => state.pricing)
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false),
+    [retry, setRetry] = useState(0)
 
   useEffect(() => {
     let alive = true
     setLoading(true)
+    setFailed(false)
     collectUsage()
       .then((result) => {
         if (alive) {
@@ -46,27 +50,61 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
       })
       .catch(() => {
         if (alive) {
+          setFailed(true)
           setLoading(false)
         }
       })
     return () => {
       alive = false
     }
-  }, [pricing])
+  }, [pricing, retry])
 
   const days = stats ? recentDays(stats, 14) : []
   const maxCost = Math.max(0.000001, ...days.map((day) => day.costCny))
   const today = stats?.days.find((day) => day.date === todayKey())
 
+  const pricingLink = onOpenPricing ? (
+    <button
+      type="button"
+      className={styles.pricingRow}
+      data-settings-target="usagePricing"
+      onClick={onOpenPricing}
+    >
+      <span className={styles.pricingRowLabel}>{t('usagePricingTitle')}</span>
+      <span className={styles.pricingRowValue}>
+        {isDefaultPricing(pricing) ? t('usagePricingDefault') : t('usagePricingCustom')}
+      </span>
+      <IconChevronRightOutline14 />
+    </button>
+  ) : null
+  if (failed) {
+    return (
+      <div className={styles.content}>
+        <div role="alert" className={styles.empty}>
+          {t('usageLoadError')}{' '}
+          <Button variant="outlined" onClick={() => setRetry((v) => v + 1)}>
+            {t('retry')}
+          </Button>
+        </div>
+        {pricingLink}
+      </div>
+    )
+  }
   if (loading) {
     return <div className={styles.loading}>{t('sessionLoading')}</div>
   }
   if (!stats || stats.total.requests === 0) {
-    return <div className={styles.empty}>{t('usageEmpty')}</div>
+    return (
+      <div className={styles.content}>
+        <p className={styles.empty}>{t('usageEmpty')}</p>
+        {pricingLink}
+      </div>
+    )
   }
 
   const inputTokens = stats.total.cacheReadTokens + stats.total.cacheMissTokens
-  const hitRate = inputTokens > 0 ? Math.round((stats.total.cacheReadTokens / inputTokens) * 100) : 0
+  const hitRate =
+    inputTokens > 0 ? Math.round((stats.total.cacheReadTokens / inputTokens) * 100) : 0
 
   return (
     <div className={styles.content}>
@@ -78,14 +116,28 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
             {t('usageToday')} {compactCost(today?.costCny ?? 0)}
           </span>
         </div>
-        <div className={styles.heroValue}>{stats.total.unpricedRequests === stats.total.requests ? '—' : compactCost(stats.total.costCny)}</div>
-        {stats.total.unpricedRequests > 0 ? <p className={styles.sectionHint}>{t('usagePartialCost', { count: stats.total.unpricedRequests })}</p> : null}
+        <div className={styles.heroValue}>
+          {stats.total.unpricedRequests === stats.total.requests
+            ? '—'
+            : compactCost(stats.total.costCny)}
+        </div>
+        {stats.total.unpricedRequests > 0 ? (
+          <p className={styles.sectionHint}>
+            {t('usagePartialCost', { count: stats.total.unpricedRequests })}
+          </p>
+        ) : null}
         <div className={styles.heroMeta}>
-          <span>{t('usageRequests')} {formatTokens(stats.total.requests)}</span>
+          <span>
+            {t('usageRequests')} {formatTokens(stats.total.requests)}
+          </span>
           <span className={styles.heroDot} />
-          <span>{t('usageCacheHit')} {hitRate}%</span>
+          <span>
+            {t('usageCacheHit')} {hitRate}%
+          </span>
           <span className={styles.heroDot} />
-          <span>{t('usageWebSearches')} {formatTokens(stats.total.webSearches)}</span>
+          <span>
+            {t('usageWebSearches')} {formatTokens(stats.total.webSearches)}
+          </span>
         </div>
       </div>
 
@@ -145,22 +197,16 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
               <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
               <span className={styles.sessionMeta}>
                 {compactTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok
-                <span className={styles.sessionCost}>{item.unpricedRequests === item.requests ? '—' : formatCost(item.costCny)}</span>
+                <span className={styles.sessionCost}>
+                  {item.unpricedRequests === item.requests ? '—' : formatCost(item.costCny)}
+                </span>
               </span>
             </div>
           ))}
         </div>
       </div>
 
-      {onOpenPricing ? (
-        <button type="button" className={styles.pricingRow} onClick={onOpenPricing}>
-          <span className={styles.pricingRowLabel}>{t('usagePricingTitle')}</span>
-          <span className={styles.pricingRowValue}>
-            {isDefaultPricing(pricing) ? t('usagePricingDefault') : t('usagePricingCustom')}
-          </span>
-          <IconChevronRightOutline14 />
-        </button>
-      ) : null}
+      {pricingLink}
     </div>
   )
 }

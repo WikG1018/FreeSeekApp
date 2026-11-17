@@ -4,7 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { setDefaultPersona, usePersonas } from '../../services/personas.js'
 import { IconCheckOutline16, IconChevronDownOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
-import { PersonaManager } from '../personas/PersonaManager.js'
+import { openSettings } from '../settings/settingsDialogState.js'
 import styles from './PersonaPicker.module.css'
 import { showToast } from '../base/toastState.js'
 
@@ -17,7 +17,6 @@ export const PersonaPicker = () => {
   const personas = usePersonas((state) => state.personas)
   const defaultId = usePersonas((state) => state.defaultId)
   const [open, setOpen] = useState(false)
-  const [managerOpen, setManagerOpen] = useState(false)
   const current = personas.find((persona) => persona.id === defaultId) ?? personas[0]
 
   return (
@@ -83,15 +82,13 @@ export const PersonaPicker = () => {
             className={styles.manage}
             onClick={() => {
               setOpen(false)
-              setManagerOpen(true)
+              openSettings('personas')
             }}
           >
             {t('personaManage')}
           </button>
         </Modal>
       ) : null}
-
-      {managerOpen ? <PersonaManager onClose={() => setManagerOpen(false)} /> : null}
     </>
   )
 }

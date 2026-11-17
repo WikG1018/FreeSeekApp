@@ -1,7 +1,7 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 17px;
   padding-bottom: 24px;
 }
 .fields {
@@ -30,9 +30,9 @@
   min-width: 0;
   min-height: 44px;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--fs-field-line);
   border-radius: 12px;
-  background: var(--dsw-alias-bg-base);
+  background: var(--fs-settings-surface);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }
@@ -48,7 +48,7 @@
 }
 .hint {
   margin: 0;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--fs-secondary-text);
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -66,7 +66,7 @@
   justify-content: space-between;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--fs-secondary-text);
 }
 .keyHint button {
   flex-shrink: 0;
@@ -98,9 +98,9 @@
   min-height: 44px;
   padding: 8px 12px;
   border-radius: 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--fs-field-line);
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-base);
+  background: var(--fs-settings-surface);
   font: inherit;
   cursor: pointer;
 }
@@ -118,7 +118,7 @@
   color: var(--fs-brand);
 }
 .advanced {
-  border-block: 1px solid var(--dsw-alias-border-l2);
+  border-block: 1px solid var(--fs-field-line);
 }
 .advanced summary {
   padding: 16px 0;
@@ -164,10 +164,10 @@
   min-height: 32px;
   margin: 8px 12px 0;
   padding: 4px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--fs-field-line);
   border-radius: 999px;
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--fs-secondary-text);
   font-size: 12px;
   cursor: pointer;
   align-self: flex-start;
@@ -188,5 +188,146 @@
   max-width: 140px;
   margin: 0;
   min-height: 28px;
-  background: var(--dsw-alias-bg-base);
+  background: var(--fs-settings-surface);
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 15px 16px;
+  border: 1px solid var(--fs-line);
+  border-radius: 14px;
+  background: var(--fs-settings-surface);
+}
+.fieldGroup legend {
+  padding: 0 6px;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.fieldGroup legend + * {
+  margin-top: 4px;
+}
+.field {
+  gap: 5px;
+}
+.field input,
+.field select,
+.field textarea,
+.fields > select,
+.fieldGroup > select {
+  border-radius: 10px;
+  min-height: 46px;
+  font-size: 15px;
+}
+.fieldGroup > select {
+  width: 100%;
+}
+.field textarea {
+  font-family: var(--ds-font-family-code);
+}
+.advanced {
+  border: 1px solid var(--fs-line);
+  border-radius: 13px;
+  padding: 0 14px;
+  background: var(--fs-settings-surface);
+}
+.keyHint button {
+  color: var(--fs-accent-text);
+}
+.modelChoices {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+}
+.modelChoices label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--fs-line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.modelChoices label[data-selected='true'] {
+  color: var(--fs-accent-text);
+  background: var(--fs-accent-wash);
+  border-color: var(--fs-accent-line);
+}
+.modelChoices input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--fs-accent-fill);
+}
+.modelChoices b,
+.modelChoices small {
+  display: block;
+  overflow-wrap: break-word;
+}
+.modelChoices b {
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.modelChoices small {
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.feedback {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.result {
+  background: var(--fs-accent-wash);
+  padding: 12px;
+  border-radius: 10px;
+}
+.actions > button {
+  min-height: 44px;
+}
+
+@media (max-width: 440px) {
+  .modelChoices {
+    grid-template-columns: 1fr;
+  }
+  .modelChoices label {
+    min-height: 44px;
+    padding: 7px 10px;
+    box-sizing: border-box;
+  }
+  .modelChoices label > span {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    column-gap: 8px;
+  }
+}
+
+:global([data-legacy-spacing]) .page > * + * {
+  margin-top: 16px;
+}
+:global([data-legacy-spacing]) .fields > * + *,
+:global([data-legacy-spacing]) .fieldGroup > * + * {
+  margin-top: 10px;
+}
+:global([data-legacy-spacing]) .field > * + * {
+  margin-top: 4px;
+}
+:global([data-legacy-spacing]) .actions > button + button {
+  margin-left: 8px;
+}
+:global([data-legacy-spacing]) .modelChoices input {
+  margin-right: 8px;
 }

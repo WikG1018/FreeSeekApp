@@ -17,6 +17,7 @@ import { setSessionPersona, useChatStore } from '../../services/chat/store.js'
 import { saveBackup } from '../../services/saveBackup.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
+import { useSettingsLeave } from '../settings/useSettingsLeave.js'
 import { showToast } from '../base/toastState.js'
 import {
   IconAddOutline16,
@@ -34,13 +35,13 @@ const report = (error: unknown) =>
         : 'personaSaveFailed',
     type: 'error',
   })
-const PersonaEditor = ({ persona, onDone }: { persona: Persona; onDone: () => void }) => {
+export const PersonaEditor = ({ persona, onDone }: { persona: Persona; onDone: () => void }) => {
   const t = useTranslate(),
     [name, setName] = useState(persona.name),
     [prompt, setPrompt] = useState(persona.prompt)
-  const [discard, setDiscard] = useState(false)
   const dirty = name !== persona.name || prompt !== persona.prompt
-  const cancel = () => (dirty ? setDiscard(true) : onDone())
+  const leave = useSettingsLeave(dirty)
+  const cancel = () => leave.request(onDone)
   const save = () => {
     try {
       if (persona.id) {
@@ -90,31 +91,15 @@ const PersonaEditor = ({ persona, onDone }: { persona: Persona; onDone: () => vo
           {t('personaSave')}
         </Button>
       </div>
-      {discard ? (
-        <Modal
-          title={t('personaUnsaved')}
-          onClose={() => setDiscard(false)}
-          footer={
-            <>
-              <Button variant="outlined" onClick={() => setDiscard(false)}>
-                {t('back')}
-              </Button>
-              <Button variant="danger" onClick={onDone}>
-                {t('confirm')}
-              </Button>
-            </>
-          }
-        />
-      ) : null}
+      {leave.dialog}
     </div>
   )
 }
 
-export const PersonaLibrary = () => {
+export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void }) => {
   const t = useTranslate(),
     { personas, defaultId } = usePersonas()
-  const [editing, setEditing] = useState<Persona | null>(null),
-    [confirmDelete, setConfirmDelete] = useState<Persona | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Persona | null>(null)
   const [search, setSearch] = useState(''),
     [busy, setBusy] = useState(false)
   const query = useDeferredValue(search.trim().toLocaleLowerCase()),
@@ -152,28 +137,38 @@ export const PersonaLibrary = () => {
       setBusy(false)
     }
   }
-  if (editing) {
-    return (
-      <PersonaEditor key={editing.id || 'new'} persona={editing} onDone={() => setEditing(null)} />
-    )
-  }
   return (
     <div className={styles.library}>
-      <button
-        type="button"
-        className={styles.addButton}
-        onClick={() => setEditing({ id: '', name: '', prompt: '' })}
-      >
-        <span className={styles.addIcon}>
-          <IconAddOutline16 />
-        </span>
-        {t('personaAdd')}
-      </button>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>{t('personaSearch')}</span>
+        <input
+          type="search"
+          className={styles.input}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </label>
       <div className={styles.libraryTools}>
+        <button
+          type="button"
+          className={styles.addButton}
+          onClick={() => onEdit({ id: '', name: '', prompt: '' })}
+        >
+          <span className={styles.addIcon}>
+            <IconAddOutline16 />
+          </span>
+          {t('personaAdd')}
+        </button>
+
         <Button variant="outlined" size="s" disabled={busy} onClick={() => picker.current?.click()}>
           {t('personaImport')}
         </Button>
-        <Button variant="outlined" size="s" disabled={busy} onClick={() => void exportAll()}>
+        <Button
+          variant="outlined"
+          size="s"
+          disabled={busy || !personas.some((persona) => !isBuiltin(persona))}
+          onClick={() => void exportAll()}
+        >
           {t('personaExport')}
         </Button>
       </div>
@@ -200,15 +195,6 @@ export const PersonaLibrary = () => {
         }}
       />
       <p className={styles.hint}>{t('personaImportHint')}</p>
-      <label className={styles.field}>
-        <span className={styles.fieldLabel}>{t('personaSearch')}</span>
-        <input
-          type="search"
-          className={styles.input}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </label>
       {activeId ? (
         <p className={styles.hint}>{t('personaCurrentHint')}</p>
       ) : (
@@ -253,7 +239,7 @@ export const PersonaLibrary = () => {
                 <button
                   type="button"
                   onClick={() =>
-                    setEditing({
+                    onEdit({
                       id: '',
                       name: t('personaCopyName', { name: persona.name }).slice(0, 80),
                       prompt: persona.prompt,
@@ -287,7 +273,7 @@ export const PersonaLibrary = () => {
                     <button
                       type="button"
                       aria-label={t('personaEditAction')}
-                      onClick={() => setEditing(persona)}
+                      onClick={() => onEdit(persona)}
                     >
                       <IconEditOutline16 />
                     </button>

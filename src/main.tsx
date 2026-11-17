@@ -1,7 +1,9 @@
 import { createRoot } from 'react-dom/client'
+import { Capacitor } from '@capacitor/core'
 import { Component, useLayoutEffect, type ReactNode } from 'react'
 import { App } from './app/App.js'
 import { setupTheme } from './app/theme.js'
+import { detectFlexSpacing } from './app/layoutSupport.js'
 import { ensureKatex } from './services/markdown/katex.js'
 import { initUpdateChecker } from './services/update.js'
 import { initDiagnostics } from './services/diagnostics/log.js'
@@ -10,7 +12,12 @@ import { markStartupReady, reportRenderFailure } from './services/startup.js'
 import './app/theme.css'
 import './app/global.css'
 
+document.documentElement.toggleAttribute(
+  'data-android-window',
+  Capacitor.getPlatform() === 'android'
+)
 initDiagnostics()
+detectFlexSpacing()
 ensureKatex()
 setupTheme()
 initUpdateChecker()

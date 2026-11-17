@@ -101,3 +101,13 @@
     box-shadow: 0 0 0 2px var(--dsw-alias-state-error-primary);
   }
 }
+
+@media (pointer: coarse) {
+  .button {
+    min-height: 44px;
+    height: auto;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    white-space: normal;
+  }
+}

@@ -17,7 +17,9 @@ export const useDialogFocus = (ref: RefObject<HTMLElement>, isTop: () => boolean
       [...root.querySelectorAll<HTMLElement>(SELECTOR)].filter(
         (element) => element.getClientRects().length > 0
       )
-    ;(focusables()[0] ?? root).focus({ preventScroll: true })
+    ;(root.querySelector<HTMLElement>('[data-dialog-initial]') ?? focusables()[0] ?? root).focus({
+      preventScroll: true,
+    })
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !isTopRef.current()) {
         return

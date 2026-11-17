@@ -60,20 +60,24 @@ export const SessionItem = memo(function SessionItem({
   }
 
   return (
-    <div
-      className={clsx(styles.item, active && styles.active)}
-      data-session-id={session.id}
-      onClick={() => {
-        selectSession(session.id)
-        closeMobileSider()
-      }}
-    >
-      {session.pinned && (
-        <span className={styles.pin} aria-label={t('sessionPinned')}>
-          <IconPinOutline16 />
-        </span>
-      )}
-      <div className={styles.title}>{displayTitle}</div>
+    <div className={clsx(styles.item, active && styles.active)} data-session-id={session.id}>
+      <button
+        type="button"
+        className={styles.openSession}
+        data-sider-swipe-row
+        aria-current={active ? 'page' : undefined}
+        onClick={() => {
+          selectSession(session.id)
+          closeMobileSider()
+        }}
+      >
+        {session.pinned && (
+          <span className={styles.pin} aria-label={t('sessionPinned')}>
+            <IconPinOutline16 />
+          </span>
+        )}
+        <span className={styles.title}>{displayTitle}</span>
+      </button>
       <div className={styles.action} onClick={(event) => event.stopPropagation()}>
         <Menu
           options={[
@@ -112,8 +116,14 @@ export const SessionItem = memo(function SessionItem({
             },
           ]}
         >
-          {({ toggle }) => (
-            <IconButton icon={<IconEllipsisOutline16 />} aria-label={t('more')} onClick={toggle} />
+          {({ toggle, open }) => (
+            <IconButton
+              icon={<IconEllipsisOutline16 />}
+              aria-label={t('more')}
+              aria-haspopup="menu"
+              aria-expanded={open}
+              onClick={toggle}
+            />
           )}
         </Menu>
       </div>

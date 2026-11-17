@@ -49,17 +49,34 @@ export type AnchoredOptions = {
   measureKey?: unknown
 }
 
-const clampLeft = (left: number, width: number) =>
-  Math.max(VIEWPORT_PADDING, Math.min(left, window.innerWidth - width - VIEWPORT_PADDING))
+const safeViewport = () => {
+  const css = getComputedStyle(document.documentElement)
+  const edge = (name: string) => Number.parseFloat(css.getPropertyValue('--fs-safe-' + name)) || 0
+  const viewport = window.visualViewport
+  const x = viewport?.offsetLeft ?? 0,
+    y = viewport?.offsetTop ?? 0
+  return {
+    left: x + edge('left') + VIEWPORT_PADDING,
+    right: x + (viewport?.width ?? innerWidth) - edge('right') - VIEWPORT_PADDING,
+    top: y + edge('top') + VIEWPORT_PADDING,
+    bottom: y + (viewport?.height ?? innerHeight) - edge('bottom') - VIEWPORT_PADDING,
+  }
+}
 
-const alignLeft = (anchor: DOMRect, width: number, align: Align, alignOffset: number) => {
-  if (align === 'center') {
-    return clampLeft(anchor.left + anchor.width / 2 - width / 2 + alignOffset, width)
-  }
-  if (align === 'end') {
-    return Math.max(VIEWPORT_PADDING, anchor.right - width + alignOffset)
-  }
-  return clampLeft(anchor.left + alignOffset, width)
+const alignLeft = (
+  anchor: DOMRect,
+  width: number,
+  align: Align,
+  alignOffset: number,
+  bounds: ReturnType<typeof safeViewport>
+) => {
+  const natural =
+    align === 'center'
+      ? anchor.left + (anchor.width - width) / 2
+      : align === 'end'
+        ? anchor.right - width
+        : anchor.left
+  return Math.max(bounds.left, Math.min(natural + alignOffset, bounds.right - width))
 }
 
 /** 只有一侧放得下时用那一侧；两侧都放得下用优先侧；都放不下时退到空间更大的一侧 */
@@ -129,15 +146,22 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       return
     }
     const rect = anchor.getBoundingClientRect()
-    const spaceAbove = rect.top - offset - VIEWPORT_PADDING
-    const spaceBelow = window.innerHeight - rect.bottom - offset - VIEWPORT_PADDING
+    const bounds = safeViewport()
+    const spaceAbove = rect.top - offset - bounds.top
+    const spaceBelow = bounds.bottom - rect.bottom - offset
 
     if (maxHeight === undefined) {
       const { width, height } = floating.getBoundingClientRect()
       const resolved = resolveSide(spaceAbove, spaceBelow, side, height)
       applyPosition({
-        top: resolved === 'top' ? rect.top - offset - height : rect.bottom + offset,
-        left: alignLeft(rect, width, align, alignOffset),
+        top: Math.max(
+          bounds.top,
+          Math.min(
+            resolved === 'top' ? rect.top - offset - height : rect.bottom + offset,
+            bounds.bottom - height
+          )
+        ),
+        left: alignLeft(rect, width, align, alignOffset, bounds),
       })
       return
     }
@@ -149,9 +173,9 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     applyPosition({
       top:
         resolved === 'top'
-          ? Math.max(VIEWPORT_PADDING, rect.top - offset - height)
+          ? Math.max(bounds.top, rect.top - offset - height)
           : rect.bottom + offset,
-      right: Math.max(VIEWPORT_PADDING, window.innerWidth - rect.right),
+      right: Math.max(window.innerWidth - bounds.right, window.innerWidth - rect.right),
       maxHeight: height,
     })
   }, [align, alignOffset, applyPosition, floatingRef, getAnchor, maxHeight, minSpace, offset, side])

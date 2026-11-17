@@ -28,8 +28,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 60px;
-  padding: 10px 12px 0;
+  height: calc(60px + var(--fs-safe-top));
+  padding: calc(10px + var(--fs-safe-top)) calc(12px + var(--fs-safe-right)) 0
+    calc(12px + var(--fs-safe-left));
   box-sizing: border-box;
   pointer-events: none;
   background: transparent;
@@ -123,13 +124,15 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 16px calc(var(--fs-safe-bottom) + 12px);
+  padding: 12px calc(16px + var(--fs-safe-right)) calc(var(--fs-safe-bottom) + 12px)
+    calc(16px + var(--fs-safe-left));
   pointer-events: none;
   background: transparent;
 }
 
 .dockInner {
-  width: min(calc(var(--message-list-max-width) - 48px), 100%);
+  width: 100%;
+  max-width: calc(var(--message-list-max-width) - 48px);
   pointer-events: auto;
 }
 
@@ -138,7 +141,7 @@
 }
 
 :global([data-ime-compact]) .dock {
-  padding: 0 12px 4px;
+  padding: 0 calc(12px + var(--fs-safe-right)) 4px calc(12px + var(--fs-safe-left));
 }
 
 .caveat {
@@ -147,7 +150,8 @@
 
 @media not all and (min-width: 768px) {
   .dock {
-    padding: 12px 16px calc(var(--fs-safe-bottom) + 12px);
+    padding: 12px calc(16px + var(--fs-safe-right)) calc(var(--fs-safe-bottom) + 12px)
+      calc(16px + var(--fs-safe-left));
   }
 
   .dockInner {

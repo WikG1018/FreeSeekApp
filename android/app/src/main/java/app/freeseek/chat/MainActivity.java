@@ -23,6 +23,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DiagnosticSharePlugin.class);
         // 插件先登记，super 创建 Bridge 后再安装观察器；无 WebView 时保留框架降级页。
         super.onCreate(savedInstanceState);
+        if (getBridge() != null) new WindowEdges(getWindow(), getBridge()).install();
         if (getBridge() != null) { getBridge().setWebViewClient(new BridgeWebViewClient(getBridge()) {
             @Override
             public void onReceivedError(android.webkit.WebView view, android.webkit.WebResourceRequest request,

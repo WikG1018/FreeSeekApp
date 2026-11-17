@@ -1,29 +1,16 @@
 import clsx from 'clsx'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
-import { App as CapacitorApp } from '@capacitor/app'
 import logo from '../../assets/logo.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
-  IconCheckOutline16,
-  IconChevronLeftOutline16,
   IconChevronRightOutline14,
-  IconLinkOutline16,
-  IconDarkOutline16,
-  IconDataOutline16,
   IconDownloadOutline16,
-  IconEyeOffOutline16,
-  IconEyeOutline16,
-  IconFollowsystemOutline16,
-  IconGlobeLanguageOutline14,
+  IconShareOutline16,
+  IconFileOutline16,
   IconRefreshOutline16,
-  IconInfoOutline16,
-  IconLightOutline16,
-  IconPlayMediaOutline16,
-  IconTextSizeOutline16,
   IconTrashOutline16,
   IconUploadOutline14,
-  IconUserOutline16,
 } from '../base/icons.js'
 import {
   BackupError,
@@ -32,577 +19,96 @@ import {
   importHistory,
 } from '../../services/chat/backup.js'
 import { useChatStore } from '../../services/chat/store.js'
-import {
-  setApiKey,
-  setFontScale,
-  setLocale,
-  setThemePreference,
-  setTtsVoice,
-  setShowUsage,
-  setShowModelSwitcher,
-  useSettings,
-  type ThemePreference,
-} from '../../services/settings.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
-import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
+import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
-import { useDialogFocus } from '../base/useDialogFocus.js'
 import { saveBackup } from '../../services/saveBackup.js'
 import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { saveNativeDiagnostics } from '../../services/diagnostics/native.js'
 import { shareDiagnostics } from '../../services/shareDiagnostics.js'
-import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
-import { collectUsage, todayKey } from '../../services/usage.js'
-import { openExternal } from '../../utils/openExternal.js'
 import { checkForUpdate, downloadUpdate, useUpdate } from '../../services/update.js'
 import { runInstall, UpdateDialog, useUpdateStatusText } from '../update/Update.js'
-import {
-  closeSettings,
-  finishCloseSettings,
-  useSettingsDialog,
-  type SettingsPageId,
-} from './settingsDialogState.js'
+import { useSettingsDialog } from './settingsDialogState.js'
 import styles from './Settings.module.css'
-import { ConnectionSelector, ProviderSettingsPage } from './ProviderSettings.js'
-import { modelLabel, useProviders } from '../../services/providers.js'
-import { PersonaLibrary } from '../personas/PersonaManager.js'
+import { ProviderSettingsPage } from './ProviderSettings.js'
+import { Section, Row } from './SettingsRows.js'
+import { AccountPage } from './AccountPage.js'
+import { AppearancePage, ChatPreferencesPage } from './PreferencesPages.js'
+import { SettingsShell } from './SettingsShell.js'
+import type { Persona } from '../../services/personas.js'
+import { PersonaEditor, PersonaLibrary } from '../personas/PersonaLibrary.js'
 
 /** 构建期注入的应用版本（rspack HtmlRspackPlugin 的 application-version meta） */
 const APP_VERSION =
   document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? '—'
 
-/** DeepSeek 开放平台：充值与创建 API Key（应用内浏览器打开，需登录官方账号） */
-const TOPUP_URL = 'https://platform.deepseek.com/top_up'
-const BALANCE_URL = 'https://platform.deepseek.com/usage'
-const API_KEYS_URL = 'https://platform.deepseek.com/api_keys'
-
-const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
-  home: 'settings',
-  account: 'settingsApiService',
-  providers: 'providerAdvanced',
-  personas: 'personaManagerTitle',
-  appearance: 'avatarMenuSettingsDialogThemeItemLabel',
-  font: 'settingsFontSize',
-  language: 'settingsLocalePreference',
-  voice: 'settingsTtsVoice',
-  data: 'settingsDataManage',
-  usage: 'usageTitle',
-  usagePricing: 'usagePricingTitle',
-  about: 'settingsAboutApp',
-}
-
-/**
- * 设置：一级目录 + 二级页面（路由栈）。
- * 移动端为全屏页面、桌面端为居中卡片；所有行共用一套行组件与触控尺寸。
- */
-export const SettingsDialog = () => {
-  const open = useSettingsDialog((state) => state.open)
-  return open ? <SettingsRoot /> : null
-}
+/** 目录、返回及跨屏布局由 SettingsShell 管理，导入中的文件随弹窗保留。 */
+export const SettingsDialog = () =>
+  useSettingsDialog((state) => state.open) ? <SettingsRoot /> : null
 
 const SettingsRoot = () => {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  useDialogFocus(dialogRef, () => !hasOpenModal())
-  const t = useTranslate()
-  const closing = useSettingsDialog((state) => state.closing)
-  const [stack, setStack] = useState<SettingsPageId[]>(() => {
-    const initial = useSettingsDialog.getState().page
-    return initial === 'home' ? ['home'] : ['home', initial]
-  })
-  const page = stack[stack.length - 1] ?? 'home'
-  const push = (next: SettingsPageId) => setStack((previous) => [...previous, next])
-  const back = () => {
-    if (stack.length > 1) {
-      setStack((previous) => previous.slice(0, -1))
-    } else {
-      closeSettings()
-    }
-  }
-
-  // Android 返回键：确认弹窗 → 上一级设置页 → 关闭设置；由设置页自身处理，避免退出 App
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) {
-      return
-    }
-    const subscription = CapacitorApp.addListener('backButton', () => {
-      if (hasOpenModal() && closeTopModal()) {
-        return
-      }
-      if (stack.length > 1) {
-        setStack((previous) => previous.slice(0, -1))
-        return
-      }
-      closeSettings()
-    })
-    return () => {
-      void subscription.then((handle) => handle.remove())
-    }
-  }, [stack.length])
-
-  // 跨页面共享的表单与数据操作状态，切换二级页面不丢失输入
-  const apiKeyEditor = useApiKeyEditor()
-  const historyImport = useHistoryImport()
-  const historyDelete = useHistoryDelete()
-  const replacingHistory = useChatStore((state) => state.importingHistory)
-  const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
-
-  // Esc 关闭设置页；确认弹窗打开时交给弹窗自己处理
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !hasOpenModal()) {
-        closeSettings()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [])
-
+  const [guideOpen, setGuideOpen] = useState(true)
+  const [persona, setPersona] = useState<Persona>({ id: '', name: '', prompt: '' })
+  const historyImport = useHistoryImport(),
+    historyDelete = useHistoryDelete()
+  const replacing = useChatStore((state) => state.importingHistory)
   return (
     <>
-      <div className={styles.scrim} aria-hidden="true" />
-      <div
-        className={clsx(styles.page, closing && styles.pageClosing)}
-        role="dialog"
-        ref={dialogRef}
-        tabIndex={-1}
-        aria-modal="true"
-        aria-label={t(PAGE_TITLES[page])}
-        onAnimationEnd={(event) => {
-          // 退出动画播完再卸载；pageOut/pageIn 都冒泡自 .page 自身，只认退出
-          if (closing && event.target === event.currentTarget) {
-            finishCloseSettings()
-          }
-        }}
-      >
-        <div className={styles.header}>
-          <button
-            type="button"
-            className={styles.back}
-            aria-label={stack.length > 1 ? t('back') : t('close')}
-            onClick={back}
-          >
-            <IconChevronLeftOutline16 />
-          </button>
-          <div className={styles.title}>{t(PAGE_TITLES[page])}</div>
-          <span className={styles.backPlaceholder} />
-        </div>
-        <div className={styles.scroll}>
-          <div key={page} className={styles.pageBody}>
-            {page === 'home' ? <HomePage push={push} /> : null}
-            {page === 'account' ? <AccountPage editor={apiKeyEditor} push={push} /> : null}
-            {page === 'providers' ? <ProviderSettingsPage /> : null}
-            {page === 'personas' ? <PersonaLibrary /> : null}
-            {page === 'appearance' ? <AppearancePage /> : null}
-            {page === 'font' ? <FontPage /> : null}
-            {page === 'language' ? <LanguagePage /> : null}
-            {page === 'voice' ? <VoicePage /> : null}
-            {page === 'data' ? (
-              <DataPage
-                historyImport={historyImport}
-                historyDelete={historyDelete}
-                disabled={historyBusy}
-              />
-            ) : null}
-            {page === 'usage' ? <UsageContent onOpenPricing={() => push('usagePricing')} /> : null}
-            {page === 'usagePricing' ? <PricingForm /> : null}
-            {page === 'about' ? <AboutPage /> : null}
-          </div>
-        </div>
-      </div>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
-      {historyImport.result !== null ? <ImportDone historyImport={historyImport} /> : null}
-      {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
-    </>
-  )
-}
-
-/** 设置首页：导航与对话显示偏好。 */
-const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
-  const t = useTranslate()
-  const apiKey = useSettings((state) => state.apiKey)
-  const theme = useSettings((state) => state.themePreference)
-  const locale = useSettings((state) => state.locale)
-  const ttsVoice = useSettings((state) => state.ttsVoice)
-  const fontScale = useSettings((state) => state.fontScale)
-  const showUsage = useSettings((state) => state.showUsage)
-  const showModelSwitcher = useSettings((state) => state.showModelSwitcher)
-  const selection = useProviders((state) => state.selection)
-  const sessionCount = useChatStore((state) => state.sessions.length)
-  const fontLabel =
-    fontScale < 0.95
-      ? t('fontSmall')
-      : fontScale < 1.05
-        ? t('fontDefault')
-        : fontScale < 1.15
-          ? t('fontLarge')
-          : t('fontExtraLarge')
-  // 设置首页直接显示今日用量摘要，证明统计确实生效
-  const [usageValue, setUsageValue] = useState<string | undefined>()
-  useEffect(() => {
-    let alive = true
-    collectUsage()
-      .then((stats) => {
-        if (!alive) {
-          return
-        }
-        const today = stats.days.find((day) => day.date === todayKey())
-        if (!today || today.requests === 0) {
-          return
-        }
-        const tokens = today.cacheReadTokens + today.cacheMissTokens + today.outputTokens
-        const cost =
-          today.costCny >= 0.01 ? `¥${today.costCny.toFixed(2)}` : `¥${today.costCny.toFixed(4)}`
-        setUsageValue(`${today.unpricedRequests ? '' : `${cost} · `}${tokens.toLocaleString()} tok`)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [])
-  const themeLabel =
-    theme === 'light' ? t('themeLight') : theme === 'dark' ? t('themeDark') : t('themeSystem')
-  const localeLabel = locale === 'zh-CN' ? t('settingsLocaleZhCN') : t('settingsLocaleEnUS')
-  const voiceLabel = ttsVoice === 'stella' ? t('settingsTtsVoiceStella') : t('settingsTtsVoiceTide')
-  return (
-    <>
-      <Section title={t('settingsSectionAccount')}>
-        <Row
-          icon={<IconUserOutline16 />}
-          label={t('settingsApiService')}
-          value={
-            selection.providerId !== 'deepseek' || apiKey
-              ? modelLabel(selection.model)
-              : t('settingsApiKeyMissing')
-          }
-          onClick={() => push('account')}
-        />
-      </Section>
-      <Section title={t('settingsSectionApp')}>
-        <Row
-          icon={<IconLightOutline16 />}
-          label={t('avatarMenuSettingsDialogThemeItemLabel')}
-          value={themeLabel}
-          onClick={() => push('appearance')}
-        />
-        <Row
-          icon={<IconTextSizeOutline16 />}
-          label={t('settingsFontSize')}
-          value={fontLabel}
-          onClick={() => push('font')}
-        />
-        <Row
-          icon={<IconGlobeLanguageOutline14 />}
-          label={t('settingsLocalePreference')}
-          value={localeLabel}
-          onClick={() => push('language')}
-        />
-        <Row
-          icon={<IconPlayMediaOutline16 />}
-          label={t('settingsTtsVoice')}
-          value={voiceLabel}
-          onClick={() => push('voice')}
-        />
-        <button
-          type="button"
-          role="switch"
-          aria-checked={showModelSwitcher}
-          className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
-          onClick={() => setShowModelSwitcher(!showModelSwitcher)}
-        >
-          <span className={styles.rowLabel}>{t('providerShowSwitcher')}</span>
-          <span className={styles.toggleTrack} aria-hidden="true">
-            <span className={styles.toggleThumb} />
-          </span>
-        </button>
-        <Row
-          icon={<IconUserOutline16 />}
-          label={t('personaManage')}
-          onClick={() => push('personas')}
-        />
-      </Section>
-      <Section title={t('settingsSectionUsage')}>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={showUsage}
-          className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
-          onClick={() => setShowUsage(!showUsage)}
-        >
-          <span className={styles.rowLabel}>{t('settingsShowUsage')}</span>
-          <span className={styles.toggleTrack} aria-hidden="true">
-            <span className={styles.toggleThumb} />
-          </span>
-        </button>
-        <Row
-          icon={<IconDataOutline16 />}
-          label={t('usageTitle')}
-          value={usageValue}
-          onClick={() => push('usage')}
-        />
-      </Section>
-      <Section title={t('settingsSectionData')}>
-        <Row
-          icon={<IconDataOutline16 />}
-          label={t('settingsDataManage')}
-          value={sessionCount > 0 ? t('settingsSessionsCount', { count: sessionCount }) : undefined}
-          onClick={() => push('data')}
-        />
-      </Section>
-      <Section title={t('settingsSectionAbout')}>
-        <Row
-          icon={<IconInfoOutline16 />}
-          label={t('settingsAboutApp')}
-          value={APP_VERSION}
-          onClick={() => push('about')}
-        />
-      </Section>
-    </>
-  )
-}
-
-/** 二级页：API 服务 */
-const AccountPage = ({
-  editor,
-  push,
-}: {
-  editor: ReturnType<typeof useApiKeyEditor>
-  push: (page: SettingsPageId) => void
-}) => {
-  const t = useTranslate()
-  const { apiKey, editing, setEditing, form, showInput } = editor
-  const [showKey, setShowKey] = useState(false)
-  const [clearOpen, setClearOpen] = useState(false)
-  return (
-    <>
-      <Section title={t('providerDefaultModel')}>
-        <div className={styles.accountBlock}>
-          <ConnectionSelector />
-        </div>
-      </Section>
-      <Section>
-        <Row label={t('providerAdvanced')} onClick={() => push('providers')} />
-      </Section>
-      <Section title={t('providerOfficial')}>
-        <div className={styles.accountBlock}>
-          <div className={styles.accountStatus}>
-            <span className={styles.accountStatusLabel}>{t('settingsApiKey')}</span>
-            <span className={clsx(styles.accountStatusValue, apiKey && styles.accountStatusOk)}>
-              {apiKey && !editing ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
-            </span>
-          </div>
-          {apiKey && !editing ? (
-            <div className={styles.maskRow}>
-              <span className={styles.keyMask}>{maskKey(apiKey)}</span>
-              <button type="button" className={styles.textButton} onClick={() => setEditing(true)}>
-                {t('changeApiKey')}
-              </button>
-            </div>
-          ) : null}
-          {showInput ? (
-            <div className={styles.apiKeyEditor}>
-              <div className={styles.apiKeyField}>
-                <input
-                  className={styles.apiKeyInput}
-                  type={showKey ? 'text' : 'password'}
-                  placeholder={t('apiKeyPlaceholder')}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={form.value}
-                  onChange={(event) => form.setValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                      void form.submit()
-                    }
+      <SettingsShell>
+        {(page, open, finish) => {
+          switch (page) {
+            case 'account':
+              return (
+                <AccountPage
+                  guideOpen={guideOpen}
+                  toggleGuide={() => setGuideOpen((value) => !value)}
+                  openAdvanced={() => open('providers')}
+                />
+              )
+            case 'providers':
+              return <ProviderSettingsPage />
+            case 'chat':
+              return <ChatPreferencesPage />
+            case 'personas':
+              return (
+                <PersonaLibrary
+                  onEdit={(value) => {
+                    setPersona(value)
+                    open('personaEdit')
                   }}
                 />
-                <button
-                  type="button"
-                  className={styles.eyeButton}
-                  aria-label={showKey ? t('settingsApiKeyHide') : t('settingsApiKeyShow')}
-                  onClick={() => setShowKey((value) => !value)}
-                >
-                  {showKey ? <IconEyeOffOutline16 /> : <IconEyeOutline16 />}
-                </button>
-              </div>
-              <button
-                type="button"
-                className={styles.confirm}
-                disabled={form.verifying || !form.value.trim()}
-                onClick={() => void form.submit()}
-              >
-                {form.verifying ? t('apiKeyVerifying') : t('confirm')}
-              </button>
-            </div>
-          ) : null}
-          {showInput && form.error ? <div className={styles.error}>{form.error}</div> : null}
-          <div className={styles.hint}>{t('settingsApiKeyHint')}</div>
-        </div>
-      </Section>
-      {apiKey && !editing ? (
-        <Section>
-          <Row
-            icon={<IconTrashOutline16 />}
-            label={t('settingsApiKeyClear')}
-            danger
-            onClick={() => setClearOpen(true)}
-          />
-        </Section>
-      ) : null}
-      {/* 直达链接只在顶部教学卡片里给一次，这里不再重复 */}
-      <Section title={t('settingsApiService')}>
-        <Row label={t('settingsApiBillingLabel')} value={t('settingsApiBillingValue')} />
-      </Section>
-      <details className={styles.tutorialDisclosure}>
-        <summary>{t('settingsApiTutorialTitle')}</summary>
-        <ApiTutorial />
-      </details>
-      {clearOpen ? (
-        <Modal
-          title={t('settingsApiKeyClear')}
-          centered
-          onClose={() => setClearOpen(false)}
-          footer={
-            <>
-              <Button variant="outlined" autoFocus onClick={() => setClearOpen(false)}>
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  setApiKey(null)
-                  setEditing(false)
-                  setClearOpen(false)
-                  showToast({ key: 'apiKeyCleared' })
-                }}
-              >
-                {t('delete')}
-              </Button>
-            </>
+              )
+            case 'personaEdit':
+              return <PersonaEditor persona={persona} onDone={finish} />
+            case 'appearance':
+              return <AppearancePage />
+            case 'data':
+              return (
+                <DataPage
+                  historyImport={historyImport}
+                  historyDelete={historyDelete}
+                  disabled={replacing || historyImport.busy || historyDelete.busy}
+                />
+              )
+            case 'usage':
+              return <UsageContent onOpenPricing={() => open('usagePricing')} />
+            case 'usagePricing':
+              return <PricingForm />
+            case 'about':
+              return <AboutPage openInfo={() => open('aboutInfo')} />
+            case 'aboutInfo':
+              return <AboutInfoPage />
+            default:
+              return null
           }
-        >
-          {t('settingsApiKeyClearConfirm')}
-        </Modal>
-      ) : null}
-    </>
-  )
-}
-
-/** API Key 掩码：保留首尾便于辨认 */
-const maskKey = (key: string) =>
-  key.length <= 10 ? '••••••' : `${key.slice(0, 4)}••••${key.slice(-4)}`
-
-const themeOptions: { value: ThemePreference; label: TranslationKey; icon: ReactNode }[] = [
-  {
-    value: 'light',
-    label: 'avatarMenuSettingsDialogThemeSelectLightOption',
-    icon: <IconLightOutline16 />,
-  },
-  {
-    value: 'dark',
-    label: 'avatarMenuSettingsDialogThemeSelectDarkOption',
-    icon: <IconDarkOutline16 />,
-  },
-  {
-    value: 'system',
-    label: 'avatarMenuSettingsDialogThemeSelectSystemOption',
-    icon: <IconFollowsystemOutline16 />,
-  },
-]
-
-/** 二级页：外观 */
-const AppearancePage = () => {
-  const t = useTranslate()
-  const themePreference = useSettings((state) => state.themePreference)
-  return (
-    <Section>
-      {themeOptions.map((option) => (
-        <ChoiceRow
-          key={option.value}
-          icon={option.icon}
-          label={t(option.label)}
-          selected={themePreference === option.value}
-          onSelect={() => setThemePreference(option.value)}
-        />
-      ))}
-    </Section>
-  )
-}
-
-/** 二级页：字体大小 */
-const fontOptions: { value: number; label: TranslationKey }[] = [
-  { value: 0.9, label: 'fontSmall' },
-  { value: 1, label: 'fontDefault' },
-  { value: 1.1, label: 'fontLarge' },
-  { value: 1.2, label: 'fontExtraLarge' },
-]
-
-const FontPage = () => {
-  const t = useTranslate()
-  const fontScale = useSettings((state) => state.fontScale)
-  return (
-    <>
-      <Section>
-        {fontOptions.map((option) => (
-          <ChoiceRow
-            key={option.value}
-            icon={<IconTextSizeOutline16 />}
-            label={t(option.label)}
-            selected={Math.abs(fontScale - option.value) < 0.001}
-            onSelect={() => setFontScale(option.value)}
-          />
-        ))}
-      </Section>
-      <div className={styles.fontPreview}>{t('settingsFontPreview')}</div>
-      <div className={styles.hint}>{t('settingsFontSizeHint')}</div>
-      <div className={styles.hint}>{t('settingsFontAttribution')}</div>
-    </>
-  )
-}
-
-/** 二级页：语言 */
-const LanguagePage = () => {
-  const t = useTranslate()
-  const locale = useSettings((state) => state.locale)
-  return (
-    <Section>
-      <ChoiceRow
-        icon={<IconGlobeLanguageOutline14 />}
-        label={t('settingsLocaleZhCN')}
-        selected={locale === 'zh-CN'}
-        onSelect={() => setLocale('zh-CN')}
-      />
-      <ChoiceRow
-        icon={<IconGlobeLanguageOutline14 />}
-        label={t('settingsLocaleEnUS')}
-        selected={locale === 'en-US'}
-        onSelect={() => setLocale('en-US')}
-      />
-    </Section>
-  )
-}
-
-/** 二级页：语音 */
-const VoicePage = () => {
-  const t = useTranslate()
-  const ttsVoice = useSettings((state) => state.ttsVoice)
-  return (
-    <>
-      <Section>
-        <ChoiceRow
-          label={t('settingsTtsVoiceStella')}
-          selected={ttsVoice === 'stella'}
-          onSelect={() => setTtsVoice('stella')}
-        />
-        <ChoiceRow
-          label={t('settingsTtsVoiceTide')}
-          selected={ttsVoice === 'tide'}
-          onSelect={() => setTtsVoice('tide')}
-        />
-      </Section>
-      <div className={styles.hint}>{t('settingsVoiceHint')}</div>
+        }}
+      </SettingsShell>
+      {historyImport.file && <ImportConfirm historyImport={historyImport} />}
+      {historyImport.result !== null && <ImportDone historyImport={historyImport} />}
+      {historyDelete.opened && <DeleteAllConfirm historyDelete={historyDelete} />}
     </>
   )
 }
@@ -620,74 +126,30 @@ const DataPage = ({
   const t = useTranslate()
   return (
     <>
-      {/* 官方 App 导出 → 本应用导入 的操作指引 */}
-      <div className={styles.officialTip}>
-        <div className={styles.officialTipTitle}>{t('officialExportTitle')}</div>
+      <Section title={t('settingsBackupGroup')}>
+        <ExportHistory disabled={disabled} />
+        <ImportHistory historyImport={historyImport} disabled={disabled} />
+      </Section>
+      <details className={styles.officialTip}>
+        <summary className={styles.officialTipTitle}>{t('officialExportTitle')}</summary>
         <ol className={styles.officialTipSteps}>
           <li>{t('officialExportStep1')}</li>
           <li>{t('officialExportStep2')}</li>
           <li>{t('officialExportStep3')}</li>
           <li>{t('officialExportStep4')}</li>
         </ol>
-        <div className={styles.officialTipHint}>{t('officialExportHint')}</div>
-      </div>
-      <Section>
-        <ImportHistory historyImport={historyImport} disabled={disabled} />
-        <ExportHistory disabled={disabled} />
-      </Section>
-      <Section title={t('deleteAllSessions')}>
+        <p className={styles.officialTipHint}>{t('officialExportHint')}</p>
+      </details>
+      <Section title={t('settingsRemoveGroup')}>
         <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
       </Section>
     </>
   )
 }
 
-/** API Key 教学：四步走 + 两个应用内直达入口 */
-const ApiTutorial = () => {
-  const t = useTranslate()
-  const steps = [1, 2, 3, 4].map((index) => t(`settingsApiStep${index}` as TranslationKey))
-  return (
-    <div className={styles.tutorial}>
-      <div className={styles.tutorialTitle}>{t('settingsApiTutorialTitle')}</div>
-      <ol className={styles.tutorialSteps}>
-        {steps.map((step, index) => (
-          <li key={index} className={styles.tutorialStep}>
-            <span className={styles.tutorialBadge}>{index + 1}</span>
-            <span>{step}</span>
-          </li>
-        ))}
-      </ol>
-      <div className={styles.tutorialActions}>
-        {[
-          { label: t('settingsApiOpenKeys'), url: API_KEYS_URL },
-          { label: t('settingsApiOpenTopup'), url: TOPUP_URL },
-          { label: t('settingsApiOpenBalance'), url: BALANCE_URL },
-        ].map((item) => (
-          <button
-            key={item.url}
-            type="button"
-            className={styles.tutorialButton}
-            onClick={() => void openExternal(item.url)}
-          >
-            <span className={styles.tutorialButtonIcon}>
-              <IconLinkOutline16 />
-            </span>
-            <span className={styles.tutorialButtonLabel}>{item.label}</span>
-            <span className={styles.tutorialButtonChevron}>
-              <IconChevronRightOutline14 />
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</div>
-    </div>
-  )
-}
-
 /** 二级页：关于（完全本地，不跳转私有仓库） */
-const AboutPage = () => {
+const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
   const t = useTranslate()
-  const [licenseOpen, setLicenseOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
   const exportDiagnostics = async (share = true) => {
@@ -753,7 +215,6 @@ const AboutPage = () => {
         </div>
       </div>
       <Section title={t('updateSectionTitle')}>
-        <Row label={t('updateCurrentVersion')} value={`v${APP_VERSION}`} />
         <button
           type="button"
           className={styles.row}
@@ -798,7 +259,7 @@ const AboutPage = () => {
           <span className={styles.rowValue}>
             {diagnosticsBusy ? t('diagnosticsPreparing') : null}
           </span>
-          <IconDownloadOutline16 />
+          <IconShareOutline16 />
         </button>
         <button
           type="button"
@@ -811,114 +272,33 @@ const AboutPage = () => {
         </button>
         <p className={styles.paragraph}>{t('diagnosticsPrivacy')}</p>
       </Section>
+      <Section>
+        <Row label={t('settingsPrivacyLicenses')} onClick={openInfo} target="aboutInfo" />
+      </Section>
+      {updateOpen && <UpdateDialog onClose={() => setUpdateOpen(false)} />}
+    </>
+  )
+}
+
+const AboutInfoPage = () => {
+  const t = useTranslate()
+  return (
+    <>
       <Section title={t('settingsPrivacyTitle')}>
         <p className={styles.paragraph}>{t('settingsPrivacyText')}</p>
       </Section>
       <Section title={t('settingsUpstreamTitle')}>
         <p className={styles.paragraph}>{t('settingsUpstreamText')}</p>
       </Section>
-      <Section title={t('settingsFontSize')}>
+      <Section title={t('settingsFontCredits')}>
         <p className={styles.paragraph}>{t('settingsFontAttribution')}</p>
       </Section>
       <Section title={t('settingsLicense')}>
-        <Row label={t('settingsLicenseTextTitle')} onClick={() => setLicenseOpen(true)} />
+        <pre className={styles.licenseText}>{LICENSE_TEXT}</pre>
       </Section>
-      {updateOpen ? <UpdateDialog onClose={() => setUpdateOpen(false)} /> : null}
-      {licenseOpen ? (
-        <Modal
-          title={t('settingsLicenseTextTitle')}
-          closable
-          centered
-          onClose={() => setLicenseOpen(false)}
-        >
-          <pre className={styles.licenseText}>{LICENSE_TEXT}</pre>
-        </Modal>
-      ) : null}
-      <div className={styles.footer}>FreeSeek</div>
     </>
   )
 }
-
-/** 分组：可选标题 + 卡片 */
-const Section = ({ title, children }: { title?: string; children: ReactNode }) => (
-  <section className={styles.section}>
-    {title ? <div className={styles.sectionTitle}>{title}</div> : null}
-    <div className={styles.card}>{children}</div>
-  </section>
-)
-
-/** 导航行：图标 + 标题 + 右侧值/箭头 */
-const Row = ({
-  icon,
-  label,
-  value,
-  href,
-  onClick,
-  danger,
-}: {
-  icon?: ReactNode
-  label: string
-  value?: string
-  href?: string
-  onClick?: () => void
-  danger?: boolean
-}) => {
-  const content = (
-    <>
-      {icon ? <span className={styles.rowIcon}>{icon}</span> : null}
-      <span className={clsx(styles.rowLabel, danger && styles.rowDanger)}>{label}</span>
-      {value !== undefined ? <span className={styles.rowValue}>{value}</span> : null}
-      <span className={styles.rowChevron}>
-        <IconChevronRightOutline14 />
-      </span>
-    </>
-  )
-  if (href) {
-    return (
-      <a
-        className={clsx(styles.row, styles.rowInteractive)}
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-      >
-        {content}
-      </a>
-    )
-  }
-  if (onClick) {
-    return (
-      <button type="button" className={clsx(styles.row, styles.rowInteractive)} onClick={onClick}>
-        {content}
-      </button>
-    )
-  }
-  return <div className={styles.row}>{content}</div>
-}
-
-/** 选项行：单选项，右侧对勾 */
-const ChoiceRow = ({
-  icon,
-  label,
-  selected,
-  onSelect,
-}: {
-  icon?: ReactNode
-  label: string
-  selected: boolean
-  onSelect: () => void
-}) => (
-  <button
-    type="button"
-    role="radio"
-    aria-checked={selected}
-    className={clsx(styles.row, styles.rowInteractive, selected && styles.choiceActive)}
-    onClick={onSelect}
-  >
-    {icon ? <span className={styles.rowIcon}>{icon}</span> : null}
-    <span className={styles.rowLabel}>{label}</span>
-    <span className={styles.choiceCheck}>{selected ? <IconCheckOutline16 /> : null}</span>
-  </button>
-)
 
 /** 删除确认：危险操作使用居中弹窗，而不是底部 Sheet */
 const DeleteAllConfirm = ({
@@ -931,6 +311,7 @@ const DeleteAllConfirm = ({
     <Modal
       title={t('deleteAllSessionsModalTitle')}
       centered
+      dismissible={!historyDelete.busy}
       onClose={historyDelete.cancel}
       footer={
         <div className={styles.deleteActions} aria-busy={historyDelete.busy}>
@@ -1044,7 +425,10 @@ const ImportConfirm = ({
           </>
         }
       >
-        <div className={styles.importFile}>📦 {fileName}</div>
+        <div className={styles.importFile}>
+          <IconFileOutline16 />
+          <span>{fileName}</span>
+        </div>
         <div className={styles.importWarn}>
           <div className={styles.importWarnTitle}>{t('historyImportWarnTitle')}</div>
           <div className={styles.importWarnBody}>
@@ -1156,7 +540,6 @@ const ImportConfirm = ({
       ) : null}
       {errorKey ? (
         <div className={styles.importErrorBox}>
-          <div className={styles.importErrorTitle}>{t('historyImportFailedTitle')}</div>
           <div className={styles.importErrorBody}>{t(errorKey)}</div>
           <div className={styles.importErrorHint}>{t('historyImportFailedHint')}</div>
         </div>
@@ -1292,6 +675,7 @@ const ImportHistory = ({
       <Row
         icon={<IconUploadOutline14 />}
         label={t('historyImport')}
+        disabled={disabled}
         onClick={() => {
           if (!disabled) {
             inputRef.current?.click()
@@ -1348,6 +732,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
       <Row
         icon={<IconDownloadOutline16 />}
         label={t('exportAllLabel')}
+        disabled={disabled || busy || empty}
         onClick={() => void onExport()}
       />
       {status ? (

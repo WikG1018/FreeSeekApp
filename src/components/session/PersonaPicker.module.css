@@ -6,7 +6,7 @@
   align-items: center;
   gap: 8px;
   max-width: 100%;
-  height: 36px;
+  height: auto;
   padding: 0 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
@@ -39,7 +39,7 @@
 
 .triggerLabel {
   flex-shrink: 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 .triggerValue {
@@ -53,7 +53,7 @@
 .triggerChevron {
   display: flex;
   flex-shrink: 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 选项栏 */
@@ -118,7 +118,7 @@
   overflow: hidden;
   font-size: 12px;
   line-height: 17px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
   white-space: nowrap;
   text-overflow: ellipsis;
 }

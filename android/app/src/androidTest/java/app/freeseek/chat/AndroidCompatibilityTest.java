@@ -47,17 +47,25 @@ public class AndroidCompatibilityTest {
             evaluate(activity, "window.__invalidSave=null;Capacitor.nativePromise('Backup','create',{fileName:'../bad.zip',size:-1}).then(function(){window.__invalidSave=false;},function(){window.__invalidSave=true;});");
             awaitTrue(activity, "window.__invalidSave===true");
             assertEquals("true",evaluate(activity,"document.documentElement.scrollWidth<=innerWidth+1"));
-            assertEquals("true", evaluate(activity, "document.querySelector('meta[name=viewport]').content.indexOf('viewport-fit=cover')===-1"));
-            // 新旧 WebView 都由原生留出系统栏；页面加载后不能切换到状态栏下面。
+            awaitTrue(activity, "document.documentElement.style.getPropertyValue('--fs-native-top')!==''");
+            // 画布包含状态栏和导航栏。可点击控件使用同一份真实边距。
+            final int[] expected = new int[2];
             instrumentation.runOnMainSync(() -> {
                 var decor = activity.getWindow().getDecorView();
                 var insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor);
                 assertNotNull("Window insets must be available", insets);
                 var safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
-                int[] position = new int[2]; activity.getBridge().getWebView().getLocationOnScreen(position);
-                assertTrue("WebView overlaps the status bar", position[1] >= safe.top);
-                assertTrue("WebView overlaps the display cutout", position[0] >= safe.left);
+                var webView = activity.getBridge().getWebView();
+                int[] origin = new int[2], canvas = new int[2];
+                decor.getLocationOnScreen(origin); webView.getLocationOnScreen(canvas);
+                assertEquals("Canvas starts at top of window", origin[1], canvas[1]);
+                assertEquals("Canvas ends at bottom of window", decor.getHeight(), webView.getHeight());
+                float density = webView.getResources().getDisplayMetrics().density;
+                expected[0] = Math.round(safe.top / density);
+                expected[1] = Math.round(safe.bottom / density);
             });
+            awaitTrue(activity, "Math.abs(parseFloat(document.documentElement.style.getPropertyValue('--fs-native-top'))-" + expected[0] + ")<=1 && Math.abs(parseFloat(document.documentElement.style.getPropertyValue('--fs-native-bottom'))-" + expected[1] + ")<=1");
+            assertEquals("true", evaluate(activity, "(function(){var b=document.querySelector('[aria-controls=mobile-sider]'),t=document.querySelector('textarea');return (!b||b.getBoundingClientRect().top>=" + expected[0] + "-1)&&(!t||t.getBoundingClientRect().bottom<=innerHeight-" + expected[1] + "+1)})()"));
         } finally { activity.runOnUiThread(activity::finish); }
     }
 }
