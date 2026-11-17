@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 4px 0;
 }
 
@@ -15,7 +15,7 @@
 }
 
 .donateQr {
-  width: min(240px, 100%);
+  width: min(220px, 100%);
   height: auto;
   border-radius: 14px;
   border: 1px solid var(--dsw-alias-border-l2);
@@ -29,4 +29,136 @@
   line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
   text-align: center;
+}
+
+/* 支付方式：二选一 */
+.methodRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.method,
+.methodActive {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  font: inherit;
+  font-size: 14px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  transition:
+    border-color var(--fs-duration-fast) var(--fs-ease-out),
+    background-color var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:active {
+    transform: scale(0.98);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+[data-ds-dark-theme] .method,
+[data-ds-dark-theme] .methodActive {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.methodActive {
+  border-color: var(--fs-brand);
+  background: var(--fs-brand-soft);
+  color: var(--fs-brand);
+  font-weight: 500;
+}
+
+.methodCheck {
+  display: flex;
+  color: var(--fs-brand);
+}
+
+/* 主操作：一键存图并跳转 */
+.payButton {
+  width: 100%;
+  height: 46px;
+  border: none;
+  border-radius: 12px;
+  background: var(--fs-brand);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    opacity var(--fs-duration-fast) var(--fs-ease-out),
+    transform var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* 分步结果：存图 / 跳转是否成功 */
+.stepList {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.stepOk,
+.stepPending,
+.stepNext {
+  position: relative;
+  padding-left: 18px;
+
+  &::before {
+    position: absolute;
+    left: 0;
+  }
+}
+
+.stepOk {
+  color: var(--dsw-alias-label-secondary);
+
+  &::before {
+    content: '✓';
+    color: var(--dsw-alias-state-success-primary, #16a34a);
+  }
+}
+
+.stepPending {
+  color: var(--dsw-alias-label-tertiary);
+
+  &::before {
+    content: '·';
+    color: var(--dsw-alias-label-tertiary);
+  }
+}
+
+.stepNext {
+  margin-top: 2px;
+  color: var(--dsw-alias-label-tertiary);
+
+  &::before {
+    content: '→';
+  }
 }

@@ -164,6 +164,18 @@
 - 动画两层：`.donateHeart` heartBeat 1.8s（两连跳节律）持续跑；`.donate donatePlead` 6s 周期在 4%–24% 区间 rotate ±1.6° 撒娇；`.donatePlea` pleaPulse 与撒娇同刻 1.12× 呼吸。文案「请我喝杯奶茶 🧋」（i18n donatePlea）。
 - E2E：check.mjs 35 项——打赏入口存在、几何位于底部按钮上方（donateBottom ≤ usageTop）、三个动画的 computed animationName、弹窗二维码。**教训：桌面流程里不能点「打开边栏」（移动端专属按钮），断言放移动段。**
 
+
+## v1.4.2 三处反馈（2026-11-17）
+
+1. **API 页两套入口**：`ApiTutorial` 与下方「API 服务」Section 各有两个直达 Row → 删掉 Section 里那组，保留教学卡片（上下文更强）。
+2. **打赏自动化**：新增原生 `DonatePlugin`：
+   - `saveImage(base64)`：Android 10+ 用 MediaStore 写入 `Pictures/FreeSeek`（无需权限），低版本才申请 WRITE_EXTERNAL_STORAGE（manifest 里 maxSdkVersion=28）
+   - `openApp(target)`：先按包名 `getLaunchIntentForPackage`，失败再试 scheme（alipays:// / weixin://）
+   - **关键坑**：Android 11+ 包可见性——不加 `<queries>` 时 `getLaunchIntentForPackage` 恒为 null，表现为「跳转永远失败」；已加两个 package 声明。
+   - 前端 `services/donate.ts` 统一封装，网页端退化为新标签页 + 长按保存提示；弹窗内分步显示「存相册/开应用」结果。
+   - 为什么不能「带金额直达转账页」：个人收款码不是商户订单，没有官方深链；商户号才有的 `alipay.trade.wap.pay` 已在 v1.3 被移除。
+3. **人设收起**：新增 `PersonaPicker`（一行触发 + Modal 选项栏，移动端自动成 Sheet），Welcome 删除平铺 chips 与相关 CSS；e2e 同步（motion-check 先开选择器再点管理人设；ui-audit 改为断言选择器存在）。
+
 ## 已知取舍
 
 

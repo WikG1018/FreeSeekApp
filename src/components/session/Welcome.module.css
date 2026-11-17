@@ -45,95 +45,6 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 人设选择：单行横向滚动，超出部分可左右滑，隐藏滚动条 */
-.personaScroll {
-  width: 100%;
-  max-width: 680px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    #000 12px,
-    #000 calc(100% - 12px),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    #000 12px,
-    #000 calc(100% - 12px),
-    transparent 100%
-  );
-  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 40ms both;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-.personaRow {
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: center;
-  gap: 8px;
-  box-sizing: border-box;
-  min-width: max-content;
-  padding: 2px 12px;
-}
-
-.personaChip {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-layer-2);
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  user-select: none;
-  transition:
-    border-color var(--fs-duration-fast) var(--fs-ease-out),
-    background-color var(--fs-duration-fast) var(--fs-ease-out),
-    color var(--fs-duration-fast) var(--fs-ease-out),
-    transform var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:hover {
-    border-color: var(--dsw-alias-border-l3);
-    background: var(--dsw-alias-interactive-bg-hover);
-    color: var(--dsw-alias-label-primary);
-  }
-
-  &:active {
-    transform: scale(0.96);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
-}
-
-.personaChipActive {
-  border-color: rgba(37, 99, 235, 0.45);
-  color: var(--fs-brand);
-  background: var(--fs-brand-soft);
-
-  &:hover {
-    border-color: rgba(37, 99, 235, 0.6);
-    background: rgba(37, 99, 235, 0.12);
-    color: var(--fs-brand);
-  }
-}
-
-.personaManage {
-  border-style: dashed;
-}
-
 /* 继承上下文提示：卡片形态，比胶囊更易读 */
 .inheritCard {
   display: flex;
@@ -267,12 +178,4 @@
     height: 48px;
   }
 
-  .personaScroll {
-    max-width: none;
-  }
-
-  .personaRow {
-    justify-content: flex-start;
-    padding: 2px 4px;
-  }
 }

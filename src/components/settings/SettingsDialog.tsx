@@ -17,7 +17,6 @@ import {
   IconGlobeLanguageOutline14,
   IconInfoOutline16,
   IconLightOutline16,
-  IconLinkOutline16,
   IconPlayMediaOutline16,
   IconTextSizeOutline16,
   IconTrashOutline16,
@@ -385,19 +384,10 @@ const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> })
           />
         </Section>
       ) : null}
+      {/* 直达链接只在顶部教学卡片里给一次，这里不再重复 */}
       <Section title={t('settingsApiService')}>
         <Row label={t('settingsApiModelLabel')} value="deepseek-flash" />
         <Row label={t('settingsApiBillingLabel')} value={t('settingsApiBillingValue')} />
-        <Row
-          icon={<IconLinkOutline16 />}
-          label={t('settingsApiOpenKeys')}
-          onClick={() => void openExternal(API_KEYS_URL)}
-        />
-        <Row
-          icon={<IconLinkOutline16 />}
-          label={t('settingsApiOpenTopup')}
-          onClick={() => void openExternal(TOPUP_URL)}
-        />
       </Section>
       {clearOpen ? (
         <Modal

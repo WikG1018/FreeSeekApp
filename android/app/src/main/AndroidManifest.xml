@@ -40,4 +40,19 @@
       getUserMedia 直接 NotAllowedError（表现为麦克风根本打不开）。
     -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!--
+      打赏：把收款码存进相册。Android 10+ 走 MediaStore 无需权限，
+      低版本才需要写入外部存储；因此标记 maxSdkVersion 以免新系统上索要多余权限。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!--
+      Android 11+ 的包可见性：不加 queries 时 getLaunchIntentForPackage 一律返回 null，
+      打赏里「打开支付宝/微信」就永远失败。
+    -->
+    <queries>
+        <package android:name="com.eg.android.AlipayGphone" />
+        <package android:name="com.tencent.mm" />
+    </queries>
 </manifest>
