@@ -32,7 +32,7 @@ jobs:
         run: pnpm build
 
       - name: Check types and lint
-        run: pnpm type && pnpm lint
+        run: pnpm type && pnpm lint && pnpm test:compat
 
       - name: Install test browser
         run: pnpm exec playwright install --with-deps chromium

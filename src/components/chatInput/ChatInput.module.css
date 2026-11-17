@@ -257,7 +257,7 @@
 @media not all and (min-width: 768px) {
   .wrapper {
     flex-shrink: 0;
-    max-height: calc(var(--app-viewport-height, 100dvh) - 120px);
+    max-height: calc(var(--app-viewport-height, var(--fs-viewport-height)) - 120px);
     /* 手机上内容更密，输入栏取更实的底色，避免正文透上来 */
     background: var(--fs-glass-bg-strong);
   }

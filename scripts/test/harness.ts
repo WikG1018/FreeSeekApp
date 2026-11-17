@@ -1,3 +1,5 @@
+import '../../src/compatibility.js'
+import { createId } from '../../src/utils/id.js'
 import { writeArchive } from '../../src/services/chat/history/zipWriter.js'
 import { toIndexEntry } from '../../src/services/chat/history/toArchive.js'
 import * as personas from '../../src/services/personas.js'
@@ -34,7 +36,7 @@ const assistant = (
   ...patch,
 })
 const session = (patch: Partial<Session> = {}): Session => ({
-  id: crypto.randomUUID(),
+  id: createId(),
   title: 'Regression',
   createdAt: Date.now(),
   updatedAt: Date.now(),

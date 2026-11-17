@@ -1,4 +1,5 @@
-import { Capacitor, registerPlugin } from '@capacitor/core'
+import { Capacitor } from '@capacitor/core'
+import { NativeDiagnostics } from './native.js'
 import {
   readDiagnosticLogs,
   logEvent,
@@ -14,12 +15,6 @@ import { useUpdate } from '../update.js'
 import { API_ORIGIN } from '../api/client.js'
 import { writeArchive } from '../chat/history/zipWriter.js'
 
-type NativeSnapshot = {
-  events: unknown[]
-  environment: Record<string, unknown>
-  failedWrites: number
-}
-const Native = registerPlugin<{ snapshot: () => Promise<NativeSnapshot> }>('Diagnostics')
 const bounded = async <T>(
   task: Promise<T>,
   timeoutMs = 4000
@@ -56,7 +51,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     bounded(getStorageSummary()),
     bounded(navigator.storage?.estimate?.() ?? Promise.resolve({})),
     Capacitor.getPlatform() === 'android'
-      ? bounded(Native.snapshot())
+      ? bounded(NativeDiagnostics.snapshot())
       : Promise.resolve({ unavailable: true as const }),
   ])
   const nativeEvents =

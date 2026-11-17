@@ -1,3 +1,4 @@
+import { createId } from '../../utils/id.js'
 import { openDB, type DBSchema } from 'idb'
 
 export type LogScope =
@@ -27,7 +28,7 @@ interface LogDB extends DBSchema {
 }
 export const LOG_LIMIT = 2000
 export const LOG_RETENTION_MS = 7 * 24 * 3600_000
-const runId = crypto.randomUUID()
+const runId = createId()
 const secrets = new Set<string>()
 const recent: DiagnosticEvent[] = []
 const pending: DiagnosticEvent[] = []
@@ -168,7 +169,7 @@ export const logEvent = (
 ) => {
   const safe = sanitizeDetails(details) as Record<string, unknown>
   const entry: DiagnosticEvent = {
-    id: crypto.randomUUID(),
+    id: createId(),
     timestamp: Date.now(),
     runId,
     source: 'client',

@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path'
 import { chromium } from 'playwright'
 import { createServer } from 'node:http'
 import { runStabilityCases } from './test/stability-cases.mjs'
+import { runCompatibilityCases } from './test/compatibility-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -94,7 +95,7 @@ server.stderr.on('data', (data) => {
   output += data
 })
 let browser
-const run = async (name, test, setup) => {
+const run = async (name, test, setup, waitReady = true) => {
   uploadBehavior = { status: 200, body: { id: 'file-api-new' }, mode: 'normal', delay: 0 }
   uploadRequests = []
   maxActiveUploads = 0
@@ -116,7 +117,9 @@ const run = async (name, test, setup) => {
       await setup(context)
     }
     await page.goto(`${base}/?e2e=1`)
-    await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+    if (waitReady) {
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+    }
     await test(page)
     assert.deepEqual(pageErrors, [], 'uncaught page errors')
     results.push({ name, passed: true })
@@ -144,6 +147,7 @@ try {
   }
   browser = await chromium.launch({ headless: true })
   await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
+  await runCompatibilityCases(run)
   await runStabilityCases({
     run,
     root,

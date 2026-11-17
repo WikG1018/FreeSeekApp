@@ -1,4 +1,5 @@
 import { cityNames, regionCodes, regionNameOverrides, provinceNames } from './locationData.js'
+import { regionNamesFallback } from './locationRegionNames.js'
 
 export { regionCodes } from './locationData.js'
 
@@ -17,14 +18,10 @@ export type UserLocation = {
 }
 
 const regions = new Set(regionCodes)
-const regionNames = {
-  'zh-CN': new Intl.DisplayNames(['zh-CN'], { type: 'region' }),
-  'en-US': new Intl.DisplayNames(['en-US'], { type: 'region' }),
-}
 
 export const getRegionName = (code: string, locale: 'zh-CN' | 'en-US'): string =>
   regions.has(code)
-    ? (regionNameOverrides[locale][code] ?? regionNames[locale].of(code) ?? code)
+    ? (regionNameOverrides[locale][code] ?? regionNamesFallback[locale][code] ?? code)
     : ''
 
 export const normalizeLocation = (value: unknown): UserLocation | null => {

@@ -338,6 +338,7 @@ export const en = {
   diagnosticsPreparing: 'Preparing…',
   diagnosticsExported: 'Diagnostic package exported',
   diagnosticsExportFailed: 'Could not export diagnostics. Please retry.',
+  diagnosticsFallback: 'Full diagnostics failed. Exporting basic diagnostics instead.',
   diagnosticsPrivacy:
     'Includes version, device environment and runtime errors. Excludes API keys, chat content, attachment originals and recordings. Logs remain on this device for up to 7 days.',
   replyNoReadableAttachment:

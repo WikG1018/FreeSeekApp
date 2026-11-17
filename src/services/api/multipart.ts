@@ -1,3 +1,4 @@
+import { createId } from '../../utils/id.js'
 import { ApiError } from './errorTypes.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { diagnosticError, logEvent, registerLogSecret } from '../diagnostics/log.js'
@@ -25,7 +26,7 @@ type Options = {
 export const postMultipart = (url: string, options: Options): Promise<unknown> =>
   new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest(),
-      requestId = crypto.randomUUID(),
+      requestId = createId(),
       started = performance.now()
     let settled = false,
       timer: ReturnType<typeof setTimeout> | undefined,

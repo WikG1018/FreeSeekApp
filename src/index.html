@@ -7,6 +7,63 @@
     <title>FreeSeek</title>
   </head>
   <body>
+    <section id="fs-startup" role="status" aria-live="polite">
+      <div><h1 id="fs-startup-title">正在启动 FreeSeek</h1>
+        <p id="fs-startup-description">正在加载本机应用…</p>
+        <p id="fs-startup-version"></p>
+        <div id="fs-startup-actions" style="display:none">
+          <button id="fs-startup-retry" type="button">重新启动</button>
+          <button id="fs-startup-export" type="button">导出启动诊断</button>
+        </div>
+        <p id="fs-startup-feedback"></p>
+      </div>
+    </section>
+    <style>
+      #fs-startup{position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;background:#f8fafc;color:#111827;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:auto}
+      #fs-startup>div{max-width:480px;width:100%;margin:auto}
+      #fs-startup h1{margin:0 0 16px;font-size:24px;line-height:1.35;font-weight:650}
+      #fs-startup p{margin:12px 0;overflow-wrap:break-word}
+      #fs-startup-version{font-size:14px;color:#4b5563}
+      #fs-startup-actions button{min-height:44px;padding:10px 16px;margin:8px 12px 8px 0;border:1px solid #3964fe;border-radius:12px;background:#fff;color:#254edb;font:inherit;cursor:pointer}
+      #fs-startup-actions button:focus{outline:2px solid #111827;outline-offset:3px}
+      #fs-startup-actions button:disabled{opacity:.6;cursor:wait}
+      #fs-startup-feedback{font-size:14px;color:#4b5563}
+    </style>
+    <script>
+      // 此守卫刻意使用 ES5，主包语法不兼容、加载失败或初始化异常时仍能显示和导出。
+      (function(){
+        var panel=document.getElementById('fs-startup'),state='starting',timer,report={phase:'bootstrap',errorName:'Error'};
+        var title=document.getElementById('fs-startup-title'),description=document.getElementById('fs-startup-description'),actions=document.getElementById('fs-startup-actions'),feedback=document.getElementById('fs-startup-feedback'),exportButton=document.getElementById('fs-startup-export');
+        var zh=(navigator.language||'zh').toLowerCase().indexOf('zh')===0;
+        try{var saved=localStorage.getItem('freeseek:locale');if(saved){zh=saved==='zh-CN';}}catch(ignore){}
+        function label(chinese,english){return zh?chinese:english;}
+        title.textContent=label('正在启动 FreeSeek','Starting FreeSeek');description.textContent=label('正在加载本机应用…','Loading the app…');
+        document.getElementById('fs-startup-retry').textContent=label('重新启动','Restart');exportButton.textContent=label('导出启动诊断','Export startup diagnostics');
+        function fail(phase,error,resource,line,column){
+          clearTimeout(timer);state='failed';report={phase:phase,errorName:error&&error.name||'Error',line:Number(line)||0,column:Number(column)||0};
+          if(resource){var basename=String(resource).split('/').pop().split('?')[0];if(/^[\w.-]{1,100}$/.test(basename)){report.script=basename;}}
+          panel.style.display='flex';title.textContent=label('FreeSeek 未能启动','FreeSeek could not start');
+          description.textContent=label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
+          actions.style.display='block';var meta=document.querySelector('meta[name="application-version"]'),match=/Chrome\/([\d.]+)/.exec(navigator.userAgent);
+          document.getElementById('fs-startup-version').textContent='FreeSeek '+(meta?meta.content:'—')+' · WebView '+(match?match[1]:'—')+' · '+report.errorName;
+        }
+        window.__FreeSeekStartup={ready:function(){clearTimeout(timer);state='ready';panel.style.display='none';},fail:fail};
+        window.addEventListener('error',function(event){if(state==='ready'){return;}if(event.target&&event.target!==window){var target=event.target;if(target.tagName==='SCRIPT'||target.tagName==='LINK'){fail('resource',{name:'ResourceError'},target.src||target.href);}return;}fail('bootstrap',event.error,null,event.lineno,event.colno);},true);
+        window.addEventListener('unhandledrejection',function(event){if(state!=='ready'){fail('bootstrap',event.reason);}});
+        document.getElementById('fs-startup-retry').onclick=function(){location.reload();};
+        exportButton.onclick=function(){
+          if(exportButton.disabled){return;}exportButton.disabled=true;feedback.textContent=label('请选择保存位置…','Choose a save location…');
+          var native=window.Capacitor;
+          function finished(message){exportButton.disabled=false;feedback.textContent=message;}
+          if(native&&typeof native.nativePromise==='function'){
+            native.nativePromise('Diagnostics','exportStartup',report).then(function(result){finished(result&&result.saved?label('诊断包已保存','Diagnostics saved'):label('已取消保存，可再次导出','Save cancelled. You can try again.'));},function(){finished(label('导出未完成，请重试并截图此页。','Could not export. Please retry and capture this screen.'));});
+          }else{
+            var blob=new Blob([JSON.stringify({diagnostic_mode:'startup',report:report,webview:navigator.userAgent},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='freeseek-startup-diagnostics.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},10000);finished(label('已导出启动诊断','Startup diagnostics exported'));
+          }
+        };
+        timer=setTimeout(function(){fail('timeout',{name:'TimeoutError'});},10000);
+      }());
+    </script>
     <div id="root"></div>
   </body>
 </html>

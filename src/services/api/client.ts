@@ -1,3 +1,4 @@
+import { createId } from '../../utils/id.js'
 import { ApiError } from './errorTypes.js'
 import { postMultipart, type UploadProgress } from './multipart.js'
 import { diagnosticError, logEvent, registerLogSecret } from '../diagnostics/log.js'
@@ -77,7 +78,7 @@ const readErrorResponse = async (
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
-  const requestId = crypto.randomUUID(),
+  const requestId = createId(),
     started = performance.now()
   const headers = new Headers(init.headers)
   registerLogSecret(headers.get('x-api-key'))

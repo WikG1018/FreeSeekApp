@@ -326,6 +326,7 @@ export const zh = {
   diagnosticsPreparing: '正在生成…',
   diagnosticsExported: '诊断包已导出',
   diagnosticsExportFailed: '诊断包导出失败，请重试',
+  diagnosticsFallback: '完整诊断生成失败，正在导出基础诊断',
   diagnosticsPrivacy:
     '包含版本、设备环境和运行错误记录；不含 API Key、对话正文、附件原件或录音。日志仅在本机保留最近 7 天。',
   replyNoReadableAttachment: '本条消息的附件无法读取，请更换附件或补充文字后重试。原记录已保留。',

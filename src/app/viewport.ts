@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { listenMediaQuery } from '../utils/mediaQuery.js'
 
 /** 窄于 768px 按移动端布局 */
 const query = window.matchMedia('not all and (min-width: 768px)')
 
 const subscribe = (onChange: () => void) => {
-  query.addEventListener('change', onChange)
-  return () => query.removeEventListener('change', onChange)
+  return listenMediaQuery(query, onChange)
 }
 
 export const useIsMobile = () => useSyncExternalStore(subscribe, () => query.matches)

@@ -18,3 +18,13 @@ declare module 'prismjs/components/*' {}
 
 /** KaTeX 化学公式扩展通过副作用注册到 KaTeX */
 declare module 'katex/contrib/mhchem' {}
+
+declare module 'core-js/stable' {}
+declare module 'abortcontroller-polyfill/dist/polyfill-patch-fetch' {}
+
+interface Window {
+  __FreeSeekStartup?: {
+    ready: () => void
+    fail: (phase: 'bootstrap' | 'render', error: unknown) => void
+  }
+}

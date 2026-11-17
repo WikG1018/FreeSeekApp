@@ -6,7 +6,7 @@ import { rspack, type Configuration } from '@rspack/core'
 
 // 以 CLI 子命令判断模式（serve 为开发、build 为生产），避免依赖 shell 设置 NODE_ENV
 const dev = !process.argv.includes('build')
-const targets = ['chrome >= 105', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
+const targets = ['chrome >= 60', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
 const root = path.dirname(fileURLToPath(import.meta.url))
 const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8')
@@ -30,7 +30,8 @@ export const createConfig = ({
   devServer,
 }: ConfigOptions = {}): Configuration => ({
   mode: dev ? 'development' : 'production',
-  entry: './src/main.tsx',
+  entry: './src/bootstrap.ts',
+  target: ['web', 'es2017'],
   output: {
     path: path.resolve(root, 'dist'),
     // 运行时按当前脚本地址推导资源路径，file:// 下异步 chunk、字体都按相对位置加载
@@ -58,8 +59,9 @@ export const createConfig = ({
       { test: /\.module\.css$/, type: 'css/module', use: [cssLoader] },
       { test: /\.css$/, exclude: /\.module\.css$/, type: 'css', use: [cssLoader] },
       {
-        test: /\.(j|t)sx?$/,
-        exclude: /[\\/]node_modules[\\/]/,
+        test: /\.[cm]?[jt]sx?$/,
+        // 依赖包也可能含可选链等新语法；仅排除本身按 ES5 发布的 core-js。
+        exclude: /[\\/]core-js[\\/]/,
         loader: 'builtin:swc-loader',
         options: {
           jsc: {
@@ -78,6 +80,7 @@ export const createConfig = ({
   plugins: [
     // 经典 defer 脚本支持 file:// 页面的资源加载
     new rspack.HtmlRspackPlugin({
+      minify: false,
       template: './src/index.html',
       scriptLoading: 'defer',
       meta: { 'application-version': version },

@@ -3,8 +3,9 @@
   --message-list-padding-horizontal: 44px;
 
   /* 安全区：iOS 走 env()，Android（Capacitor SystemBars css 模式）走注入的 --safe-area-inset-* */
-  --fs-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
-  --fs-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --fs-safe-top: 0px;
+  --fs-safe-bottom: 0px;
+  --fs-viewport-height: 100vh;
 
   /* 动效：统一时长与曲线，界面只引用这些 token */
   --fs-duration-fast: 120ms;
@@ -28,6 +29,18 @@
   --fs-glass-bg-strong: rgba(255, 255, 255, 0.985);
   --fs-glass-border: rgba(15, 23, 42, 0.07);
   --fs-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.09);
+}
+
+@supports (top: max(0px, 1px)) {
+  :root {
+    --fs-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --fs-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  }
+}
+@supports (height: 100dvh) {
+  :root {
+    --fs-viewport-height: 100dvh;
+  }
 }
 
 @media (max-width: 1023px) {

@@ -48,6 +48,7 @@ import { showToast } from '../base/toastState.js'
 import { useDialogFocus } from '../base/useDialogFocus.js'
 import { saveBackup } from '../../services/saveBackup.js'
 import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
+import { saveNativeDiagnostics } from '../../services/diagnostics/native.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
@@ -644,7 +645,24 @@ const AboutPage = () => {
       }
     } catch (error) {
       logEvent('diagnostics', 'export.failed', diagnosticError(error), 'error')
-      showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+      if (Capacitor.getPlatform() === 'android') {
+        showToast({ key: 'diagnosticsFallback' })
+        try {
+          if (await saveNativeDiagnostics(error)) {
+            showToast({ key: 'diagnosticsExported' })
+          }
+        } catch (fallbackError) {
+          logEvent(
+            'diagnostics',
+            'export.native-fallback-failed',
+            diagnosticError(fallbackError),
+            'error'
+          )
+          showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+        }
+      } else {
+        showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+      }
     } finally {
       setDiagnosticsBusy(false)
     }
