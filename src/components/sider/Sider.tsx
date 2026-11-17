@@ -2,7 +2,6 @@ import clsx from 'clsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
-  IconDataOutline16,
   IconHeartOutline16,
   IconPanelLeftOutline16,
   IconSearchOutline16,
@@ -20,8 +19,7 @@ import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { DonateDialog } from '../donate/DonateDialog.js'
 import { SidebarUpdate } from '../update/Update.js'
-import { UsagePanel } from '../usage/UsagePanel.js'
-import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
+import { closeMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
 import styles from './Sider.module.css'
 
@@ -32,19 +30,28 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const activeId = useChatStore((state) => state.activeId)
   const [now, setNow] = useState(Date.now)
   const [query, setQuery] = useState('')
+  const [visibleCount, setVisibleCount] = useState(80)
+  useEffect(() => setVisibleCount(80), [query])
   const filteredSessions = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return keyword
       ? sessions.filter((session) => (session.title || '').toLowerCase().includes(keyword))
       : sessions
   }, [sessions, query])
-  const groups = useMemo(
-    () => groupSessions(filteredSessions, now, t),
-    [filteredSessions, now, t]
+  const ordered = useMemo(
+    () => [
+      ...filteredSessions.filter((session) => session.pinned),
+      ...filteredSessions.filter((session) => !session.pinned),
+    ],
+    [filteredSessions]
   )
+  const groups = useMemo(
+    () => groupSessions(ordered.slice(0, visibleCount), now, t),
+    [ordered, visibleCount, now, t]
+  )
+  const showMore = () => setVisibleCount((count) => Math.min(count + 80, ordered.length))
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  const [usageOpen, setUsageOpen] = useState(false)
   const [donateOpen, setDonateOpen] = useState(false)
 
   useEffect(() => {
@@ -77,7 +84,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         <div className={styles.appName}>{t('appName')}</div>
         <IconButton
           size="m"
-              hitArea
+          hitArea
           icon={<IconPanelLeftOutline16 />}
           tooltip={t('collapseSiderbarButton')}
           tooltipPlacement="bottom"
@@ -111,8 +118,21 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </span>
         {t('newChat')}
       </button>
+      <SidebarUpdate />
       <div className={styles.listWrap}>
-        <div className={styles.list}>
+        <div
+          className={styles.list}
+          data-testid="sider-list"
+          onScroll={(event) => {
+            const node = event.currentTarget
+            if (
+              node.scrollHeight - node.scrollTop - node.clientHeight < 200 &&
+              visibleCount < ordered.length
+            ) {
+              showMore()
+            }
+          }}
+        >
           {groups.map((group) => (
             <div key={group.key} className={styles.section}>
               <div className={styles.sectionHeader}>{group.label}</div>
@@ -126,67 +146,32 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
               ))}
             </div>
           ))}
+          {visibleCount < ordered.length && (
+            <button type="button" className={styles.showMore} onClick={showMore}>
+              {t('sessionShowMore')}
+            </button>
+          )}
         </div>
       </div>
-      <div className={styles.bottom}>
-        {/* 有更新时自动出现：下载中显示进度，下好一键安装 */}
-        <SidebarUpdate />
-        {/* 打赏开发者：放在底部按钮上方，爱心持续跳动偶尔撒娇求打赏 */}
+      <div className={styles.bottom} data-testid="sider-footer">
+        <button type="button" className={styles.settings} onClick={() => openSettings()}>
+          <span className={styles.settingsIcon}>
+            <IconSettingsOutline16 />
+          </span>
+          <span className={styles.settingsLabel}>{t('settings')}</span>
+        </button>
         <button
           type="button"
-          className={styles.donate}
+          className={styles.settings}
           onClick={() => setDonateOpen(true)}
           aria-label={t('donateTitle')}
         >
-          <span className={styles.donateHeart}>
+          <span className={clsx(styles.settingsIcon, styles.donateHeart)}>
             <IconHeartOutline16 />
           </span>
-          <span className={styles.donateLabel}>{t('donateTitle')}</span>
-          <span className={styles.donatePlea}>{t('donatePlea')}</span>
+          <span className={styles.settingsLabel}>{t('donateTitle')}</span>
         </button>
-        {mobile ? (
-          <div className={styles.userRow}>
-            <span className={styles.userAvatar}>🐳</span>
-            <span className={styles.userName}>FreeSeek</span>
-            <div className={styles.userActions}>
-              <IconButton
-                size="xl"
-              hitArea
-                icon={<IconDataOutline16 />}
-                aria-label={t('usageTitle')}
-                onClick={() => setUsageOpen(true)}
-              />
-              <IconButton
-                size="xl"
-              hitArea
-                icon={<IconSettingsOutline16 />}
-                aria-label={t('settings')}
-                onClick={() => openSettings()}
-              />
-            </div>
-          </div>
-        ) : (
-          <>
-            <button type="button" className={styles.settings} onClick={() => setUsageOpen(true)}>
-              <span className={styles.settingsIcon}>
-                <IconDataOutline16 />
-              </span>
-              <span className={styles.settingsLabel}>{t('usageTitle')}</span>
-            </button>
-            <button
-              type="button"
-              className={styles.settings}
-              onClick={() => openSettings()}
-            >
-              <span className={styles.settingsIcon}>
-                <IconSettingsOutline16 />
-              </span>
-              <span className={styles.settingsLabel}>{t('settings')}</span>
-            </button>
-          </>
-        )}
       </div>
-      {usageOpen ? <UsagePanel onClose={() => setUsageOpen(false)} /> : null}
       {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}
       {deleting ? (
         <Modal
@@ -226,43 +211,5 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </Modal>
       ) : null}
     </div>
-  )
-}
-
-/** 移动端抽屉：浮在页面上方，点空白区域关闭；关闭时播放滑出动画后再卸载。 */
-export const MobileSider = () => {
-  const open = useMobileSider((state) => state.open)
-  const [phase, setPhase] = useState<'closed' | 'open' | 'closing'>('closed')
-
-  useEffect(() => {
-    if (open) {
-      setPhase('open')
-      return
-    }
-    setPhase((previous) => (previous === 'open' ? 'closing' : previous))
-  }, [open])
-
-  useEffect(() => {
-    if (phase !== 'closing') {
-      return
-    }
-    const timer = setTimeout(() => setPhase('closed'), 260)
-    return () => clearTimeout(timer)
-  }, [phase])
-
-  if (phase === 'closed') {
-    return null
-  }
-  const closing = phase === 'closing'
-  return (
-    <>
-      <div
-        className={clsx(styles.drawerMask, closing && styles.drawerMaskClosing)}
-        onClick={closeMobileSider}
-      />
-      <div className={clsx(styles.drawer, closing && styles.drawerClosing)}>
-        <Sider mobile />
-      </div>
-    </>
   )
 }

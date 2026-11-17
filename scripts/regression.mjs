@@ -10,6 +10,8 @@ import { runCompatibilityCases } from './test/compatibility-cases.mjs'
 import { runAndroidStabilityCases } from './test/android-stability-cases.mjs'
 import { runProviderCases } from './test/provider-cases.mjs'
 import { runImmersiveCases } from './test/immersive-cases.mjs'
+import { runImportCases } from './test/import-cases.mjs'
+import { runNavigationCases } from './test/navigation-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -99,6 +101,8 @@ server.stderr.on('data', (data) => {
 })
 let browser
 const run = async (name, test, setup, waitReady = true) => {
+  if (process.env.FREESEEK_TEST_FILTER && !new RegExp(process.env.FREESEEK_TEST_FILTER).test(name))
+    return
   uploadBehavior = { status: 200, body: { id: 'file-api-new' }, mode: 'normal', delay: 0 }
   uploadRequests = []
   maxActiveUploads = 0
@@ -159,6 +163,8 @@ try {
   })
   await runProviderCases({ run })
   await runImmersiveCases({ run })
+  await runImportCases({ run })
+  await runNavigationCases({ run })
   await runStabilityCases({
     run,
     root,

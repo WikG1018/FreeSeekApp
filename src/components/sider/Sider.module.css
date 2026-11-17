@@ -47,7 +47,7 @@
   flex-shrink: 0;
   box-sizing: border-box;
   width: 100%;
-  height: 40px;
+  height: 44px;
   padding: 0 16px;
   border-radius: 100px;
   border: 1px solid rgba(103, 158, 254, 0);
@@ -101,7 +101,7 @@
   position: relative;
   flex: 1;
   min-height: 0;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 
 .list {
@@ -109,6 +109,14 @@
   margin: 0 -2px;
   padding: 0 2px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 16px),
+    transparent 100%
+  );
   scrollbar-color: var(--scroll-color) transparent;
   /* dsh-Go 式上下边缘渐隐，列表不会硬切 */
   mask-image: linear-gradient(
@@ -143,6 +151,16 @@
   user-select: none;
 }
 
+.showMore {
+  min-height: 44px;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-brand-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
 .bottom {
   display: flex;
   flex-direction: column;
@@ -159,130 +177,8 @@
   margin-top: 2px;
 }
 
-/*
- * 打赏开发者：底部按钮上方的求打赏入口。
- * 爱心持续小幅跳动（心跳节律）；每 6 秒整行「撒娇」一次：轻晃两下 + 爱心放大。
- * prefers-reduced-motion 下由全局规则自动停用。
- */
-.donate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  box-sizing: border-box;
-  width: 100%;
-  margin-block: auto 8px;
-  padding: 8px 10px;
-  border: 1px dashed rgba(244, 114, 182, 0.55);
-  border-radius: 12px;
-  background: linear-gradient(120deg, rgba(244, 114, 182, 0.1), rgba(37, 99, 235, 0.06));
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  user-select: none;
-  animation: donatePlead 6s var(--fs-ease-in-out) infinite;
-  transition:
-    background-color var(--fs-duration-fast) var(--fs-ease-out),
-    border-color var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:hover {
-    border-color: rgba(244, 114, 182, 0.9);
-    background-color: rgba(244, 114, 182, 0.14);
-  }
-
-  &:active {
-    transform: scale(0.98);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
-}
-
-/* 撒娇：每 6 秒轻晃两下（4%–12% 与 16%–24% 两个来回） */
-@keyframes donatePlead {
-  0%,
-  4%,
-  12%,
-  16%,
-  24%,
-  100% {
-    transform: rotate(0deg);
-  }
-  8% {
-    transform: rotate(-1.6deg);
-  }
-  20% {
-    transform: rotate(1.4deg);
-  }
-}
-
 .donateHeart {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
   color: var(--fs-accent-pink);
-  animation: heartBeat 1.8s ease-in-out infinite;
-}
-
-/* 心跳节律：两连跳后休息 */
-@keyframes heartBeat {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  12% {
-    transform: scale(1.28);
-  }
-  24% {
-    transform: scale(1.06);
-  }
-  36% {
-    transform: scale(1.34);
-  }
-  48% {
-    transform: scale(1);
-  }
-}
-
-.donateLabel {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 18px;
-  font-weight: 500;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--dsw-alias-label-primary);
-}
-
-.donatePlea {
-  flex-shrink: 0;
-  margin-left: auto;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--fs-accent-pink);
-  color: #fff;
-  font-size: 11px;
-  line-height: 17px;
-  font-weight: 500;
-  animation: pleaPulse 6s var(--fs-ease-in-out) infinite;
-}
-
-/* 与撒娇同步的胶囊呼吸：撒娇时刻微微放大提醒 */
-@keyframes pleaPulse {
-  0%,
-  4%,
-  24%,
-  100% {
-    transform: scale(1);
-  }
-  14% {
-    transform: scale(1.12);
-  }
 }
 
 .settings {
@@ -290,6 +186,7 @@
   align-items: center;
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   margin-block: auto;
   padding: 6px 2px 6px 6px;
   border: none;
@@ -387,95 +284,47 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* 移动端底部：头像 + 名称 + 操作，贴近官方抽屉的用户区 */
-.userRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 10px 4px;
-}
-
-.userAvatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--dsw-alias-bg-skeleton);
-  font-size: 18px;
-}
-
-.userName {
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary);
-}
-
-.userMeta {
-  font-size: 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.userActions {
-  display: flex;
-  gap: 2px;
-  margin-left: auto;
-}
-
+/* 同一进度驱动抽屉、遮罩和主界面，手势中直接跟手，释放后自然减速。 */
 .drawer {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0 auto 0 0;
   z-index: 800;
-  width: min(86vw, 360px);
+  width: 86%;
+  max-width: 360px;
   overflow: hidden;
-  border-radius: 0 20px 20px 0;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.18);
-  animation: drawerIn var(--fs-duration-slow) var(--fs-ease-out) both;
+  border-radius: 0 22px 22px 0;
+  background: var(--dsw-alias-bg-base);
+  box-shadow: 8px 0 28px rgba(0, 0, 0, 0.14);
+  transform: translateX(calc((var(--sider-progress, 0) - 1) * 100%));
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform 280ms cubic-bezier(0.22, 0.8, 0.25, 1),
+    visibility 0s 280ms;
 }
-
-.drawerClosing {
-  animation: drawerOut var(--fs-duration-base) var(--fs-ease-in-out) forwards;
-}
-
 .drawerMask {
   position: absolute;
   inset: 0;
   z-index: 799;
-  background-color: rgba(0, 0, 0, 0.36);
-  animation: maskIn var(--fs-duration-base) var(--fs-ease-out) both;
+  background: rgba(0, 0, 0, 0.32);
+  opacity: var(--sider-progress, 0);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 280ms cubic-bezier(0.22, 0.8, 0.25, 1),
+    visibility 0s 280ms;
 }
-
-.drawerMaskClosing {
-  animation: maskOut var(--fs-duration-base) var(--fs-ease-in-out) forwards;
+:global([data-sider-open]) .drawer,
+:global([data-sider-open]) .drawerMask,
+:global([data-sider-dragging]) .drawer,
+:global([data-sider-dragging]) .drawerMask {
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
 }
-
-@keyframes drawerIn {
-  from {
-    transform: translateX(-100%);
-  }
-}
-
-@keyframes drawerOut {
-  to {
-    transform: translateX(-100%);
-  }
-}
-
-@keyframes maskIn {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes maskOut {
-  to {
-    opacity: 0;
-  }
+:global([data-sider-dragging]) .drawer,
+:global([data-sider-dragging]) .drawerMask {
+  transition: none;
 }
 
 .mobile {
@@ -484,27 +333,12 @@
   border-right: none;
   padding-top: calc(var(--fs-safe-top) + 6px);
   border-radius: 0 20px 20px 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.5);
+
   /* 实底保证可读性；圆角与阴影保留玻璃观感 */
   background: var(--dsw-alias-bg-base);
 
   [data-ds-dark-theme] & {
-    border-right-color: rgba(255, 255, 255, 0.08);
     background: var(--dsw-static-neutral-bluish-900);
-  }
-
-  .userActions button {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: var(--fs-glass-bg);
-    border: 1px solid var(--fs-glass-border);
-    box-shadow: var(--fs-glass-shadow);
-  }
-
-  [data-ds-dark-theme] & .userActions button {
-    background: var(--fs-glass-bg);
-    border-color: var(--fs-glass-border);
   }
 
   .listWrap {
@@ -527,43 +361,18 @@
   }
 
   .bottom {
+    border-top: 1px solid var(--dsw-alias-border-l1);
     padding: 10px 0 calc(var(--fs-safe-bottom) + 10px);
   }
 
-  /* 手机抽屉里：打赏行与用户区间距稍大，文字更大 */
-  .donate {
-    margin: 0 0 10px;
-    padding: 10px 12px;
-    border-radius: 14px;
-  }
-
-  .donateHeart {
-    width: 30px;
-    height: 30px;
-
-    svg {
-      width: 18px;
-      height: 18px;
-    }
-  }
-
-  .donateLabel {
-    font-size: 14px;
-    line-height: 20px;
-  }
-
-  .donatePlea {
-    font-size: 11px;
-    line-height: 18px;
-  }
-
   .settings {
-    padding: 9px 10px;
+    min-height: 48px;
+    padding: 12px;
   }
 
   .settingsIcon {
-    width: auto;
-    height: auto;
+    width: 24px;
+    height: 24px;
 
     svg {
       width: 20px;

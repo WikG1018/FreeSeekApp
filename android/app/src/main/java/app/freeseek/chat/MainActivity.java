@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         DiagnosticsLog.installCrashHandler(getApplicationContext());
         DiagnosticsLog.record(getApplicationContext(), "app", "activity.created", new com.getcapacitor.JSObject());
         registerPlugin(FontScalePlugin.class);
+        registerPlugin(AppearancePlugin.class);
         registerPlugin(MicPermissionPlugin.class);
         registerPlugin(DonatePlugin.class);
         registerPlugin(UpdatePlugin.class);

@@ -1058,11 +1058,27 @@ const ImportConfirm = ({
   const { busy, phase, progress, errorKey } = historyImport
   const percent =
     progress && progress.total > 0
-      ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
+      ? Math.min(
+          100,
+          Math.round(
+            ((progress.processed +
+              (progress.reading && progress.reading.total > 0
+                ? progress.reading.bytes / progress.reading.total
+                : 0)) /
+              progress.total) *
+              100
+          )
+        )
       : null
   return (
     <Modal
-      title={errorKey ? t('historyImportFailedTitle') : t('historyImportFinalTitle')}
+      title={
+        busy
+          ? t('historyImportBusyTitle')
+          : errorKey
+            ? t('historyImportFailedTitle')
+            : t('historyImportFinalTitle')
+      }
       centered
       onClose={() => !busy && historyImport.cancel()}
       footer={
@@ -1082,38 +1098,43 @@ const ImportConfirm = ({
               </span>
             </div>
           ) : null}
-          <div className={styles.importActions}>
-            <Button
-              variant="outlined"
-              size="m"
-              autoFocus
-              disabled={busy}
-              onClick={() => (errorKey ? historyImport.cancel() : setStage('warn'))}
-            >
-              {errorKey ? t('close') : t('historyImportBack')}
-            </Button>
-            <Button
-              variant="danger"
-              size="m"
-              disabled={busy}
-              onClick={() => void historyImport.confirm()}
-            >
-              {busy
-                ? t('historyImportBusyButton')
-                : errorKey
-                  ? t('historyImportRetry')
-                  : t('historyImportFinalConfirm')}
-            </Button>
-          </div>
+          {!busy && (
+            <div className={styles.importActions}>
+              <Button
+                variant="outlined"
+                size="m"
+                autoFocus
+                onClick={() => (errorKey ? historyImport.cancel() : setStage('warn'))}
+              >
+                {errorKey ? t('close') : t('historyImportBack')}
+              </Button>
+              <Button
+                variant={errorKey ? 'primary' : 'danger'}
+                size="m"
+                onClick={() => void historyImport.confirm()}
+              >
+                {errorKey ? t('historyImportRetry') : t('historyImportFinalConfirm')}
+              </Button>
+            </div>
+          )}
         </div>
       }
     >
-      <div className={styles.importWarnFinal}>
-        {t('historyImportFinalBody', { count: sessionCount })}
-      </div>
+      {!busy && !errorKey && (
+        <div className={styles.importWarnFinal}>
+          {t('historyImportFinalBody', { count: sessionCount })}
+        </div>
+      )}
       {busy ? (
         <div className={styles.importProgress}>
-          <div className={styles.importProgressTrack}>
+          <div
+            className={styles.importProgressTrack}
+            role="progressbar"
+            aria-label={t('historyImportBusyTitle')}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent ?? undefined}
+          >
             <span
               className={
                 percent === null ? styles.importProgressIndeterminate : styles.importProgressFill
@@ -1121,6 +1142,14 @@ const ImportConfirm = ({
               style={percent === null ? undefined : { width: `${percent}%` }}
             />
           </div>
+          {progress?.reading && (
+            <div className={styles.importProgressHint}>
+              {t('historyImportReading', {
+                read: (progress.reading.bytes / 1024 / 1024).toFixed(1),
+                total: (progress.reading.total / 1024 / 1024).toFixed(1),
+              })}
+            </div>
+          )}
           <div className={styles.importProgressHint}>{t('historyImportNoClose')}</div>
         </div>
       ) : null}
@@ -1189,7 +1218,11 @@ const useHistoryImport = () => {
   const [result, setResult] = useState<number | null>(null)
   /** 导入阶段：checking 校验 / importing 写入；失败回到 idle 并给出原因 */
   const [phase, setPhase] = useState<'idle' | 'checking' | 'importing'>('idle')
-  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null)
+  const [progress, setProgress] = useState<{
+    processed: number
+    total: number
+    reading?: { bytes: number; total: number }
+  } | null>(null)
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null)
   const importing = useRef(false)
 
@@ -1204,9 +1237,9 @@ const useHistoryImport = () => {
     setProgress(null)
     setPhase('checking')
     try {
-      const count = await importHistory(file, (processed, total) => {
+      const count = await importHistory(file, (processed, total, reading) => {
         setPhase('importing')
-        setProgress({ processed, total })
+        setProgress({ processed, total, reading })
       })
       setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
       setFile(null)

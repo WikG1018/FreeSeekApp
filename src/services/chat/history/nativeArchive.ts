@@ -10,12 +10,24 @@ import { id, list, number, readNativeSession, record, string } from './nativeSch
 import { MANIFEST_PATH } from './paths.js'
 import { readEntry, type ArchiveEntry } from './zipReader.js'
 import { writeArchive } from './zipWriter.js'
-import { readJsonEntry, MAX_JSON_BYTES } from './readJson.js'
+import {
+  readJsonEntry,
+  assertJsonStructure,
+  MAX_JSON_BYTES,
+  type ImportProgress,
+} from './readJson.js'
 
 const VERSION = 2
 const sessionPath = (id: string) => `freeseek/sessions/${encodeURIComponent(id)}.json`
 const filePath = (id: string) => `freeseek/files/${encodeURIComponent(id)}.bin`
-const json = (data: unknown) => new Blob([JSON.stringify(data)], { type: 'application/json' })
+const json = (data: unknown) => {
+  assertJsonStructure(data)
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' })
+  if (blob.size > MAX_JSON_BYTES) {
+    fail('backupJsonTooLarge')
+  }
+  return blob
+}
 type Manifest = {
   freeseek_backup_version: number
   sessions: string[]
@@ -91,9 +103,6 @@ export const exportNativeArchive = async (
     readNativeSession(session)
     ids.push(session.id)
     const sessionBlob = json(session)
-    if (sessionBlob.size > MAX_JSON_BYTES) {
-      fail('backupJsonTooLarge')
-    }
     entries.push({ name: sessionPath(session.id), blob: sessionBlob })
     for (const message of allSessionMessages(session)) {
       if (message.role === 'user') {
@@ -128,7 +137,7 @@ export const importNativeEntries = async (
   entries: AsyncGenerator<ArchiveEntry>,
   manifest: Manifest,
   total: number,
-  onProgress?: (processed: number, total: number) => void
+  onProgress?: ImportProgress
 ): Promise<NativeBackupSettings> => {
   const sessions = new Map(manifest.sessions.map((id) => [sessionPath(id), id]))
   const files = new Map(manifest.files.map((file) => [filePath(file.id), file]))
@@ -138,7 +147,9 @@ export const importNativeEntries = async (
     const sessionId = sessions.get(entry.path)
     const file = files.get(entry.path)
     if (sessionId !== undefined) {
-      const raw = await readJsonEntry(entry)
+      const raw = await readJsonEntry(entry, (bytes, size) =>
+        onProgress?.(processed, total, { bytes, total: size })
+      )
       const session = readNativeSession(raw)
       if (session.id !== sessionId) {
         fail('backupIncomplete')

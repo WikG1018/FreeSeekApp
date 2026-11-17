@@ -36,13 +36,18 @@ import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
-import { MobileSider, Sider } from '../components/sider/Sider.js'
+import { Sider } from '../components/sider/Sider.js'
+import { MobileSider } from '../components/sider/MobileSider.js'
+import { useSiderGesture } from '../components/sider/useSiderGesture.js'
 import styles from './App.module.css'
 import { hasChatConnection } from '../services/providers.js'
 
 /** 字体大小原生插件（Android WebView textZoom） */
 const FontScale = registerPlugin<{ setFontScale(options: { scale: number }): Promise<void> }>(
   'FontScale'
+)
+const Appearance = registerPlugin<{ setTheme(options: { dark: boolean }): Promise<void> }>(
+  'Appearance'
 )
 
 export const App = () => {
@@ -69,6 +74,8 @@ export const App = () => {
   )
   const fontScale = useSettings((state) => state.fontScale)
   const frameRef = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : fontScale)
+  const siderOpen = useMobileSider((state) => state.open) && isMobile
+  useSiderGesture(frameRef, isMobile)
   const streaming = useChatStore((state) =>
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
@@ -121,8 +128,23 @@ export const App = () => {
       return
     }
     const style = theme === 'dark' ? SystemBarsStyle.Dark : SystemBarsStyle.Light
-    void SystemBars.setStyle({ style }).catch(() => {})
-    void SystemBars.setStyle({ style, bar: SystemBarType.NavigationBar }).catch(() => {})
+    let stale = false
+    void (async () => {
+      if (Capacitor.getPlatform() === 'android') {
+        await Appearance.setTheme({ dark: theme === 'dark' })
+      }
+      if (stale) {
+        return
+      }
+      await SystemBars.setStyle({ style })
+      if (stale) {
+        return
+      }
+      await SystemBars.setStyle({ style, bar: SystemBarType.NavigationBar })
+    })().catch(() => {})
+    return () => {
+      stale = true
+    }
   }, [theme])
 
   // Android 返回键：设置/弹窗 → 搜索面板 → 侧边抽屉 → 退出确认（双击），不吞掉任务栈返回
@@ -168,9 +190,9 @@ export const App = () => {
 
   return (
     <>
-      <div ref={frameRef} className={styles.frame}>
+      <div ref={frameRef} className={styles.frame} data-sider-open={siderOpen ? '' : undefined}>
         {isMobile ? <MobileSider /> : siderCollapsed ? null : <Sider />}
-        <main className={styles.main}>
+        <main className={styles.main} aria-hidden={siderOpen || undefined}>
           {saveError ? (
             <div className={styles.saveError} role="alert">
               <span>{t('sessionSaveFailed')}</span>

@@ -188,7 +188,7 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         try {
           await a.readJsonEntry({
             path: 'session.json',
-            size: 33 * 1024 * 1024,
+            size: 129 * 1024 * 1024,
             stream: {
               async *[Symbol.asyncIterator]() {
                 read = true

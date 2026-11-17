@@ -5,12 +5,19 @@ import {
   IconEditOutline16,
   IconEllipsisOutline16,
   IconLinkOutline16,
+  IconPinOutline16,
   IconTrashOutline16,
 } from '../base/icons.js'
-import { renameSession, selectSession, startInheritSession } from '../../services/chat/store.js'
+import {
+  renameSession,
+  selectSession,
+  setSessionPinned,
+  startInheritSession,
+} from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { IconButton } from '../base/IconButton.js'
 import { Menu } from '../base/Menu.js'
+import { showToast } from '../base/toastState.js'
 import { closeMobileSider } from './mobileSiderState.js'
 import styles from './SessionItem.module.css'
 
@@ -55,15 +62,32 @@ export const SessionItem = memo(function SessionItem({
   return (
     <div
       className={clsx(styles.item, active && styles.active)}
+      data-session-id={session.id}
       onClick={() => {
         selectSession(session.id)
         closeMobileSider()
       }}
     >
+      {session.pinned && (
+        <span className={styles.pin} aria-label={t('sessionPinned')}>
+          <IconPinOutline16 />
+        </span>
+      )}
       <div className={styles.title}>{displayTitle}</div>
       <div className={styles.action} onClick={(event) => event.stopPropagation()}>
         <Menu
           options={[
+            {
+              key: 'pin',
+              label: t(session.pinned ? 'sessionUnpin' : 'sessionPin'),
+              icon: <IconPinOutline16 />,
+              onSelect: () =>
+                void setSessionPinned(session.id, !session.pinned).then((updated) => {
+                  if (!updated) {
+                    showToast({ key: 'sessionPinFailed', type: 'error' })
+                  }
+                }),
+            },
             {
               key: 'continue',
               label: t('sessionItemMenuContinueOption'),

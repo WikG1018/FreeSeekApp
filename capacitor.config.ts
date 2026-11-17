@@ -21,6 +21,7 @@ const config: CapacitorConfig = {
     // 避免旧版 WebView 无法提供 env(safe-area-inset-*) 时内容压到状态栏。
     SystemBars: {
       insetsHandling: 'native',
+      initialViewportFitValueHint: 'auto',
       style: 'DEFAULT',
       hidden: false,
     },

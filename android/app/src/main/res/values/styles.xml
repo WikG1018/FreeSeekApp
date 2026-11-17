@@ -19,4 +19,10 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+    <style name="FreeSeekWindowDark">
+        <item name="android:windowBackground">#151517</item>
+    </style>
+    <style name="FreeSeekWindowLight">
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
 </resources>

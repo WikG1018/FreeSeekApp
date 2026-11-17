@@ -47,6 +47,17 @@ public class AndroidCompatibilityTest {
             evaluate(activity, "window.__invalidSave=null;Capacitor.nativePromise('Backup','create',{fileName:'../bad.zip',size:-1}).then(function(){window.__invalidSave=false;},function(){window.__invalidSave=true;});");
             awaitTrue(activity, "window.__invalidSave===true");
             assertEquals("true",evaluate(activity,"document.documentElement.scrollWidth<=innerWidth+1"));
+            assertEquals("true", evaluate(activity, "document.querySelector('meta[name=viewport]').content.indexOf('viewport-fit=cover')===-1"));
+            // 新旧 WebView 都由原生留出系统栏；页面加载后不能切换到状态栏下面。
+            instrumentation.runOnMainSync(() -> {
+                var decor = activity.getWindow().getDecorView();
+                var insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor);
+                assertNotNull("Window insets must be available", insets);
+                var safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+                int[] position = new int[2]; activity.getBridge().getWebView().getLocationOnScreen(position);
+                assertTrue("WebView overlaps the status bar", position[1] >= safe.top);
+                assertTrue("WebView overlaps the display cutout", position[0] >= safe.left);
+            });
         } finally { activity.runOnUiThread(activity::finish); }
     }
 }

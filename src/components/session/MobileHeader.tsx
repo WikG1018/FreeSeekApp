@@ -3,7 +3,7 @@ import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
 import { IconButton } from '../base/IconButton.js'
-import { openMobileSider } from '../sider/mobileSiderState.js'
+import { openMobileSider, useMobileSider } from '../sider/mobileSiderState.js'
 import styles from './MobileHeader.module.css'
 
 /**
@@ -18,6 +18,7 @@ export const MobileHeader = ({
   headerRef?: Ref<HTMLDivElement>
 }) => {
   const t = useTranslate()
+  const open = useMobileSider((state) => state.open)
   return (
     <div ref={headerRef} className={styles.header} data-testid="chat-header">
       <span className={styles.action}>
@@ -27,6 +28,8 @@ export const MobileHeader = ({
           hitArea
           icon={<IconMenuOutline20 />}
           aria-label={t('expandSiderbarButton')}
+          aria-controls="mobile-sider"
+          aria-expanded={open}
           onClick={openMobileSider}
         />
       </span>

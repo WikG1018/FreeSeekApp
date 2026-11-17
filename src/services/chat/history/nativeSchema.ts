@@ -279,6 +279,7 @@ export const readNativeSession = (value: unknown): Session => {
   return {
     id: id(item.id),
     title: string(item.title),
+    ...(item.pinned === undefined ? {} : { pinned: boolean(item.pinned) }),
     createdAt: number(item.createdAt),
     updatedAt: number(item.updatedAt),
     messages,

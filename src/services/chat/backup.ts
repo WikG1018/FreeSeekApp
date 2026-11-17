@@ -4,6 +4,7 @@ import { replaceHistory, useChatStore, loadBackupFile, flushChatUpdates } from '
 import type { Session } from './types.js'
 import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
+import type { ImportProgress } from './history/readJson.js'
 
 export { BackupError } from './history/errors.js'
 
@@ -60,10 +61,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
  * 确认覆盖后调用：先检查 ZIP 格式与版本，校验失败时保留正在生成的回答；
  * 通过后从 ZIP 流式写入暂存，成功才替换原有会话与图片原件。返回导入的会话数。
  */
-export const importHistory = (
-  file: File,
-  onProgress?: (processed: number, total: number) => void
-): Promise<number> =>
+export const importHistory = (file: File, onProgress?: ImportProgress): Promise<number> =>
   enqueueBackup('import', async () => {
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     await checkArchiveFormat(file)

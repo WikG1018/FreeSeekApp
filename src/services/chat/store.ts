@@ -160,7 +160,10 @@ const getStreamController = (id: string) => {
 }
 
 const sameSummary = (a: SessionSummary, b: SessionSummary) =>
-  a.title === b.title && a.createdAt === b.createdAt && a.updatedAt === b.updatedAt
+  a.title === b.title &&
+  a.createdAt === b.createdAt &&
+  a.updatedAt === b.updatedAt &&
+  !!a.pinned === !!b.pinned
 
 const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
@@ -594,6 +597,26 @@ export const selectSession = (id: string) => {
     void ensureSessionLoaded(id)
     trimSessionCache()
   }
+}
+
+/** 沿用会话保存队列与失败重试，置顶不改变最后聊天时间。 */
+export const setSessionPinned = async (id: string, pinned: boolean): Promise<boolean> => {
+  if (get().importingHistory || deletingSessions.has(id)) {
+    return false
+  }
+  const epoch = historyEpoch
+  await ensureSessionLoaded(id)
+  if (
+    epoch !== historyEpoch ||
+    get().importingHistory ||
+    deletingSessions.has(id) ||
+    !getSession(id)
+  ) {
+    return false
+  }
+  updateSession(id, (session) => ({ ...session, pinned }))
+  persist(id)
+  return true
 }
 
 export const renameSession = (id: string, title: string) => {

@@ -10,6 +10,9 @@
   line-height: 22px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  transition:
+    background-color var(--fs-duration-fast) var(--fs-ease-out),
+    color var(--fs-duration-fast) var(--fs-ease-out);
 
   &.active {
     background-color: var(--dsw-specific-sidebar-nav-item-active-accent);
@@ -37,6 +40,13 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   line-height: 18px;
+}
+
+.pin {
+  display: flex;
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .action {
@@ -67,14 +77,24 @@
 
 @media not all and (min-width: 768px) {
   .item {
-    height: 44px;
-    padding: 11px 6px 11px 12px;
+    min-height: 46px;
+    height: auto;
+    padding: 3px 6px 3px 12px;
     border-radius: 16px;
     font-size: 16px;
   }
 
   .title {
     line-height: 22px;
+  }
+
+  .action {
+    display: flex;
+  }
+
+  .action button {
+    width: 40px;
+    height: 40px;
   }
 
   .renameInput {

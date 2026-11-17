@@ -26,6 +26,9 @@ importers:
       '@juggle/resize-observer':
         specifier: 3.4.0
         version: 3.4.0
+      '@streamparser/json':
+        specifier: 0.0.26
+        version: 0.0.26
       '@types/katex':
         specifier: ^0.16.5
         version: 0.16.8
@@ -567,6 +570,9 @@ packages:
     peerDependenciesMeta:
       selfsigned:
         optional: true
+
+  '@streamparser/json@0.0.26':
+    resolution: {integrity: sha512-46597LNFI+MFdUnzX2QJWwmdTRdq0XVD+vVNJTtGVzIrnCuhG9pFo1OAzbNBqci8UJgk/X5KJZ6LcV+y7PTuDQ==}
 
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
@@ -2039,6 +2045,8 @@ snapshots:
     dependencies:
       '@rspack/core': 2.0.2(@swc/helpers@0.5.23)
       '@rspack/dev-middleware': 2.0.6(@rspack/core@2.0.2(@swc/helpers@0.5.23))
+
+  '@streamparser/json@0.0.26': {}
 
   '@swc/helpers@0.5.23':
     dependencies:

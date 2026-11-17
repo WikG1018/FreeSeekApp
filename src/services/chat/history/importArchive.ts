@@ -1,5 +1,5 @@
 import * as db from '../db.js'
-import { readJsonEntry as readJson } from './readJson.js'
+import { readJsonEntry as readJson, type ImportProgress } from './readJson.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
 import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
@@ -84,7 +84,7 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
  */
 export const importArchive = async (
   file: File,
-  onProgress?: (processed: number, total: number) => void
+  onProgress?: ImportProgress
 ): Promise<NativeBackupSettings | undefined> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
@@ -111,6 +111,8 @@ export const importArchive = async (
   const total = await countArchiveEntries(file)
   let processed = 0
   onProgress?.(processed, total)
+  const read = (entry: ArchiveEntry) =>
+    readJson(entry, (bytes, size) => onProgress?.(processed, total, { bytes, total: size }))
 
   try {
     const entries = readArchive(file)
@@ -121,7 +123,7 @@ export const importArchive = async (
         if (path !== MANIFEST_PATH) {
           fail('backupUnrecognized')
         }
-        const data = await readJson(entry)
+        const data = await read(entry)
         if (isNativeManifest(data)) {
           return await importNativeEntries(entries, readNativeManifest(data), total, onProgress)
         }
@@ -131,7 +133,7 @@ export const importArchive = async (
         // 账号信息（已脱敏）不导入；文件可能缺失。
         await skipEntry(entry)
       } else if (sessionId !== null && !index) {
-        const local = toLocalSession(readSessionFile(await readJson(entry)))
+        const local = toLocalSession(readSessionFile(await read(entry)))
         if (local.session.id !== sessionId || imported.has(sessionId)) {
           fail('backupIncomplete')
         }
@@ -142,7 +144,7 @@ export const importArchive = async (
         }
         await db.addStagingSession(local.session)
       } else if (path === INDEX_PATH && !index) {
-        index = readSessionIndex(await readJson(entry))
+        index = readSessionIndex(await read(entry))
       } else if (
         index
           ? imported.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')

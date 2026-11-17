@@ -1,15 +1,113 @@
-import { fail } from './errors.js'
-import { readEntry, type ArchiveEntry } from './zipReader.js'
+import { JSONParser, TokenType } from '@streamparser/json'
+import { BackupError, fail } from './errors.js'
+import type { ArchiveEntry } from './zipReader.js'
 
-/** 只约束一次性 JSON 解析，附件仍流式读取。避免压缩小包展开巨型 JSON 耗尽旧机内存。 */
-export const MAX_JSON_BYTES = 32 * 1024 * 1024
-export const readJsonEntry = async (entry: ArchiveEntry): Promise<unknown> => {
+/** 限制解压后的单条记录；不再同时保留整份 Blob、JSON 字符串和解析结果。 */
+export const MAX_JSON_BYTES = 128 * 1024 * 1024
+const PARSE_CHUNK_BYTES = 64 * 1024
+const MAX_DEPTH = 64
+const MAX_TOKENS = 2_000_000
+
+/** 导出遵守相同的结构预算，避免产生本应用无法再读取的备份。 */
+export const assertJsonStructure = (value: unknown): void => {
+  let tokens = 0
+  const visit = (value: unknown, depth: number) => {
+    if (value !== null && typeof value === 'object') {
+      if (depth >= MAX_DEPTH) {
+        fail('backupJsonTooLarge')
+      }
+      if (Array.isArray(value)) {
+        tokens += 2 + Math.max(0, value.length - 1)
+        if (tokens > MAX_TOKENS) {
+          fail('backupJsonTooLarge')
+        }
+        for (const item of value) {
+          visit(item, depth + 1)
+        }
+      } else {
+        const keys = Object.keys(value).filter(
+          (key) => (value as Record<string, unknown>)[key] !== undefined
+        )
+        tokens += 2 + Math.max(0, keys.length - 1) + keys.length * 2
+        if (tokens > MAX_TOKENS) {
+          fail('backupJsonTooLarge')
+        }
+        for (const key of keys) {
+          visit((value as Record<string, unknown>)[key], depth + 1)
+        }
+      }
+    } else {
+      tokens++
+    }
+    if (tokens > MAX_TOKENS) {
+      fail('backupJsonTooLarge')
+    }
+  }
+  visit(value, 0)
+}
+
+export type ImportProgress = (
+  processed: number,
+  total: number,
+  reading?: { bytes: number; total: number }
+) => void
+
+export const readJsonEntry = async (
+  entry: ArchiveEntry,
+  onRead?: (bytes: number, total: number) => void
+): Promise<unknown> => {
   if (entry.size > MAX_JSON_BYTES) {
     fail('backupJsonTooLarge')
   }
-  try {
-    return JSON.parse(await (await readEntry(entry)).text())
-  } catch {
-    return fail('backupInvalidJson')
+  const parser = new JSONParser({ paths: ['$'], stringBufferSize: 64 * 1024 })
+  let result: unknown
+  let depth = 0
+  let tokens = 0
+  let bytes = 0
+  let yieldedAt = performance.now()
+  parser.onValue = ({ value }) => {
+    result = value
   }
+  parser.onToken = ({ token }) => {
+    if (token === TokenType.LEFT_BRACE || token === TokenType.LEFT_BRACKET) {
+      depth++
+    }
+    if (token === TokenType.RIGHT_BRACE || token === TokenType.RIGHT_BRACKET) {
+      depth--
+    }
+    if (depth > MAX_DEPTH || ++tokens > MAX_TOKENS) {
+      fail('backupJsonTooLarge')
+    }
+  }
+  parser.onError = (error) => {
+    if (error instanceof BackupError) {
+      throw error
+    }
+    fail('backupInvalidJson')
+  }
+  // 必须消费到流结束：JSON 根值解析完后仍需校验尾部、声明大小和 ZIP CRC。
+  // 只由解析器转换语法错误；ZIP 校验错误交给导入层处理，避免误报为 JSON 错误。
+  for await (const chunk of entry.stream) {
+    for (let offset = 0; offset < chunk.byteLength; offset += PARSE_CHUNK_BYTES) {
+      const part = chunk.subarray(offset, offset + PARSE_CHUNK_BYTES)
+      bytes += part.byteLength
+      if (bytes > MAX_JSON_BYTES) {
+        fail('backupJsonTooLarge')
+      }
+      parser.write(part)
+      if (performance.now() - yieldedAt >= 16) {
+        onRead?.(bytes, entry.size)
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        yieldedAt = performance.now()
+      }
+    }
+  }
+  if (!parser.isEnded) {
+    parser.end()
+  }
+  if (result === undefined) {
+    fail('backupInvalidJson')
+  }
+  onRead?.(bytes, entry.size)
+  return result
 }

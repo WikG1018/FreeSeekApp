@@ -1,3 +1,15 @@
+export const IconPinOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path
+      d="M6 2h4l-.5 4 2 2v1.5h-7V8l2-2L6 2ZM8 9.5V14"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 export const IconCheckOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -628,12 +640,7 @@ export const IconEyeOutline16 = () => (
 /** 密码隐藏 */
 export const IconEyeOffOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M2.5 2.5l11 11"
-      stroke="currentColor"
-      strokeWidth={1.3}
-      strokeLinecap="round"
-    />
+    <path d="M2.5 2.5l11 11" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" />
     <path
       d="M6.1 4.1c.6-.2 1.3-.3 1.9-.3 4 0 6.2 4.2 6.2 4.2a9.6 9.6 0 0 1-2.2 2.7M9.9 11.9c-.6.2-1.3.3-1.9.3-4 0-6.2-4.2-6.2-4.2a9.6 9.6 0 0 1 2.2-2.7"
       stroke="currentColor"
@@ -648,12 +655,7 @@ export const IconEyeOffOutline16 = () => (
 export const IconInfoOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <circle cx={8} cy={8} r={6.3} stroke="currentColor" strokeWidth={1.4} />
-    <path
-      d="M8 7.2v4"
-      stroke="currentColor"
-      strokeWidth={1.4}
-      strokeLinecap="round"
-    />
+    <path d="M8 7.2v4" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" />
     <circle cx={8} cy={4.9} r={0.9} fill="currentColor" />
   </svg>
 )
@@ -671,4 +673,3 @@ export const IconToastError16 = () => (
     />
   </svg>
 )
-
