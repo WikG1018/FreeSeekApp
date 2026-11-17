@@ -63,10 +63,11 @@ jobs:
         env:
           IMAGE: system-images;android-${{ matrix.image }};${{ matrix.tag }};x86_64
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           sdkmanager "$IMAGE" emulator > sdk-install.log 2>&1
           echo no | avdmanager create avd -n freeseek-test -k "$IMAGE" --force
           "$ANDROID_HOME/emulator/emulator" -avd freeseek-test -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048 > emulator.log 2>&1 &
-          adb wait-for-device
+          timeout 120 adb wait-for-device
           for i in $(seq 1 90); do
             [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && break
             sleep 2

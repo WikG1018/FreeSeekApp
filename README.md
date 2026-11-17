@@ -94,7 +94,7 @@ FreeSeek 2.1.0 起导出的 `freeseek-backup-*.zip` 保存完整消息分支、�
 
 ## 自行构建
 
-需要 Node.js 24+、pnpm 10、JDK 21、Android SDK（compileSdk 36）。
+需要 Node.js 24+、pnpm 10、JDK 21、Android SDK（compileSdk 37）。
 
 ```sh
 pnpm install
