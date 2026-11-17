@@ -9,3 +9,6 @@ build/
 .env.*
 !.env.example
 tmp/
+# 开发过程中的临时截图与脚本误写目录（文档截图只保留 docs/screenshots）
+shots/
+freeseek/
