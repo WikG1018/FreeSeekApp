@@ -407,3 +407,39 @@
     border-color: rgba(37, 99, 235, 0.5);
   }
 }
+
+.manualPay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.manualTitle {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.qrImage {
+  width: 190px;
+  height: 190px;
+  margin: 6px 0;
+  border-radius: 14px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.orderNo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+
+  b {
+    font-family: var(--ds-font-family-code);
+    font-size: 13px;
+    color: var(--dsw-alias-label-primary);
+  }
+}

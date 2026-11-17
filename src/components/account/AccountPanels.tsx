@@ -13,6 +13,7 @@ import {
   type TopupOrder,
 } from '../../services/account.js'
 import { openExternal } from '../../utils/openExternal.js'
+import { copyText } from '../../utils/clipboard.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
@@ -118,9 +119,15 @@ export const TopupDialog = ({ onClose }: { onClose: () => void }) => {
             <Button variant="outlined" onClick={onClose}>
               {t('cancel')}
             </Button>
-            <Button disabled={busy} onClick={() => void confirm()}>
-              {order.mock ? t('accountPayMock') : t('accountPayConfirm')}
-            </Button>
+            {order.manual ? (
+              <Button disabled={busy} onClick={() => void confirm()}>
+                {t('accountRefresh')}
+              </Button>
+            ) : (
+              <Button disabled={busy} onClick={() => void confirm()}>
+                {order.mock ? t('accountPayMock') : t('accountPayConfirm')}
+              </Button>
+            )}
           </>
         ) : (
           <>
@@ -135,10 +142,51 @@ export const TopupDialog = ({ onClose }: { onClose: () => void }) => {
       }
     >
       {order ? (
-        <div className={styles.payWaiting}>
-          <div className={styles.payAmount}>{formatMoney(order.amountCny * 1_000_000)}</div>
-          <p className={styles.hint}>{t('accountPaying')}</p>
-        </div>
+        order.manual ? (
+          <div className={styles.manualPay}>
+            <div className={styles.payAmount}>{formatMoney(order.amountCny * 1_000_000)}</div>
+            <div className={styles.manualTitle}>{t('accountManualScan')}</div>
+            {order.payee ? (
+              <div className={styles.hint}>
+                {t('accountManualPayee')}：{order.payee}
+              </div>
+            ) : null}
+            <img
+              className={styles.qrImage}
+              src={
+                order.qrUrl && /^https?:/.test(order.qrUrl)
+                  ? order.qrUrl
+                  : `${useAccount.getState().serverUrl.replace(/\/+$/, '')}${order.qrUrl ?? ''}`
+              }
+              alt={t('accountManualScan')}
+            />
+            <div className={styles.orderNo}>
+              <span>
+                {t('accountManualOrderNo')} <b>{order.id}</b>
+              </span>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => {
+                  void copyText(order.id).then((ok) => {
+                    if (ok) {
+                      showToast(t('accountManualCopied'))
+                    }
+                  })
+                }}
+              >
+                {t('accountManualCopy')}
+              </button>
+            </div>
+            <p className={styles.hint}>{t('accountManualNote')}</p>
+            <p className={styles.hint}>{t('accountManualWaiting')}</p>
+          </div>
+        ) : (
+          <div className={styles.payWaiting}>
+            <div className={styles.payAmount}>{formatMoney(order.amountCny * 1_000_000)}</div>
+            <p className={styles.hint}>{t('accountPaying')}</p>
+          </div>
+        )
       ) : (
         <div className={styles.amountGrid}>
           {PRESETS.map((value) => (

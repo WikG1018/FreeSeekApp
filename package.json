@@ -1,6 +1,6 @@
 {
   "name": "freeseek",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "畅聊：使用自己的 DeepSeek API Key，无次数与额度限制的本地聊天 App。基于 deepseek-ai/chat-demo (MIT) 二次开发。",
   "license": "MIT",
   "private": true,

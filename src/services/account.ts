@@ -216,6 +216,10 @@ export type TopupOrder = {
   status: 'pending' | 'paid' | 'expired'
   payUrl?: string
   mock?: boolean
+  /** 个人收款码：无回调，靠备注订单号 + 运营者导入账单核销 */
+  manual?: boolean
+  qrUrl?: string
+  payee?: string
   expiresAt: number
 }
 

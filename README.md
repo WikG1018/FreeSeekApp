@@ -42,7 +42,7 @@ See the [Chinese README](README.zh-CN.md) for full documentation (installation, 
 Sign-in is optional — the app still works with your own key by default. With an account you pay from a balance instead:
 
 - Billing at **1.1× official DeepSeek rates** (peak/off-peak), deducted per request from your balance; 402 when the balance runs out
-- Top up inside the app: the server signs an Alipay WAP checkout URL and the app opens it in the system browser, which launches the Alipay app directly
+- Three top-up channels: Alipay WAP checkout (needs a merchant account, one tap), **a personal payment QR code with the order id in the note (no merchant account needed)**, or redeem codes
 - The server stores token counts and amounts only — **never message content**; your upstream key never leaves the server
 - Attachments are proxied and billed as input tokens; speech is proxied without extra charge but rate-limited per day
 

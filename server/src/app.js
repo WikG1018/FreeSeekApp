@@ -9,6 +9,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { applyBalance, applyBalanceTx, tx } from './db.js'
+import { creditOrder as creditOrderDb, getOrder } from './orders.js'
+import { readFileSync } from 'node:fs'
 import {
   applyCors,
   clientIp,
@@ -214,6 +216,20 @@ export const createApp = ({ config, db, upstream, alipay }) => {
       return
     }
 
+    if (config.pay.provider === 'manual') {
+      // 个人收款码：没有回调，靠用户备注订单号 + 运营者导入账单核销
+      sendJson(res, 201, {
+        id,
+        amountCny: amount,
+        status: 'pending',
+        manual: true,
+        qrUrl: config.pay.manualQrUrl || '/pay/qr.png',
+        payee: config.pay.manualPayee,
+        expiresAt,
+      })
+      return
+    }
+
     const returnUrl = config.publicOrigin ? `${config.publicOrigin}/pay/return` : ''
     const payUrl = alipay.buildWapPayUrl({
       outTradeNo: id,
@@ -224,35 +240,7 @@ export const createApp = ({ config, db, upstream, alipay }) => {
     sendJson(res, 201, { id, amountCny: amount, status: 'pending', payUrl, expiresAt })
   }
 
-  /** 入账：订单状态原子流转，重复回调不会重复加钱 */
-  const creditOrder = (orderId, { tradeNo, totalAmount }) => {
-    return tx(db, () => {
-      const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)
-      if (!order) {
-        throw Object.assign(new Error('订单不存在'), { status: 404 })
-      }
-      if (order.status === 'paid') {
-        return { already: true, amountMicro: order.amount_micro }
-      }
-      if (totalAmount !== undefined) {
-        const paidMicro = toMicro(Number(totalAmount))
-        if (paidMicro !== order.amount_micro) {
-          throw Object.assign(new Error('支付金额与订单不一致'), { status: 400 })
-        }
-      }
-      db.prepare('UPDATE orders SET status = ?, trade_no = ?, paid_at = ? WHERE id = ?').run(
-        'paid',
-        tradeNo ?? null,
-        Date.now(),
-        orderId
-      )
-      applyBalanceTx(db, order.user_id, order.amount_micro, 'topup', {
-        orderId,
-        tradeNo: tradeNo ?? null,
-      })
-      return { already: false, amountMicro: order.amount_micro }
-    })
-  }
+  const creditOrder = (orderId, info) => creditOrderDb(db, orderId, info)
 
   const orderStatus = async (req, res, id) => {
     const session = sessionOf(req)
@@ -279,6 +267,14 @@ export const createApp = ({ config, db, upstream, alipay }) => {
     if (config.pay.provider === 'mock') {
       const result = creditOrder(order.id, {})
       return sendJson(res, 200, { status: 'paid', amountCny: result.amountMicro / 1_000_000 })
+    }
+    if (config.pay.provider === 'manual') {
+      // 线下收款：默认等运营者导入账单；本地联调可开启 ALLOW_DEV_CONFIRM
+      if (config.allowDevConfirm) {
+        const result = creditOrder(order.id, {})
+        return sendJson(res, 200, { status: 'paid', amountCny: result.amountMicro / 1_000_000 })
+      }
+      return sendJson(res, 200, { status: order.status })
     }
     const query = await alipay.query(order.id)
     if (!query.ok) {
@@ -576,6 +572,8 @@ export const createApp = ({ config, db, upstream, alipay }) => {
           markup: config.markup,
           topupMin: config.pay.minCny,
           topupMax: config.pay.maxCny,
+          manualPayee: config.pay.manualPayee,
+          manualQr: config.pay.provider === 'manual' ? '/pay/qr.png' : '',
         })
       }
       if (path === '/api/auth/register' && method === 'POST') {
@@ -602,6 +600,22 @@ export const createApp = ({ config, db, upstream, alipay }) => {
       if (path === '/api/pay/orders' && method === 'POST') return await createOrder(req, res)
       if (path === '/api/pay/notify' && method === 'POST') return await notify(req, res)
       if (path === '/pay/return' && method === 'GET') return payReturn(res)
+      if (path === '/pay/qr.png' && method === 'GET') {
+        if (config.pay.provider !== 'manual') {
+          return sendError(res, 404, 'not found')
+        }
+        try {
+          const image = readFileSync(config.pay.manualQrFile)
+          res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Content-Length': image.length,
+            'Cache-Control': 'public, max-age=3600',
+          })
+          return res.end(image)
+        } catch {
+          return sendError(res, 404, '收款码未配置')
+        }
+      }
 
       const orderMatch = /^\/api\/pay\/orders\/([A-Za-z0-9]+)$/.exec(path)
       if (orderMatch) {
@@ -613,7 +627,8 @@ export const createApp = ({ config, db, upstream, alipay }) => {
       }
       const devMatch = /^\/api\/pay\/dev\/([A-Za-z0-9]+)\/confirm$/.exec(path)
       if (devMatch && method === 'POST') {
-        if (config.pay.provider !== 'mock') {
+        const allowed = config.pay.provider === 'mock' || config.allowDevConfirm
+        if (!allowed) {
           return sendError(res, 404, 'not found')
         }
         return await confirmOrder(req, res, devMatch[1])

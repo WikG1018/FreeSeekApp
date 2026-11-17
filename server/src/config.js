@@ -71,8 +71,17 @@ export const config = {
   adminToken: readSecret(env.ADMIN_TOKEN, env.ADMIN_TOKEN_FILE),
 
   pay: {
-    /** mock：本地联调（页面显示「模拟支付」按钮）；alipay：当面付预下单 */
-    provider: env.PAY_PROVIDER === 'alipay' ? 'alipay' : 'mock',
+    /**
+     * mock：本地联调（「模拟支付」按钮）
+     * alipay：手机网站支付（需商户资质）
+     * manual：个人收款码 + 备注订单号，运营者导入账单自动核销（无需资质）
+     */
+    provider: ['mock', 'alipay', 'manual'].includes(env.PAY_PROVIDER) ? env.PAY_PROVIDER : 'mock',
+    /** 个人收款码图片（manual 模式） */
+    manualQrFile: env.MANUAL_QR_FILE ? resolve(env.MANUAL_QR_FILE) : '',
+    manualQrUrl: env.MANUAL_QR_URL ?? '',
+    /** 收款人说明，例如「支付宝：张三」 */
+    manualPayee: env.MANUAL_PAYEE ?? '',
     appId: env.ALIPAY_APP_ID ?? '',
     privateKey: readSecret(env.ALIPAY_PRIVATE_KEY, env.ALIPAY_PRIVATE_KEY_FILE),
     publicKey: readSecret(env.ALIPAY_PUBLIC_KEY, env.ALIPAY_PUBLIC_KEY_FILE),
@@ -84,6 +93,8 @@ export const config = {
     /** 订单有效期（分钟） */
     orderMinutes: num(env.ORDER_MINUTES, 30),
   },
+  /** 本地联调：允许用 /api/pay/dev/:id/confirm 模拟运营者确认到账 */
+  allowDevConfirm: env.ALLOW_DEV_CONFIRM === '1',
 }
 
 /** 启动前校验：生产模式缺关键配置直接报错，避免带病上线 */
@@ -91,6 +102,9 @@ export const assertConfig = () => {
   const problems = []
   if (!config.mockUpstream && !config.upstreamKey) {
     problems.push('缺少 DEEPSEEK_API_KEY（或 DEEPSEEK_API_KEY_FILE）')
+  }
+  if (config.pay.provider === 'manual' && !config.pay.manualQrFile && !config.pay.manualQrUrl) {
+    problems.push('manual 支付需要 MANUAL_QR_FILE 或 MANUAL_QR_URL（个人收款码图片）')
   }
   if (config.pay.provider === 'alipay') {
     if (!config.pay.appId) problems.push('缺少 ALIPAY_APP_ID')
