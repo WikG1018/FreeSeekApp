@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="140" viewBox="0 0 640 140" role="img" aria-label="下载量趋势">
+  <rect width="640" height="140" fill="#f6f8fc" rx="12"/>
+  <polyline fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="0.0,12.0"/>
+  <polyline fill="url(#g)" stroke="none" points="0,140 0.0,12.0 640,140"/>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563eb" stop-opacity="0.22"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/></linearGradient></defs>
+  <text x="12" y="132" font-family="system-ui, sans-serif" font-size="11" fill="#6b7280">峰值 3 · 最新 3</text>
+</svg>

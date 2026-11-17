@@ -2,6 +2,8 @@
 
 **自带 DeepSeek API Key 的安卓聊天客户端：没有次数限制、没有每日额度、不清理你的会话，数据只存在本机。**
 
+[![Downloads](https://img.shields.io/github/downloads/WikG1018/FreeSeekApp/total.svg)](https://github.com/WikG1018/FreeSeekApp/releases) [![Latest release](https://img.shields.io/github/v/release/WikG1018/FreeSeekApp.svg)](https://github.com/WikG1018/FreeSeekApp/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 基于 DeepSeek 官方开源的 [chat-demo](https://github.com/deepseek-ai/chat-demo)（MIT）二次开发，界面延续官方风格，另加对话接续、人设库、用量费用看板与应用内更新。
 
 <p>
@@ -113,7 +115,7 @@ scripts/             图标生成与冒烟脚本
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)。
+见 [CHANGELOG.md](CHANGELOG.md)；发行与下载数据见 [docs/stats](docs/stats/README.md)。
 
 ## 许可与致谢
 
