@@ -1,7 +1,7 @@
 import { createConfig } from '../../rspack.config.ts'
 
 const config = createConfig({
-  apiOrigin: 'https://api.review.invalid',
+  apiOrigin: process.env.FREESEEK_TEST_API_ORIGIN || 'https://api.review.invalid',
   devServer: {
     host: '127.0.0.1',
     port: Number(process.env.FREESEEK_TEST_PORT) || 8187,

@@ -5,8 +5,9 @@
   flex-shrink: 0;
   box-sizing: border-box;
   width: 240px;
+  max-width: 100%;
   min-height: 64px;
-  padding: 0 12px 0 14px;
+  padding: 8px 12px 8px 14px;
   border-radius: 16px;
   border: 1px solid var(--dsw-alias-border-l2);
   background-color: var(--dsw-specific-input-major);
@@ -28,6 +29,9 @@
 
 .editable {
   padding-right: 24px;
+  .remove {
+    opacity: 1;
+  }
 }
 
 .failed {
@@ -120,4 +124,8 @@
   opacity: 1;
   color: var(--dsw-alias-label-primary-foreground);
   background-color: var(--dsw-alias-state-error-primary);
+}
+.subCaption.errorDescription {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

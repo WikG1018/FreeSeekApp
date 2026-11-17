@@ -5,6 +5,13 @@ import type { TranslationMessage } from '../../i18n/index.js'
  * 只依赖文案 key，不依赖 ApiError，供 client 与 errors 共用。
  */
 export const describeKnownApiError = (message: string): TranslationMessage | undefined => {
+  if (
+    /context.{0,40}(?:length|limit|exceed)|maximum.{0,30}(?:context|tokens)|token.{0,30}exceed/i.test(
+      message
+    )
+  ) {
+    return { key: 'replyContextTooLong' }
+  }
   if (/uploaded an (unsupported|invalid) image/i.test(message)) {
     return { key: 'apiImageUnsupported' }
   }

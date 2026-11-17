@@ -37,6 +37,7 @@ public class MicPermissionPlugin extends Plugin {
 
     @PluginMethod
     public void request(PluginCall call) {
+        DiagnosticsLog.record(getContext(), "speech", "microphone.requested", new JSObject());
         if (getPermissionState("microphone") == PermissionState.GRANTED) {
             respond(call, true);
             return;
@@ -60,6 +61,8 @@ public class MicPermissionPlugin extends Plugin {
     }
 
     private void respond(PluginCall call, boolean granted) {
+        JSObject meta = new JSObject(); meta.put("granted", granted);
+        DiagnosticsLog.record(getContext(), "speech", "microphone.result", meta);
         JSObject result = new JSObject();
         result.put("granted", granted);
         call.resolve(result);

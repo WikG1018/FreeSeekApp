@@ -33,6 +33,8 @@ public class UpdatePlugin extends Plugin {
     private static final String REPO = "WikG1018/FreeSeekApp";
     private static final String[] MIRRORS = {"https://gh-proxy.com/", "https://ghfast.top/", "https://ghproxy.net/"};
     private volatile boolean cancelled = false;
+    private static final java.util.concurrent.ScheduledExecutorService DEADLINES =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     private File updateDir() throws Exception {
         // Android 7–9 的外部应用目录可被持有存储权限的其他应用修改，安装包须放内部私有目录。
@@ -57,7 +59,8 @@ public class UpdatePlugin extends Plugin {
             throw new IllegalArgumentException("invalid update URL");
         }
         boolean allowed = metadata
-            ? direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest")
+            ? (direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest") ||
+               direct.equals("https://github.com/" + REPO + "/releases/latest/download/update.json"))
             : url.getHost().equals("github.com") && url.getPath().matches(
                 "/" + REPO + "/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/freeseek-v[0-9]+\\.[0-9]+\\.[0-9]+-release\\.apk");
         if (!allowed) { throw new IllegalArgumentException("untrusted update URL"); }
@@ -120,18 +123,32 @@ public class UpdatePlugin extends Plugin {
 
     @PluginMethod
     public void get(PluginCall call) {
+        DiagnosticsLog.record(getContext(), "update", "metadata.started", new JSObject());
         new Thread(() -> {
             HttpURLConnection connection = null;
+            java.util.concurrent.ScheduledFuture<?> deadline = null;
             try {
-                connection = connect(allowedUrl(call.getString("url", ""), true),
-                    Math.max(1000, Math.min(30000, call.getInt("timeoutMs", 8000))));
+                int timeout = Math.max(1000, Math.min(30000, call.getInt("timeoutMs", 8000)));
+                long endsAt = android.os.SystemClock.elapsedRealtime() + timeout;
+                connection = connect(allowedUrl(call.getString("url", ""), true), timeout);
+                final HttpURLConnection active = connection;
+                deadline = DEADLINES.schedule(active::disconnect, timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
                 connection.setRequestProperty("Accept", "application/vnd.github+json");
                 int status = connection.getResponseCode();
+                if (!"https".equals(connection.getURL().getProtocol())) { throw new IllegalStateException("untrusted redirect"); }
+                JSObject metadata = new JSObject(); metadata.put("status", status);
+                metadata.put("source", connection.getURL().getHost());
+                DiagnosticsLog.record(getContext(), "update", "metadata.response", metadata);
                 try (InputStream in = status >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
                     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                     if (in != null) {
                         byte[] buffer = new byte[16 * 1024]; int read;
-                        while ((read = in.read(buffer)) != -1) {
+                        while (true) {
+                            long remaining = endsAt - android.os.SystemClock.elapsedRealtime();
+                            if (remaining <= 0) { throw new java.net.SocketTimeoutException("metadata timeout"); }
+                            connection.setReadTimeout((int) remaining);
+                            read = in.read(buffer);
+                            if (read == -1) { break; }
                             if (bytes.size() + read > 2_000_000) { throw new IllegalStateException("response too large"); }
                             bytes.write(buffer, 0, read);
                         }
@@ -139,8 +156,8 @@ public class UpdatePlugin extends Plugin {
                     JSObject result = new JSObject(); result.put("status", status);
                     result.put("body", bytes.toString(StandardCharsets.UTF_8.name())); call.resolve(result);
                 }
-            } catch (Exception error) { call.reject("update request failed", error); }
-            finally { if (connection != null) { connection.disconnect(); } }
+            } catch (Exception error) { DiagnosticsLog.error(getContext(), "update", "metadata.failed", error); call.reject("update request failed", error); }
+            finally { if (deadline != null) { deadline.cancel(false); } if (connection != null) { connection.disconnect(); } }
         }).start();
     }
 
@@ -152,7 +169,9 @@ public class UpdatePlugin extends Plugin {
                 boolean exists = false;
                 String reason = "";
                 try { verify(file, call); exists = true; }
-                catch (Exception invalid) { reason = invalid.toString(); if (file.exists()) { file.delete(); } }
+                catch (Exception invalid) { reason = invalid.toString(); if (file.exists()) {
+                    DiagnosticsLog.error(getContext(), "update", "cache.rejected", invalid); file.delete();
+                } }
                 JSObject result = new JSObject(); result.put("exists", exists);
                 result.put("reason", reason);
                 result.put("path", exists ? file.getAbsolutePath() : ""); result.put("size", exists ? file.length() : 0);
@@ -163,10 +182,12 @@ public class UpdatePlugin extends Plugin {
 
     @PluginMethod
     public void download(PluginCall call) {
+        DiagnosticsLog.record(getContext(), "update", "download.started", new JSObject());
         cancelled = false;
         new Thread(() -> {
             HttpURLConnection connection = null;
             File temp = null;
+            java.util.concurrent.ScheduledFuture<?> deadline = null;
             try {
                 File target = apkFile(call.getString("fileName", ""));
                 URL url = allowedUrl(call.getString("url", ""), false);
@@ -180,6 +201,8 @@ public class UpdatePlugin extends Plugin {
                 temp = new File(target.getAbsolutePath() + ".part");
                 connection = connect(url, 60000);
                 connection.setConnectTimeout(15000);
+                final HttpURLConnection active = connection;
+                deadline = DEADLINES.schedule(active::disconnect, 20, java.util.concurrent.TimeUnit.MINUTES);
                 int status = connection.getResponseCode();
                 if (status != 200 || !"https".equals(connection.getURL().getProtocol())) {
                     throw new IllegalStateException("download HTTP " + status);
@@ -200,13 +223,16 @@ public class UpdatePlugin extends Plugin {
                     out.getFD().sync();
                 }
                 verify(temp, call);
+                JSObject verified = new JSObject(); verified.put("bytes", temp.length());
+                verified.put("source", url.getHost()); DiagnosticsLog.record(getContext(), "update", "package.verified", verified);
                 if (!temp.renameTo(target)) { throw new IllegalStateException("cannot publish verified package"); }
                 JSObject result = new JSObject(); result.put("path", target.getAbsolutePath()); result.put("size", target.length());
                 call.resolve(result);
             } catch (Exception error) {
+                DiagnosticsLog.error(getContext(), "update", "download.failed", error);
                 if (temp != null) { temp.delete(); }
                 call.reject("package download or verification failed", error);
-            } finally { if (connection != null) { connection.disconnect(); } }
+            } finally { if (deadline != null) { deadline.cancel(false); } if (connection != null) { connection.disconnect(); } }
         }).start();
     }
 
@@ -215,6 +241,7 @@ public class UpdatePlugin extends Plugin {
 
     @PluginMethod
     public void install(PluginCall call) {
+        DiagnosticsLog.record(getContext(), "update", "install.started", new JSObject());
         new Thread(() -> {
             try {
                 File file = new File(call.getString("path", ""));
@@ -224,6 +251,7 @@ public class UpdatePlugin extends Plugin {
                 verify(file, call);
                 Context context = getContext();
                 if (Build.VERSION.SDK_INT >= 26 && !context.getPackageManager().canRequestPackageInstalls()) {
+                    DiagnosticsLog.record(getContext(), "update", "install.permission-required", new JSObject());
                     Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:" + context.getPackageName()));
                     settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(settings);
@@ -234,8 +262,10 @@ public class UpdatePlugin extends Plugin {
                 Intent intent = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive");
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 context.startActivity(intent);
+                DiagnosticsLog.record(getContext(), "update", "installer.launched", new JSObject());
                 JSObject result = new JSObject(); result.put("installed", true); call.resolve(result);
             } catch (Exception error) {
+                DiagnosticsLog.error(getContext(), "update", "install.failed", error);
                 JSObject result = new JSObject(); result.put("installed", false); result.put("reason", "verification-or-install-failed");
                 call.resolve(result);
             }

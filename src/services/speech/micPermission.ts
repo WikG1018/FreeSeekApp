@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 /**
  * 原生麦克风权限桥：Android 端由 MicPermissionPlugin 显式申请 RECORD_AUDIO。
@@ -29,7 +30,8 @@ export const ensureMicPermission = async (): Promise<boolean> => {
     }
     const result = await MicPermission.request()
     return result.granted === true
-  } catch {
+  } catch (error) {
+    logEvent('speech', 'permission.bridge-unavailable', diagnosticError(error), 'warn')
     return true
   }
 }
@@ -41,7 +43,8 @@ export const openAppPermissionSettings = async (): Promise<void> => {
   }
   try {
     await MicPermission.openSettings()
-  } catch {
+  } catch (error) {
+    logEvent('speech', 'permission.settings-failed', diagnosticError(error), 'error')
     // 打不开就保持当前页面，用户仍可手动前往设置
   }
 }

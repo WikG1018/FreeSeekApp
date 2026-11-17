@@ -4,13 +4,14 @@ import { memo, useState } from 'react'
 import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
 import { canContinueReply } from '../../services/chat/reply.js'
-import { continueReply, regenerateReply } from '../../services/chat/store.js'
+import { continueReply, regenerateReply, newChat } from '../../services/chat/store.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { IconButton } from '../base/IconButton.js'
 import { Button } from '../base/Button.js'
 import { Markdown } from '../markdown/Markdown.js'
+import { ExpandableContent } from './ExpandableContent.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
 import { ReadAloudButton } from './ReadAloudButton.js'
@@ -70,15 +71,28 @@ export const AssistantMessage = memo(function AssistantMessage({
         />
       )}
       {answer ? (
-        <Markdown
-          className="ds-assistant-message-main-content"
-          content={answer.markdown}
-          loading={streaming}
-          cacheKey={message.id}
-          disableLink={false}
-          sources={view.sources}
+        <ExpandableContent
+          text={answer.markdown}
+          streaming={streaming}
+          render={(content) => (
+            <Markdown
+              className="ds-assistant-message-main-content"
+              content={content}
+              loading={streaming}
+              cacheKey={message.id}
+              disableLink={false}
+              sources={view.sources}
+            />
+          )}
         />
       ) : null}
+      {!streaming &&
+        message.contextWarnings?.map((warning, index) => (
+          <div key={index} className={styles.contextWarning} role="note">
+            <IconWarningOutline16 />
+            <span>{t(warning.key, warning.params)}</span>
+          </div>
+        ))}
       {waiting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (
@@ -123,6 +137,11 @@ export const AssistantMessage = memo(function AssistantMessage({
                   {t('topUp')}
                 </a>
               </>
+            ) : null}
+            {notice.action === 'newChat' ? (
+              <button type="button" className={styles.noticeAction} onClick={newChat}>
+                {t('newChatWithoutHistory')}
+              </button>
             ) : null}
           </span>
         </div>

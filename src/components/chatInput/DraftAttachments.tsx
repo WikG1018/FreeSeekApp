@@ -7,6 +7,9 @@ import { IconCloseFill14, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { FileCard } from '../files/FileCard.js'
 import styles from './ChatInput.module.css'
+import { openSettings } from '../settings/settingsDialogState.js'
+import { openExternal } from '../../utils/openExternal.js'
+import { logEvent } from '../../services/diagnostics/log.js'
 
 const UPLOADING: UploadTask = { status: 'uploading' }
 
@@ -24,16 +27,19 @@ export const DraftAttachments = memo(function DraftAttachments({
     return null
   }
   return (
-    <div className={styles.attachments}>
-      {items.map((item) => (
-        <AttachmentItem
-          key={item.id}
-          item={item}
-          onRetry={() => onRetry(item.id)}
-          onRemove={() => onRemove(item.id)}
-        />
-      ))}
-    </div>
+    <>
+      <div className={styles.attachments}>
+        {items.map((item) => (
+          <AttachmentItem
+            key={item.id}
+            item={item}
+            onRetry={() => onRetry(item.id)}
+            onRemove={() => onRemove(item.id)}
+          />
+        ))}
+      </div>
+      <UploadRecovery items={items} onRetry={onRetry} />
+    </>
   )
 })
 
@@ -63,7 +69,17 @@ const AttachmentItem = ({
       title={error ?? item.file.name}
     >
       <img src={item.previewUrl} alt={item.file.name} />
-      {status === 'uploading' ? <div className={styles.uploading} /> : null}
+      {status === 'uploading' ? (
+        <div className={styles.uploading} role="status">
+          <span className={styles.uploadProgress}>
+            {task.processing
+              ? t('uploadProcessing')
+              : task.progress !== undefined
+                ? t('uploadProgress', { percent: task.progress })
+                : t('uploadFileStatusUploading')}
+          </span>
+        </div>
+      ) : null}
       {failed && retry ? (
         <Tooltip content={retryLabel}>
           <button type="button" className={styles.failed} aria-label={retryLabel} onClick={retry}>
@@ -94,6 +110,64 @@ const AttachmentItem = ({
       error={error}
       onRetry={retry}
       onRemove={onRemove}
+      progress={task.status === 'uploading' ? task.progress : undefined}
+      processing={task.status === 'uploading' && task.processing}
     />
+  )
+}
+
+const UploadRecovery = ({
+  items,
+  onRetry,
+}: {
+  items: DraftAttachment[]
+  onRetry: (id: string) => void
+}) => {
+  const t = useTranslate()
+  const tasks = useUploads((state) => state.tasks)
+  const failed = items.filter((item) => tasks[item.id]?.status === 'error')
+  if (!failed.length) {
+    return null
+  }
+  const keys = failed
+    .map((item) => tasks[item.id])
+    .filter((task) => task?.status === 'error')
+    .map((task) => task.error.key)
+  return (
+    <div className={styles.uploadRecovery} role="alert">
+      <span>{t('uploadFailedCount', { count: failed.length })}</span>
+      {keys.includes('uploadUnauthorized') ? (
+        <button type="button" onClick={() => openSettings('account')}>
+          {t('uploadConfigureKey')}
+        </button>
+      ) : null}
+      {keys.includes('uploadInsufficientBalance') ? (
+        <button
+          type="button"
+          onClick={() => void openExternal('https://platform.deepseek.com/top_up')}
+        >
+          {t('topUp')}
+        </button>
+      ) : null}
+      {failed.some((item) => {
+        const task = tasks[item.id]
+        return task?.status === 'error' && task.retryable
+      }) ? (
+        <button
+          type="button"
+          onClick={() => {
+            logEvent('ui', 'upload.retry-clicked', { failedCount: failed.length })
+            failed.forEach((item) => {
+              const task = tasks[item.id]
+              if (task?.status === 'error' && task.retryable) {
+                onRetry(item.id)
+              }
+            })
+          }}
+        >
+          {t('uploadRetryFailed')}
+        </button>
+      ) : null}
+    </div>
   )
 }

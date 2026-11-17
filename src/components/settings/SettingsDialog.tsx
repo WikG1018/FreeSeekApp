@@ -47,6 +47,7 @@ import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useDialogFocus } from '../base/useDialogFocus.js'
 import { saveBackup } from '../../services/saveBackup.js'
+import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
@@ -625,6 +626,29 @@ const AboutPage = () => {
   const t = useTranslate()
   const [licenseOpen, setLicenseOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
+  const exportDiagnostics = async () => {
+    if (diagnosticsBusy) {
+      return
+    }
+    setDiagnosticsBusy(true)
+    try {
+      const { createDiagnosticBundle } = await import('../../services/diagnostics/export.js')
+      const pack = await createDiagnosticBundle()
+      const saved = await saveBackup(pack.name, pack.blob)
+      logEvent('diagnostics', saved ? 'export.saved' : 'export.cancelled', {
+        bytes: pack.blob.size,
+      })
+      if (saved) {
+        showToast({ key: 'diagnosticsExported' })
+      }
+    } catch (error) {
+      logEvent('diagnostics', 'export.failed', diagnosticError(error), 'error')
+      showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+    } finally {
+      setDiagnosticsBusy(false)
+    }
+  }
   const updateStatus = useUpdate((state) => state.status)
   const updateRelease = useUpdate((state) => state.release)
   const updateStatusText = useUpdateStatusText()
@@ -672,6 +696,21 @@ const AboutPage = () => {
         ) : null}
       </Section>
 
+      <Section title={t('diagnosticsTitle')}>
+        <button
+          type="button"
+          className={styles.row}
+          disabled={diagnosticsBusy}
+          onClick={() => void exportDiagnostics()}
+        >
+          <span className={styles.rowLabel}>{t('diagnosticsExport')}</span>
+          <span className={styles.rowValue}>
+            {diagnosticsBusy ? t('diagnosticsPreparing') : null}
+          </span>
+          <IconDownloadOutline16 />
+        </button>
+        <p className={styles.paragraph}>{t('diagnosticsPrivacy')}</p>
+      </Section>
       <Section title={t('settingsPrivacyTitle')}>
         <p className={styles.paragraph}>{t('settingsPrivacyText')}</p>
       </Section>

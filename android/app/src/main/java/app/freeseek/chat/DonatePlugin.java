@@ -47,6 +47,7 @@ public class DonatePlugin extends Plugin {
 
     @PluginMethod
     public void saveImage(PluginCall call) {
+        DiagnosticsLog.record(getContext(), "ui", "donate.save-requested", new JSObject());
         String base64 = call.getString("data", "");
         String fileName = call.getString("fileName", "freeseek-donate");
         if (base64.isEmpty()) {
@@ -67,6 +68,7 @@ public class DonatePlugin extends Plugin {
         if (getPermissionState("storage") == PermissionState.GRANTED) {
             doSave(call, call.getString("data", ""), call.getString("fileName", "freeseek-donate"));
         } else {
+            DiagnosticsLog.warn(getContext(), "ui", "donate.storage-denied", new JSObject());
             JSObject result = new JSObject();
             result.put("saved", false);
             result.put("reason", "permission");
@@ -117,8 +119,11 @@ public class DonatePlugin extends Plugin {
             JSObject result = new JSObject();
             result.put("saved", uri != null);
             result.put("reason", uri == null ? "insert-failed" : "");
+            JSObject meta = new JSObject(); meta.put("saved", uri != null);
+            DiagnosticsLog.record(getContext(), "ui", "donate.save-completed", meta);
             call.resolve(result);
         } catch (Exception error) {
+            DiagnosticsLog.error(getContext(), "ui", "donate.save-failed", error);
             JSObject result = new JSObject();
             result.put("saved", false);
             result.put("reason", error.getMessage() == null ? "error" : error.getMessage());
@@ -143,6 +148,8 @@ public class DonatePlugin extends Plugin {
         }
         JSObject result = new JSObject();
         result.put("opened", opened);
+        JSObject meta = new JSObject(); meta.put("opened", opened); meta.put("target", alipay ? "alipay" : "wechat");
+        DiagnosticsLog.record(getContext(), "ui", "donate.open-completed", meta);
         call.resolve(result);
     }
 

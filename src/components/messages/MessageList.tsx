@@ -5,9 +5,10 @@ import { IconChevronDownOutline14 } from '../base/icons.js'
 import {
   buildMessageVersions,
   getVisibleMessages,
+  selectVersion as selectBranch,
   type MessageVersions,
 } from '../../services/chat/branches.js'
-import { selectMessageVersion } from '../../services/chat/store.js'
+import { selectMessageVersion, useChatStore } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { AssistantMessage } from './AssistantMessage.js'
@@ -30,6 +31,7 @@ const getUploadRetryId = (messages: Message[], streaming: boolean) => {
     : null
 }
 import styles from './MessageList.module.css'
+import { logEvent } from '../../services/diagnostics/log.js'
 
 /** 距底部小于该值时视为在底部，流式内容增长时跟随 */
 const STICKY_THRESHOLD = 40
@@ -56,7 +58,24 @@ export const MessageList = ({
   const [atBottom, setAtBottom] = useState(true)
   const scrolledRef = useRef(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
-  const messages = getVisibleMessages(session)
+  const allMessages = getVisibleMessages(session)
+  const [historyWindow, setHistoryWindow] = useState({ sessionId: session.id, count: 40 })
+  const visibleCount = historyWindow.sessionId === session.id ? historyWindow.count : 40
+  const visibleStart = Math.max(0, allMessages.length - visibleCount)
+  const messages = allMessages.slice(visibleStart)
+  const earlierScroll = useRef<{ top: number; height: number } | null>(null)
+  useEffect(() => {
+    setHistoryWindow({ sessionId: session.id, count: 40 })
+  }, [session.id])
+  useLayoutEffect(() => {
+    const anchor = earlierScroll.current,
+      scroll = scrollRef.current
+    if (anchor && scroll) {
+      scroll.scrollTop = anchor.top + scroll.scrollHeight - anchor.height
+      scrollTopRef.current = scroll.scrollTop
+      earlierScroll.current = null
+    }
+  }, [visibleStart])
   const [previousVersions, setPreviousVersions] = useState(() =>
     buildMessageVersions(session, new Map())
   )
@@ -128,9 +147,20 @@ export const MessageList = ({
       restoreScrollRef.current = { messageId, top: anchorTop }
       stickyRef.current = false
       closeSearchPanel()
+      const current = useChatStore.getState().sessionCache[session.id]
+      if (current) {
+        const path = getVisibleMessages(selectBranch(current, messageId))
+        const selectedIndex = path.findIndex((message) => message.id === messageId)
+        if (selectedIndex >= 0) {
+          setHistoryWindow({
+            sessionId: session.id,
+            count: Math.max(visibleCount, path.length - selectedIndex),
+          })
+        }
+      }
       selectMessageVersion(session.id, messageId)
     },
-    [session.id, streaming]
+    [session.id, streaming, visibleCount]
   )
 
   // 跨移动端断点时切换滚动层，并保持输入框及当前阅读位置。
@@ -182,6 +212,26 @@ export const MessageList = ({
           data-testid={isMobile ? 'message-scroll' : undefined}
         >
           <div ref={contentRef} className={styles.column}>
+            {visibleStart > 0 ? (
+              <button
+                type="button"
+                className={styles.loadEarlier}
+                onClick={() => {
+                  const scroll = scrollRef.current
+                  if (scroll) {
+                    earlierScroll.current = { top: scroll.scrollTop, height: scroll.scrollHeight }
+                  }
+                  stickyRef.current = false
+                  logEvent('ui', 'history.load-earlier', {
+                    totalMessages: allMessages.length,
+                    shownMessages: visibleCount,
+                  })
+                  setHistoryWindow({ sessionId: session.id, count: visibleCount + 40 })
+                }}
+              >
+                {t('loadEarlierMessages', { count: visibleStart })}
+              </button>
+            ) : null}
             {messages.map((message, index) =>
               message.role === 'user' ? (
                 <UserMessage
@@ -189,7 +239,7 @@ export const MessageList = ({
                   sessionId={session.id}
                   message={message}
                   retryUploadId={uploadRetryId}
-                  isFirst={index === 0}
+                  isFirst={visibleStart + index === 0}
                   isLast={index === lastIndex || index === lastIndex - 1}
                   busy={streaming}
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}

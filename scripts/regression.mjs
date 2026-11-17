@@ -4,11 +4,73 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { resolve, dirname } from 'node:path'
 import { chromium } from 'playwright'
+import { createServer } from 'node:http'
+import { runStabilityCases } from './test/stability-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
 const base = `http://127.0.0.1:${port}`
 const results = []
+let uploadBehavior = { status: 200, body: { id: 'file-api-new' }, mode: 'normal', delay: 0 }
+let uploadRequests = [],
+  activeUploads = 0,
+  maxActiveUploads = 0
+const apiServer = createServer((request, response) => {
+  response.setHeader('Access-Control-Allow-Origin', '*')
+  response.setHeader('Access-Control-Allow-Headers', '*')
+  response.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+  response.setHeader('Access-Control-Expose-Headers', 'x-ds-request-id')
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204)
+    response.end()
+    return
+  }
+  if (request.url === '/models') {
+    response.setHeader('Content-Type', 'application/json')
+    response.end('{"data":[]}')
+    return
+  }
+  if (!['/anthropic/v1/files', '/v1/tools/asr'].includes(request.url)) {
+    response.writeHead(404)
+    response.end()
+    return
+  }
+  const behavior = { ...uploadBehavior },
+    chunks = []
+  let bytes = 0
+  request.on('data', (chunk) => {
+    bytes += chunk.length
+    if (bytes <= 64 * 1024) {
+      chunks.push(chunk)
+    }
+  })
+  request.on('end', () => {
+    uploadRequests.push({ bytes, prefix: Buffer.concat(chunks) })
+    activeUploads++
+    maxActiveUploads = Math.max(maxActiveUploads, activeUploads)
+    response.once('close', () => {
+      activeUploads--
+    })
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('x-ds-request-id', 'test-upstream-request')
+    if (behavior.mode === 'network') {
+      response.destroy()
+      return
+    }
+    if (behavior.mode === 'stall-response') {
+      response.writeHead(200)
+      response.write('{"id":')
+      return
+    }
+    setTimeout(() => {
+      response.writeHead(behavior.status)
+      response.end(behavior.mode === 'raw' ? String(behavior.body) : JSON.stringify(behavior.body))
+    }, behavior.delay)
+  })
+  request.on('error', () => response.destroy())
+})
+await new Promise((resolve) => apiServer.listen(0, '127.0.0.1', resolve))
+const apiOrigin = `http://127.0.0.1:${apiServer.address().port}`
 let output = ''
 const server = spawn(
   process.execPath,
@@ -20,7 +82,7 @@ const server = spawn(
   ],
   {
     cwd: root,
-    env: process.env,
+    env: { ...process.env, FREESEEK_TEST_API_ORIGIN: apiOrigin },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   }
@@ -33,6 +95,9 @@ server.stderr.on('data', (data) => {
 })
 let browser
 const run = async (name, test, setup) => {
+  uploadBehavior = { status: 200, body: { id: 'file-api-new' }, mode: 'normal', delay: 0 }
+  uploadRequests = []
+  maxActiveUploads = 0
   const context = await browser.newContext({
     locale: 'zh-CN',
     viewport: { width: 390, height: 844 },
@@ -78,6 +143,16 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
   browser = await chromium.launch({ headless: true })
+  await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
+  await runStabilityCases({
+    run,
+    root,
+    behavior: (value) => {
+      uploadBehavior = { ...uploadBehavior, ...value }
+    },
+    uploads: () => uploadRequests,
+    maxActive: () => maxActiveUploads,
+  })
 
   await run('current mobile UI and persona picker', async (page) => {
     assert.equal(await page.title(), 'FreeSeek')
@@ -424,6 +499,7 @@ try {
         fileId: final.inherited.messages[0].files[0].serverId,
       }
     })
+    result.uploads = uploadRequests.length
     assert.deepEqual(result, { uploads: 1, requests: 2, status: 'done', fileId: 'file-api-new' })
   })
 
@@ -759,6 +835,8 @@ try {
 } finally {
   await browser?.close()
   server.kill()
+  apiServer.closeAllConnections()
+  await new Promise((resolve) => apiServer.close(resolve))
   await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
   await writeFile(resolve(root, 'tmp/regression/results.json'), JSON.stringify(results, null, 2))
 }

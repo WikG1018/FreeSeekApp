@@ -1,0 +1,15 @@
+.preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.toggle {
+  display: block;
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-brand-text);
+  font-size: 12px;
+  cursor: pointer;
+}

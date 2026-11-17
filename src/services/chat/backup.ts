@@ -3,14 +3,28 @@ import * as db from './db.js'
 import { replaceHistory, useChatStore, loadBackupFile, flushChatUpdates } from './store.js'
 import type { Session } from './types.js'
 import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 export { BackupError } from './history/errors.js'
 
 // 导入、导出与全部删除串行处理，避免读取归档时数据被清空或两个替换事务交错。
 let backupQueue: Promise<unknown> = Promise.resolve()
 
-const enqueueBackup = <T>(run: () => Promise<T>): Promise<T> => {
-  const task = backupQueue.then(run)
+const enqueueBackup = <T>(operation: string, run: () => Promise<T>): Promise<T> => {
+  const task = backupQueue.then(async () => {
+    const started = performance.now()
+    logEvent('backup', operation + '.started')
+    try {
+      const result = await run()
+      logEvent('backup', operation + '.completed', {
+        elapsedMs: Math.round(performance.now() - started),
+      })
+      return result
+    } catch (error) {
+      logEvent('backup', operation + '.failed', diagnosticError(error), 'error')
+      throw error
+    }
+  })
   backupQueue = task.catch(() => {})
   return task
 }
@@ -19,7 +33,7 @@ const backupFileName = (date: Date) => `freeseek-backup-${formatDate(date)}.zip`
 
 /** 导出完整 FreeSeek 会话备份，可再次导入。 */
 export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
-  enqueueBackup(async () => {
+  enqueueBackup('export', async () => {
     // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
     flushChatUpdates()
     const { sessions, sessionCache } = useChatStore.getState()
@@ -38,6 +52,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     const { exportArchive } = await import('./history/exportArchive.js')
     const now = new Date()
     const blob = await exportArchive(readSessions(), loadBackupFile)
+    logEvent('backup', 'export.archive', { sessionCount: sessions.length, bytes: blob.size })
     return { name: backupFileName(now), blob }
   })
 
@@ -49,7 +64,7 @@ export const importHistory = (
   file: File,
   onProgress?: (processed: number, total: number) => void
 ): Promise<number> =>
-  enqueueBackup(async () => {
+  enqueueBackup('import', async () => {
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     await checkArchiveFormat(file)
     let settings: NativeBackupSettings | undefined
@@ -57,11 +72,12 @@ export const importHistory = (
       settings = await importArchive(file, onProgress)
     })
     restoreNativeSettings(settings)
+    logEvent('backup', 'import.archive', { sessionCount: count, bytes: file.size })
     return count
   })
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */
 export const clearHistory = (): Promise<void> =>
-  enqueueBackup(async () => {
+  enqueueBackup('clear', async () => {
     await replaceHistory(async () => {})
   })

@@ -19,6 +19,8 @@ export const FileCard = ({
   onRetry,
   onRemove,
   onOpen,
+  progress,
+  processing,
 }: {
   name: string
   size: number
@@ -27,6 +29,8 @@ export const FileCard = ({
   onRetry?: () => void
   onRemove?: () => void
   onOpen?: () => void
+  progress?: number
+  processing?: boolean
 }) => {
   const t = useTranslate()
   const ext = getExtension(name)
@@ -34,7 +38,11 @@ export const FileCard = ({
   let description = [ext, formatSize(size)].filter(Boolean).join(' ')
   if (status === 'uploading') {
     icon = <span className={styles.spinner} />
-    description = t('uploadFileStatusUploading')
+    description = processing
+      ? t('uploadProcessing')
+      : progress !== undefined
+        ? t('uploadProgress', { percent: progress })
+        : t('uploadFileStatusUploading')
   } else if (status === 'error') {
     // 不可重试（过大、格式不支持）时保留文件图标并显示原因
     if (onRetry) {
@@ -63,7 +71,9 @@ export const FileCard = ({
       <div className={clsx(styles.icon, status === 'error' && onRetry && styles.retry)}>{icon}</div>
       <div className={styles.content}>
         <div className={styles.caption}>{name}</div>
-        <div className={styles.subCaption}>{description}</div>
+        <div className={clsx(styles.subCaption, status === 'error' && styles.errorDescription)}>
+          {description}
+        </div>
       </div>
       {onRemove ? (
         <button

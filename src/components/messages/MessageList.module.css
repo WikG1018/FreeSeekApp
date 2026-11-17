@@ -86,3 +86,15 @@
   padding-top: var(--message-list-top-inset, 0px);
   padding-bottom: var(--composer-inset, 150px);
 }
+.loadEarlier {
+  display: block;
+  margin: 20px auto 12px;
+  padding: 8px 14px;
+  min-height: 44px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}

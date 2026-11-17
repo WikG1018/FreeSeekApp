@@ -4,6 +4,7 @@ import { ApiError } from '../api/client.js'
 import { classifyApiError } from '../api/errors.js'
 import { synthesize, TTS_SAMPLE_RATE } from '../api/speech.js'
 import { useSettings } from '../settings.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 /**
  * 朗读：同一时间只读一条回复。
@@ -32,6 +33,7 @@ const finish = (controller: AbortController) => {
   void current.context.close()
   current = null
   useReadAloud.setState({ messageId: null, status: 'idle' })
+  logEvent('speech', 'playback.finished', { cancelled: controller.signal.aborted })
 }
 
 /** 停止当前朗读（发送、停止生成、切换会话等场景调用） */
@@ -91,6 +93,7 @@ export const toggleReadAloud = (
   const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
   current = { controller, context }
   useReadAloud.setState({ messageId, status: 'loading' })
+  logEvent('speech', 'playback.requested')
   // 音色在开始朗读时读取，设置中切换后下一次朗读生效
   const { apiKey, ttsVoice } = useSettings.getState()
 
@@ -107,9 +110,24 @@ export const toggleReadAloud = (
         void reader.cancel().catch(() => {})
       }
       controller.signal.addEventListener('abort', cancelReader, { once: true })
+      let watchdog: ReturnType<typeof setTimeout> | undefined
+      const resetWatchdog = () => {
+        clearTimeout(watchdog)
+        watchdog = setTimeout(() => {
+          logEvent('speech', 'playback.timeout', {}, 'error')
+          controller.abort()
+          finish(controller)
+          onError(new ApiError('network', 'TTS idle timeout'))
+        }, 120_000)
+      }
       try {
+        resetWatchdog()
         for (;;) {
           const { done, value } = await reader.read()
+          if (controller.signal.aborted) {
+            break
+          }
+          resetWatchdog()
           if (done) {
             break
           }
@@ -140,6 +158,7 @@ export const toggleReadAloud = (
           started = true
           if (useReadAloud.getState().status === 'loading') {
             useReadAloud.setState({ status: 'playing' })
+            logEvent('speech', 'playback.started')
           }
         }
         streamEnded = true
@@ -147,11 +166,18 @@ export const toggleReadAloud = (
           finish(controller)
         }
       } finally {
+        clearTimeout(watchdog)
         controller.signal.removeEventListener('abort', cancelReader)
         await reader.cancel().catch(() => {})
         reader.releaseLock()
       }
     } catch (error) {
+      logEvent(
+        'speech',
+        'playback.failed',
+        diagnosticError(error),
+        controller.signal.aborted ? 'info' : 'error'
+      )
       if (!controller.signal.aborted) {
         finish(controller)
         onError(error)

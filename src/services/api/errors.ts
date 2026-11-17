@@ -27,6 +27,9 @@ export const classifyStatus = (status: number | undefined): ApiErrorCondition =>
   if (status === 429) {
     return 'rateLimited'
   }
+  if (status === 408) {
+    return 'network'
+  }
   if ((status ?? 0) >= 500) {
     return 'serverBusy'
   }
@@ -53,6 +56,14 @@ export const isRetryableApiError = (error: unknown): boolean => {
     condition === 'serverBusy'
   )
 }
+
+/** Key 和余额可由用户处理后重试；参数、过大与坏文件本身不能靠重复上传修复。 */
+export const isRetryableUploadError = (error: unknown): boolean =>
+  isRetryableApiError(error) ||
+  (error instanceof ApiError &&
+    (error.status === 401 ||
+      error.status === 402 ||
+      error.localMessage?.key === 'uploadResponseInvalid'))
 
 /** 服务端判定附件失效的情况：本地有原件时重新上传即可自愈 */
 export type FileErrorCode = 'fileIdMissing' | 'fileDataMissing' | 'invalidFileId'
@@ -114,7 +125,6 @@ export const getUploadErrorInfo = (error: unknown): UploadErrorInfo | null => {
   }
   return null
 }
-
 
 /** 服务端在「发消息」阶段判定图片不可用：多为格式不支持或图片本身损坏 */
 export const isUnsupportedImageError = (error: unknown): boolean =>

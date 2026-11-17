@@ -35,7 +35,11 @@ const usage = (value: unknown): MessageUsage => {
       ? {
           server_tool_use: {
             web_search_requests: number(tools.web_search_requests),
-            tool_search: number(tools.tool_search ?? 0),
+            ...Object.fromEntries(
+              ['tool_search', 'tool_fetch', 'tool_image_search']
+                .filter((key) => tools[key] !== undefined)
+                .map((key) => [key, number(tools[key])])
+            ),
           },
         }
       : {}),
@@ -159,6 +163,25 @@ const message = (value: unknown): Message => {
     thinking: optional(item.thinking, boolean),
     search: optional(item.search, boolean),
     latestReminder: optional(item.latestReminder, string),
+    contextWarnings: optional(item.contextWarnings, (value) =>
+      list(value, (raw) => {
+        const warning = record(raw),
+          key = string(warning.key)
+        if (!isTranslationKey(key)) {
+          return invalid()
+        }
+        const params = warning.params === undefined ? undefined : record(warning.params)
+        if (
+          params &&
+          Object.values(params).some(
+            (value) => typeof value !== 'string' && typeof value !== 'number'
+          )
+        ) {
+          return invalid()
+        }
+        return { key, params: params as Record<string, string | number> | undefined }
+      })
+    ),
     stopReason: item.stopReason as 'end_turn' | 'max_tokens' | 'tool_use' | 'refusal' | undefined,
     ...(item.stopDetails === undefined
       ? {}

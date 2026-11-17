@@ -166,3 +166,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.contextWarning {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}

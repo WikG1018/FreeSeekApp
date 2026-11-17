@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { toSessionSummary, type Session, type SessionSummary } from './types.js'
 import { allSessionMessages } from './sessionData.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
 const DB_VERSION = 12
@@ -265,6 +266,21 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
 
 /** 本地存储失败不打断对话，只在控制台留痕 */
 export const reportStorageError = (action: string) => (error: unknown) => {
+  logEvent('storage', 'operation.failed', { operation: action, ...diagnosticError(error) }, 'error')
   // eslint-disable-next-line no-console
   console.error(`[storage] ${action} failed`, error)
+}
+
+/** 诊断仅取数量和体积，不读取会话正文或附件字节。 */
+export const getStorageSummary = async () => {
+  const database = await getDB()
+  const sessionCount = await database.count('sessions')
+  const fileCount = await database.count('files')
+  let originalBytes = 0
+  const tx = database.transaction('files')
+  for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
+    originalBytes += cursor.value.blob.size
+  }
+  await tx.done
+  return { databaseVersion: database.version, sessionCount, fileCount, originalBytes }
 }

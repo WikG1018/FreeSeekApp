@@ -4,6 +4,16 @@ import { loadAllSessions } from './chat/db.js'
 import type { AssistantMessage } from './chat/types.js'
 import { usageEntries } from './chat/usage.js'
 
+/** 新接口按成功计费次数计价；旧归档缺少该字段时沿用历史统计。 */
+const billedTools = (usage: MessageUsage) => {
+  const tools = usage.server_tool_use
+  return (
+    (tools?.tool_search ?? tools?.web_search_requests ?? 0) +
+    (tools?.tool_fetch ?? 0) +
+    (tools?.tool_image_search ?? 0)
+  )
+}
+
 /**
  * 本地用量与费用统计：遍历会话中每条回复记录的 usage，按天聚合，
  * 并按官方刊例价（区分高峰/空闲时段）估算费用。实际账单以平台为准。
@@ -117,7 +127,7 @@ const addUsage = (
   const read = usage.cache_read_input_tokens ?? 0
   const miss = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
   const output = usage.output_tokens ?? 0
-  const searches = usage.server_tool_use?.web_search_requests ?? 0
+  const searches = billedTools(usage)
   const rate = peak
     ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }
     : { hit: pricing.offPeakHit, miss: pricing.offPeakMiss, out: pricing.offPeakOut }
@@ -168,7 +178,7 @@ export const computeMessageUsage = (
   const cacheRead = usage.cache_read_input_tokens ?? 0
   const cacheWrite = usage.cache_creation_input_tokens ?? 0
   const output = usage.output_tokens ?? 0
-  const searches = usage.server_tool_use?.web_search_requests ?? 0
+  const searches = billedTools(usage)
   const peak = isPeakBeijing(createdAt)
   const rate = peak
     ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }

@@ -2,18 +2,25 @@ import { create } from 'zustand'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import { openExternal } from '../utils/openExternal.js'
+import { diagnosticError, logEvent } from './diagnostics/log.js'
 
 /**
  * 应用内更新：查 GitHub Release → 自动预下载 APK → 一键安装。
  *
- * - 多源探测：GitHub API 直连 + 国内常用的 GitHub 反代前缀，谁先返回用谁
+ * - 发布 API 与独立更新清单分别探测，兼容只代理 Release 附件的镜像站
  * - 结果缓存 6 小时，避免每次启动都请求
- * - 下载优先走原生流式下载（有进度、可断点式续用已下好的包），失败退回系统下载器
+ * - 原生流式下载与已下载包均须验证大小、摘要、包名、版本与签名
  */
 const REPO = 'WikG1018/FreeSeekApp'
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
+const RELEASE_MANIFEST = `https://github.com/${REPO}/releases/latest/download/update.json`
 /** 国内网络常见的 GitHub 反代；顺序即优先级 */
 const MIRRORS = ['', 'https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']
+const METADATA_SOURCES = [
+  RELEASE_API,
+  `https://gh-proxy.com/${RELEASE_API}`,
+  ...MIRRORS.map((mirror) => `${mirror}${RELEASE_MANIFEST}`),
+]
 const CACHE_KEY = 'freeseek:update-cache'
 const CACHE_TTL = 6 * 3600_000
 const FETCH_TIMEOUT = 8000
@@ -204,35 +211,66 @@ export const toRelease = (data: GithubRelease): ReleaseInfo => {
   }
 }
 
-const fetchWithTimeout = async (url: string, timeout = FETCH_TIMEOUT): Promise<Response> => {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeout)
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: 'application/vnd.github+json' },
-      cache: 'no-store',
-    })
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-/** 读取一个 URL 的文本：原生走插件（不受 CORS 限制），网页端走 fetch */
+/** 超时覆盖响应头和完整响应体；拒绝无限滴流与过大的 HTML 错误页。 */
 const readText = async (url: string): Promise<{ status: number; text: string }> => {
   if (Capacitor.isNativePlatform()) {
     const result = await UpdateNative.get({ url, timeoutMs: FETCH_TIMEOUT })
     return { status: result.status, text: result.body }
   }
-  const response = await fetchWithTimeout(url)
-  return { status: response.status, text: await response.text() }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT)
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/vnd.github+json' },
+      cache: 'no-store',
+    })
+    const reader = response.body?.getReader()
+    if (!reader) {
+      return { status: response.status, text: '' }
+    }
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        size += value.byteLength
+        if (size > 2_000_000) {
+          throw new Error('Metadata too large')
+        }
+        chunks.push(value)
+      }
+      const all = new Uint8Array(size)
+      let offset = 0
+      for (const chunk of chunks) {
+        all.set(chunk, offset)
+        offset += chunk.length
+      }
+      return { status: response.status, text: new TextDecoder().decode(all) }
+    } finally {
+      void reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** 依次尝试直连与镜像，返回第一个可用结果；全部失败返回 null */
 const fetchRelease = async (): Promise<{ release: ReleaseInfo; mirror: string } | null> => {
-  for (const mirror of MIRRORS) {
+  for (const url of METADATA_SOURCES) {
+    const source = new URL(url).host,
+      started = performance.now()
     try {
-      const { status, text } = await readText(`${mirror}${RELEASE_API}`)
+      const { status, text } = await readText(url)
+      logEvent('update', 'metadata.response', {
+        source,
+        status,
+        elapsedMs: Math.round(performance.now() - started),
+      })
       if (status !== 200) {
         continue
       }
@@ -240,8 +278,13 @@ const fetchRelease = async (): Promise<{ release: ReleaseInfo; mirror: string } 
       if (!data?.tag_name) {
         continue
       }
-      return { release: toRelease(data), mirror }
-    } catch {
+      const release = toRelease(data)
+      if (!release.apk) {
+        continue
+      }
+      return { release, mirror: source }
+    } catch (error) {
+      logEvent('update', 'metadata.failed', { source, ...diagnosticError(error) }, 'warn')
       // 换下一个源
     }
   }
@@ -253,6 +296,31 @@ const mirrored = (mirror: string, url: string) => (mirror ? `${mirror}${url}` : 
 
 const fileNameFor = (release: ReleaseInfo) => `freeseek-${release.version}.apk`
 
+const showRelease = async (release: ReleaseInfo, at: number): Promise<boolean> => {
+  const newer = isNewer(release.version, currentVersion())
+  let path = ''
+  if (newer && release.apk && Capacitor.isNativePlatform()) {
+    const cached = await UpdateNative.hasFile({
+      fileName: fileNameFor(release),
+      expectedSize: release.apk.size,
+      sha256: release.apk.sha256,
+      version: release.version,
+    }).catch(() => null)
+    if (cached?.exists) {
+      path = cached.path
+    }
+  }
+  useUpdate.setState({
+    release,
+    lastCheckedAt: at,
+    status: path ? 'ready' : newer ? 'available' : 'latest',
+    filePath: path,
+    percent: path ? 100 : 0,
+    error: '',
+  })
+  return newer
+}
+
 /** 检查更新；返回是否有新版本 */
 export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> => {
   const state = useUpdate.getState()
@@ -260,43 +328,51 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
     return false
   }
   const cache = readCache()
-  const version = currentVersion()
+  const known =
+    state.release && (!cache.release || !isNewer(cache.release.version, state.release.version))
+      ? state.release
+      : cache.release
   if (!force && cache.release && Date.now() - cache.at < CACHE_TTL) {
-    const newer = isNewer(cache.release.version, version)
-    useUpdate.setState({
-      release: cache.release,
-      status: newer ? 'available' : 'latest',
-      lastCheckedAt: cache.at,
-    })
-    return newer
+    return showRelease(known ?? cache.release, cache.at)
   }
 
+  logEvent('update', 'check.started', { force })
   useUpdate.setState({ status: 'checking', error: '' })
-  try {
-    const found = await fetchRelease()
-    if (!found) {
-      useUpdate.setState({ status: 'error', error: 'network' })
-      return false
+  const offline = async () => {
+    if (known && isNewer(known.version, currentVersion())) {
+      await showRelease(known, cache.at || state.lastCheckedAt)
+      useUpdate.setState({ error: 'network' })
+      logEvent(
+        'update',
+        'check.cached',
+        { version: known.version, ready: useUpdate.getState().status === 'ready' },
+        'warn'
+      )
+      return true
     }
-    writeCache(found.release)
-    const newer = isNewer(found.release.version, version)
-    useUpdate.setState({
-      release: found.release,
-      status: newer ? 'available' : 'latest',
-      lastCheckedAt: Date.now(),
-      error: '',
-    })
-    if (newer) {
-      void downloadUpdate()
-    }
-    return newer
-  } catch {
     useUpdate.setState({ status: 'error', error: 'network' })
     return false
   }
+  try {
+    const found = await fetchRelease()
+    if (!found) {
+      return await offline()
+    }
+    const release = known && isNewer(known.version, found.release.version) ? known : found.release
+    writeCache(release)
+    const newer = await showRelease(release, Date.now())
+    logEvent('update', 'check.completed', { version: release.version, newer, source: found.mirror })
+    if (newer && useUpdate.getState().status !== 'ready') {
+      void downloadUpdate()
+    }
+    return newer
+  } catch (error) {
+    logEvent('update', 'check.failed', diagnosticError(error), 'error')
+    return offline()
+  }
 }
 
-/** 下载更新包：原生流式下载（带进度），失败退回系统下载器 */
+/** 下载更新包：依次尝试直连和镜像，始终保留校验与手动重试。 */
 export const downloadUpdate = async (): Promise<boolean> => {
   const { release, status } = useUpdate.getState()
   const apk = release?.apk
@@ -333,7 +409,13 @@ export const downloadUpdate = async (): Promise<boolean> => {
         const result = await UpdateNative.download({ url, fileName, ...check })
         useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
         return true
-      } catch {
+      } catch (error) {
+        logEvent(
+          'update',
+          'download.source-failed',
+          { source: new URL(url).host, ...diagnosticError(error) },
+          'warn'
+        )
         // 换下一个源
       }
     }
@@ -341,7 +423,8 @@ export const downloadUpdate = async (): Promise<boolean> => {
     useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
     return false
   } catch (error) {
-    useUpdate.setState({ status: 'error', error: String(error) })
+    logEvent('update', 'download.failed', diagnosticError(error), 'error')
+    useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
     return false
   } finally {
     void listener?.remove()
@@ -364,14 +447,20 @@ export const installUpdate = async (): Promise<{ installed: boolean; reason?: st
     if (!release?.apk) {
       return { installed: false, reason: 'no-release' }
     }
-    return await UpdateNative.install({
+    const result = await UpdateNative.install({
       path: filePath,
       expectedSize: release.apk.size,
       sha256: release.apk.sha256 ?? null,
       version: release.version,
     })
+    if (!result.installed && result.reason !== 'permission') {
+      useUpdate.setState({ status: 'available', filePath: '', percent: 0, error: 'install-failed' })
+    }
+    return result
   } catch (error) {
-    return { installed: false, reason: String(error) }
+    logEvent('update', 'install.failed', diagnosticError(error), 'error')
+    useUpdate.setState({ status: 'available', filePath: '', percent: 0, error: 'install-failed' })
+    return { installed: false, reason: 'install-failed' }
   }
 }
 
@@ -407,7 +496,7 @@ export const initUpdateChecker = (): void => {
     void checkForUpdate({ force: true }).catch(() => {
       // 网络异常时保持静默，用户手动点「检查更新」会看到失败提示
     })
-    void reason
+    logEvent('update', 'auto-check', { reason })
   }
 
   // 启动检查：避开首屏渲染高峰

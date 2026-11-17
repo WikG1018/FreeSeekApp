@@ -159,6 +159,8 @@ export const MessageFile = ({
       error={errorText}
       onRetry={retry ?? undefined}
       onOpen={url && !upload ? () => window.open(url, '_blank', 'noreferrer') : undefined}
+      progress={upload?.status === 'uploading' ? upload.progress : undefined}
+      processing={upload?.status === 'uploading' && upload.processing}
     />
   )
 }

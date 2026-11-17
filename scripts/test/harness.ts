@@ -2,6 +2,11 @@ import { writeArchive } from '../../src/services/chat/history/zipWriter.js'
 import { toIndexEntry } from '../../src/services/chat/history/toArchive.js'
 import * as personas from '../../src/services/personas.js'
 import * as branches from '../../src/services/chat/branches.js'
+import * as diagnostics from '../../src/services/diagnostics/log.js'
+import * as multipart from '../../src/services/api/multipart.js'
+import * as diagnosticBundle from '../../src/services/diagnostics/export.js'
+import * as image from '../../src/services/image.js'
+import * as speech from '../../src/services/api/speech.js'
 import { sumMessageUsage } from '../../src/services/chat/usage.js'
 import type { Session, UserMessage, AssistantMessage } from '../../src/services/chat/types.js'
 import type { MessageUsage, StopReason } from '../../src/services/api/types.js'
@@ -134,6 +139,11 @@ Object.assign(window, {
     waitIdle,
     response,
     branches,
+    diagnostics,
+    multipart,
+    diagnosticBundle,
+    image,
+    speech,
   },
 })
 await (window as Window & { __seedReady?: Promise<void> }).__seedReady

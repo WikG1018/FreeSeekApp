@@ -1,4 +1,8 @@
-import { translate, type TranslationMessage } from '../../i18n/index.js'
+import { ApiError } from './errorTypes.js'
+import { postMultipart, type UploadProgress } from './multipart.js'
+import { diagnosticError, logEvent, registerLogSecret } from '../diagnostics/log.js'
+export { ApiError } from './errorTypes.js'
+export type { ApiErrorKind } from './errorTypes.js'
 import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, readServerSentEvents } from './sse.js'
@@ -17,33 +21,6 @@ const ANTHROPIC_BASE_URL = `${API_ORIGIN}/anthropic/v1`
 /** 引用 Files API 上传的图片、调用 Anthropic 兼容 Files API 时必须携带 */
 const FILES_BETA = 'files-api-2025-04-14'
 
-export type ApiErrorKind =
-  /** 非 2xx 响应 */
-  | 'http'
-  /** 流中返回的错误帧（如等待生成超时），随后连接关闭 */
-  | 'stream'
-  /** 请求没有到达服务端（断网、跨域被拦截等） */
-  | 'network'
-  /** 流在 message_stop 之前结束 */
-  | 'interrupted'
-  /** 响应不符合协议（如非 SSE 响应） */
-  | 'protocol'
-
-export class ApiError extends Error {
-  readonly localMessage?: TranslationMessage
-
-  constructor(
-    readonly kind: ApiErrorKind,
-    message: string | TranslationMessage,
-    readonly status?: number,
-    localMessage?: TranslationMessage
-  ) {
-    super(typeof message === 'string' ? message : translate(message.key, message.params))
-    this.name = 'ApiError'
-    this.localMessage = localMessage ?? (typeof message === 'string' ? undefined : message)
-  }
-}
-
 const isErrorBody = (value: unknown): value is ApiErrorBody =>
   typeof value === 'object' &&
   value !== null &&
@@ -55,7 +32,37 @@ const readErrorResponse = async (
   kind: 'http' | 'protocol' = 'http',
   fallback = response.statusText
 ): Promise<ApiError> => {
-  const text = await response.text().catch(() => '')
+  let text = ''
+  const reader = response.body?.getReader()
+  if (reader) {
+    const timeout =
+      (globalThis as { __FS_RESPONSE_BODY_MS__?: number }).__FS_RESPONSE_BODY_MS__ ?? 120_000
+    const timer = setTimeout(() => {
+      void reader.cancel().catch(() => {})
+    }, timeout)
+    try {
+      const decoder = new TextDecoder()
+      let size = 0
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        size += value.length
+        if (size > 2 * 1024 * 1024) {
+          break
+        }
+        text += decoder.decode(value, { stream: true })
+      }
+      text += decoder.decode()
+    } catch {
+      /* 仍按 HTTP 状态给出可恢复的本地提示。 */
+    } finally {
+      clearTimeout(timer)
+      void reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  }
   let message = text || fallback
   try {
     const body: unknown = JSON.parse(text)
@@ -70,6 +77,23 @@ const readErrorResponse = async (
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
+  const requestId = crypto.randomUUID(),
+    started = performance.now()
+  const headers = new Headers(init.headers)
+  registerLogSecret(headers.get('x-api-key'))
+  registerLogSecret(headers.get('Authorization')?.replace(/^Bearer\s+/i, ''))
+  let route = 'unknown'
+  try {
+    route = new URL(url).pathname.replace(/(\/files\/)\S+/, '$1:fileId')
+  } catch {
+    /* 不记录无效 URL 原文。 */
+  }
+  logEvent('api', 'request.started', {
+    requestId,
+    method: init.method ?? 'GET',
+    route,
+    bodyBytes: typeof init.body === 'string' ? new Blob([init.body]).size : undefined,
+  })
   const controller = new AbortController()
   const forwardAbort = () => controller.abort(init.signal?.reason)
   if (init.signal?.aborted) {
@@ -88,6 +112,18 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
   try {
     response = await fetch(url, { ...init, signal: controller.signal })
   } catch (error) {
+    logEvent(
+      'api',
+      'request.failed',
+      {
+        requestId,
+        route,
+        elapsedMs: Math.round(performance.now() - started),
+        timedOut,
+        ...diagnosticError(error),
+      },
+      'error'
+    )
     init.signal?.removeEventListener('abort', forwardAbort)
     if (init.signal?.aborted) {
       throw error
@@ -103,8 +139,17 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
   }
   // 成功响应保留信号关联，上传/语音读取响应体期间仍可取消；一次性信号随请求回收。
   if (!response.ok) {
-    throw await readErrorResponse(response)
+    const error = await readErrorResponse(response)
+    logEvent('api', 'http.failed', { requestId, route, ...diagnosticError(error) }, 'error')
+    throw error
   }
+  logEvent('api', 'response.headers', {
+    requestId,
+    route,
+    status: response.status,
+    elapsedMs: Math.round(performance.now() - started),
+    upstreamRequestId: response.headers.get('x-ds-request-id'),
+  })
   return response
 }
 
@@ -132,20 +177,33 @@ export const uploadFile = async (
   apiKey: string,
   file: File,
   purpose: FilePurpose | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: UploadProgress) => void
 ): Promise<FileObject> => {
   const form = new FormData()
   if (purpose) {
     form.append('purpose', purpose)
   }
   form.append('file', file)
-  const response = await request(`${ANTHROPIC_BASE_URL}/files`, {
-    method: 'POST',
+  const result = await postMultipart(`${ANTHROPIC_BASE_URL}/files`, {
+    operation: 'upload',
     headers: anthropicHeaders(apiKey, true),
     body: form,
     signal,
+    onProgress,
   })
-  return (await response.json()) as FileObject
+  if (
+    !result ||
+    typeof result !== 'object' ||
+    !('id' in result) ||
+    typeof result.id !== 'string' ||
+    !result.id.trim() ||
+    result.id.length > 512
+  ) {
+    logEvent('upload', 'response.invalid', { reason: 'missing-file-id' }, 'error')
+    throw new ApiError('protocol', { key: 'uploadResponseInvalid' })
+  }
+  return result as FileObject
 }
 
 /** DELETE /anthropic/v1/files/{file_id} */

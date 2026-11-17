@@ -1,3 +1,4 @@
+import { logEvent } from './diagnostics/log.js'
 /**
  * 图片格式规范化。
  *
@@ -105,74 +106,133 @@ const drawToPng = (
   })
 }
 
-/** 用 canvas 把任意能解码的图片重编码成 PNG */
-const toPng = async (blob: Blob): Promise<Blob | null> => {
-  try {
-    const bitmap = await createImageBitmap(blob)
-    const png = await drawToPng(bitmap, bitmap.width, bitmap.height)
-    bitmap.close()
-    if (png) {
-      return png
+/** 图片尺寸从轻量文件头读取，JPEG 等在解码时直接缩小，避免同时展开多张巨图。 */
+const readDimensions = (bytes: Uint8Array): { width: number; height: number } | null => {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const type = sniffImageMime(bytes)
+  if (type === 'image/png' && bytes.length >= 24) {
+    return { width: view.getUint32(16), height: view.getUint32(20) }
+  }
+  if (type === 'image/gif' && bytes.length >= 10) {
+    return { width: view.getUint16(6, true), height: view.getUint16(8, true) }
+  }
+  if (type === 'image/bmp' && bytes.length >= 26) {
+    return view.getUint32(14, true) === 12
+      ? { width: view.getUint16(18, true), height: view.getUint16(20, true) }
+      : { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) }
+  }
+  const ascii = new TextDecoder('ascii').decode(bytes.subarray(12, 16))
+  if (type === 'image/webp' && bytes.length >= 30) {
+    if (ascii === 'VP8X') {
+      const n = (i: number) => bytes[i] + (bytes[i + 1] << 8) + (bytes[i + 2] << 16) + 1
+      return { width: n(24), height: n(27) }
     }
-  } catch {
-    // 交给 <img> 再试一次（SVG、部分 TIFF）
-  }
-  try {
-    const image = await decodeWithImg(blob)
-    // SVG 可能没有固有尺寸，退回 1024
-    return await drawToPng(image, image.naturalWidth || 1024, image.naturalHeight || 1024)
-  } catch {
-    return null
-  }
-}
-
-/** 快速验证图片能否解码（不重编码）；损坏的 PNG/JPEG 服务端一样会拒收 */
-const decodes = async (blob: Blob): Promise<boolean> => {
-  try {
-    const bitmap = await createImageBitmap(blob)
-    bitmap.close()
-    return true
-  } catch {
-    // createImageBitmap 不支持的格式（部分 SVG/TIFF）交给 <img> 再试
-    try {
-      await decodeWithImg(blob)
-      return true
-    } catch {
-      return false
+    if (ascii === 'VP8L') {
+      const bits = view.getUint32(21, true)
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 }
+    }
+    if (ascii === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 1 && bytes[25] === 0x2a) {
+      return { width: view.getUint16(26, true) & 0x3fff, height: view.getUint16(28, true) & 0x3fff }
     }
   }
-}
-
-/**
- * 上传前把图片规范成接口支持的格式。
- * 返回新的 File（扩展名与 MIME 都和真实内容一致）；无法处理时抛 UnsupportedImageError。
- *
- * 注意「魔数对」不等于「内容有效」：导入的聊天记录里常有截断的 PNG/JPEG，
- * 魦数校验会放行、服务端发消息时才拒绝，所以支持的格式也要验证可解码，
- * 解不了就重编码；重编码也不行（彻底损坏）才抛错。
- */
-export const normalizeImageFile = async (file: File): Promise<File> => {
-  const head = new Uint8Array(await file.slice(0, 64).arrayBuffer())
-  const actual = sniffImageMime(head)
-  if (actual && SUPPORTED.has(actual)) {
-    if (file.type !== actual) {
-      const renamed = new File([file], file.name, { type: actual })
-      if (await decodes(renamed)) {
-        return renamed
+  if (type === 'image/jpeg') {
+    let offset = 2
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset++] !== 0xff) {
+        continue
       }
-    } else if (await decodes(file)) {
-      return file
+      while (bytes[offset] === 0xff) {
+        offset++
+      }
+      const marker = bytes[offset++]
+      if (offset + 7 >= bytes.length) {
+        break
+      }
+      if (marker === 0xda || marker === 0xd9) {
+        break
+      }
+      const size = view.getUint16(offset)
+      if (size < 2 || offset + size > bytes.length) {
+        break
+      }
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { width: view.getUint16(offset + 5), height: view.getUint16(offset + 3) }
+      }
+      offset += size
     }
-    // 魦数对但解不开：损坏图，尝试修复式重编码
-    const repaired = await toPng(file)
-    if (!repaired) {
+  }
+  return null
+}
+export class ImageDimensionsError extends UnsupportedImageError {
+  constructor() {
+    super()
+    this.name = 'ImageDimensionsError'
+  }
+}
+const normalize = async (file: File, signal?: AbortSignal): Promise<File> => {
+  signal?.throwIfAborted()
+  const bytes = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer())
+  const actual = sniffImageMime(bytes),
+    dimensions = readDimensions(bytes)
+  if (dimensions && dimensions.width * dimensions.height > 100_000_000 && actual !== 'image/jpeg') {
+    throw new ImageDimensionsError()
+  }
+  const scale = dimensions ? Math.min(1, 4096 / Math.max(dimensions.width, dimensions.height)) : 1
+  let source: ImageBitmap | HTMLImageElement, width: number, height: number
+  try {
+    source = await createImageBitmap(
+      file,
+      dimensions && scale < 1
+        ? {
+            resizeWidth: Math.max(1, Math.round(dimensions.width * scale)),
+            resizeHeight: Math.max(1, Math.round(dimensions.height * scale)),
+            resizeQuality: 'high',
+          }
+        : {}
+    )
+    width = source.width
+    height = source.height
+  } catch {
+    try {
+      source = await decodeWithImg(file)
+      width = source.naturalWidth || 1024
+      height = source.naturalHeight || 1024
+    } catch {
       throw new UnsupportedImageError()
     }
-    return new File([repaired], replaceExt(file.name, 'png'), { type: 'image/png' })
   }
-  const png = await toPng(file)
-  if (!png) {
-    throw new UnsupportedImageError()
+  try {
+    signal?.throwIfAborted()
+    if (actual && SUPPORTED.has(actual) && scale === 1 && Math.max(width, height) <= 4096) {
+      return file.type === actual ? file : new File([file], file.name, { type: actual })
+    }
+    const png = await drawToPng(source, width, height)
+    if (!png) {
+      throw new UnsupportedImageError()
+    }
+    signal?.throwIfAborted()
+    logEvent('upload', 'image.normalized', {
+      inputBytes: file.size,
+      outputBytes: png.size,
+      originalWidth: dimensions?.width,
+      originalHeight: dimensions?.height,
+      resized: scale < 1,
+    })
+    return new File([png], replaceExt(file.name, 'png'), { type: 'image/png' })
+  } finally {
+    if ('close' in source) {
+      source.close()
+    }
   }
-  return new File([png], replaceExt(file.name, 'png'), { type: 'image/png' })
+}
+
+let imageQueue = Promise.resolve()
+/** 解码串行、网络上传仍可并行；失败和取消不会堵住后续图片。 */
+export const normalizeImageFile = (file: File, signal?: AbortSignal): Promise<File> => {
+  const task = imageQueue.then(() => normalize(file, signal))
+  imageQueue = task.then(
+    () => {},
+    () => {}
+  )
+  return task
 }

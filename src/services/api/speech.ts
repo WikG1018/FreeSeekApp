@@ -1,4 +1,5 @@
 import { ApiError, API_ORIGIN, request } from './client.js'
+import { postMultipart } from './multipart.js'
 
 /**
  * 语音接口：
@@ -21,26 +22,19 @@ export const transcribe = async (
 ): Promise<string> => {
   const form = new FormData()
   form.append('file', audio, 'recording.wav')
-  const response = await request(`${TOOLS_BASE_URL}/asr`, {
-    method: 'POST',
+  const body = await postMultipart(`${TOOLS_BASE_URL}/asr`, {
+    operation: 'asr',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
     signal,
   })
-  const raw = await response.text()
-  let body: unknown
-  try {
-    body = JSON.parse(raw)
-  } catch {
-    throw new ApiError('protocol', raw)
-  }
   if (
     typeof body !== 'object' ||
     body === null ||
     !('text' in body) ||
     typeof body.text !== 'string'
   ) {
-    throw new ApiError('protocol', raw)
+    throw new ApiError('protocol', 'Invalid ASR response')
   }
   return body.text
 }

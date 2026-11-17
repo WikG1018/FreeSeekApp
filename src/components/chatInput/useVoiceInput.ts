@@ -5,6 +5,7 @@ import { ensureMicPermission, isNativeApp } from '../../services/speech/micPermi
 import { startRecording, type Recording } from '../../services/speech/recorder.js'
 import { useSettings } from '../../services/settings.js'
 import { showToast } from '../base/toastState.js'
+import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 
 export type VoiceInputStatus = 'idle' | 'recording' | 'transcribing'
 
@@ -43,6 +44,9 @@ export const useVoiceInput = (onText: (text: string) => void) => {
   onTextRef.current = onText
 
   const cancelOperation = useCallback(() => {
+    if (recordingRef.current || controllerRef.current) {
+      logEvent('speech', 'input.cancelled')
+    }
     operationRef.current++
     recordingRef.current?.cancel()
     recordingRef.current = null
@@ -78,16 +82,20 @@ export const useVoiceInput = (onText: (text: string) => void) => {
       controller = new AbortController()
       controllerRef.current = controller
       setStatus('transcribing')
+      logEvent('speech', 'transcription.started', { bytes: audio.size, mimeType: audio.type })
       const text = await transcribe(useSettings.getState().apiKey ?? '', audio, controller.signal)
       if (controller.signal.aborted || operationRef.current !== operation) {
         return
       }
       if (text.trim()) {
+        logEvent('speech', 'transcription.completed', { empty: false })
         onTextRef.current(text.trim())
       } else {
+        logEvent('speech', 'transcription.completed', { empty: true })
         showToast({ key: 'voiceInputEmpty' })
       }
-    } catch {
+    } catch (error) {
+      logEvent('speech', 'transcription.failed', diagnosticError(error), 'error')
       if (operationRef.current === operation && !controller?.signal.aborted) {
         showToast({ key: 'voiceInputFailed' })
       }
@@ -116,6 +124,7 @@ export const useVoiceInput = (onText: (text: string) => void) => {
     // 原生端先拿系统麦克风权限：Capacitor 的 WebView 授权流程会连带 MODIFY_AUDIO_SETTINGS，
     // 缺这条权限时 getUserMedia 必然被拒，所以不能等它自己弹窗。
     const granted = await ensureMicPermission()
+    logEvent('speech', 'microphone.permission', { granted })
     if (operationRef.current !== operation) {
       return
     }
@@ -137,7 +146,9 @@ export const useVoiceInput = (onText: (text: string) => void) => {
         return
       }
       recordingRef.current = recording
+      logEvent('speech', 'recording.started')
     } catch (error) {
+      logEvent('speech', 'recording.failed', diagnosticError(error), 'error')
       if (operationRef.current === operation) {
         setStatus('idle')
         const denied =

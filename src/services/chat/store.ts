@@ -6,11 +6,20 @@ import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import {
   extractFileIds,
   getFileErrorCode,
-  isRetryableApiError,
+  isRetryableUploadError,
+  getUploadErrorInfo,
   isUnsupportedImageError,
 } from '../api/errors.js'
-import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
+import {
+  cancelUpload,
+  describeUploadError,
+  uploadAttachment,
+  useUploads,
+  markAttachmentInvalid,
+} from '../attachments.js'
 import { useSettings } from '../settings.js'
+import { UnsupportedImageError } from '../image.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
 import { allSessionMessages, mapSessionMessages } from './sessionData.js'
@@ -54,7 +63,7 @@ const SAFETY_CHECK = { level: 'high' } as const
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
-/** 图片自愈（重置重传 → 再失败就移除该附件）的最大请求数 */
+/** 图片自愈（重置重传 → 再失败仅从本轮请求省略并提示）的最大请求数 */
 const IMAGE_HEAL_ATTEMPTS = 6
 /** 上次打开的会话：重启 App 后恢复，避免总是回到欢迎页 */
 const ACTIVE_SESSION_KEY = 'freeseek:active-session'
@@ -355,6 +364,7 @@ export const initChat = (): Promise<void> => {
   initTask = (async () => {
     try {
       const summaries = await db.loadSessionSummaries()
+      logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
       if (epoch === historyEpoch) {
         // 恢复上次打开的会话；记录不存在（已删除）时回到欢迎页
         const saved = readActiveSession()
@@ -934,6 +944,12 @@ const ensureServerId = async (apiKey: string, file: FileAttachment): Promise<str
   if (task?.status === 'done') {
     return task.serverId
   }
+  if (
+    task?.status === 'error' &&
+    ['uploadImageUnsupported', 'uploadParseFailed'].includes(task.error.key)
+  ) {
+    throw new ApiError('http', 'Failed to recognize the file', 400, task.error)
+  }
   const blob = await db.loadFile(file.id)
   if (!blob) {
     return null
@@ -963,9 +979,15 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
  * 发送前补齐附件的 serverId。
  * - 本轮提问的附件并行补齐，任一失败则整体失败，已成功的照常写回，重试时复用成功结果；
  * - 历史轮次（仅进入上下文的）中没有 serverId 的附件，多为导入的图片：从最新的消息往前逐张补传，
- *   失败静默跳过，该附件不进入本次请求，下次发送时再试。
+ *   网络、鉴权等失败阻止发送并允许重试；不可读文件仅从本次请求省略并明确提示。
  */
-const prepareFiles = async (sessionId: string, request: Request, signal: AbortSignal) => {
+const prepareFiles = async (
+  sessionId: string,
+  request: Request,
+  signal: AbortSignal,
+  omitted: Map<string, FileAttachment>
+) => {
+  signal.throwIfAborted()
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
@@ -978,9 +1000,14 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   })
   const uploads = Promise.allSettled(
     request.question.files.map(async (file) => {
+      if (omitted.has(file.id)) {
+        return
+      }
       const serverId = await ensureServerId(apiKey, file)
       if (serverId) {
         serverIds.set(file.id, serverId)
+      } else {
+        omitted.set(file.id, file)
       }
     })
   )
@@ -1002,7 +1029,12 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   ]
   for (const [user] of context.toReversed()) {
     for (const file of user.files) {
-      if (!file.serverId && !serverIds.has(file.id) && !pending.has(file.id)) {
+      if (
+        !file.serverId &&
+        !serverIds.has(file.id) &&
+        !pending.has(file.id) &&
+        !omitted.has(file.id)
+      ) {
         pending.set(file.id, file)
       }
     }
@@ -1014,22 +1046,44 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
       if (serverId) {
         serverIds.set(file.id, serverId)
         saveServerIds(sessionId, new Map([[file.id, serverId]]))
+      } else {
+        omitted.set(file.id, file)
       }
-    } catch {
+    } catch (error) {
       signal.throwIfAborted()
+      if (
+        error instanceof UnsupportedImageError ||
+        getUploadErrorInfo(error)?.code === 'parseFailed'
+      ) {
+        omitted.set(file.id, file)
+        logEvent(
+          'chat',
+          'attachment.omitted',
+          { fileId: file.id, reason: 'invalid-file', ...diagnosticError(error) },
+          'warn'
+        )
+      } else {
+        // 鉴权、余额、限流与网络故障必须可恢复，不能悄悄把附件从上下文里省掉。
+        throw error
+      }
     }
   }
 
   // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
   const session = getSession(sessionId)
   const byId = new Map(session?.messages.map((message) => [message.id, message]))
+  const filter = <T extends Message>(message: T): T =>
+    message.role === 'user'
+      ? { ...message, files: message.files.filter((file) => !omitted.has(file.id)) }
+      : message
   const resolve = <T extends Message>(message: T): T =>
-    (byId.get(message.id) as T | undefined) ?? message
+    filter((byId.get(message.id) as T | undefined) ?? message)
+  const inherited = session?.inherited ?? request.inherited
   return {
     history: request.history.map(resolve),
     question: resolve(request.question),
     prefix: request.prefix,
-    inherited: session?.inherited ?? request.inherited,
+    inherited: inherited ? { ...inherited, messages: inherited.messages.map(filter) } : undefined,
     persona: request.persona,
   }
 }
@@ -1091,35 +1145,6 @@ const resetAttachmentServerIds = (sessionId: string, serverIds: Set<string>): st
   return localIds
 }
 
-/** 从会话消息里彻底移除附件（图片救不回来时用，别让一张图卡死整个对话） */
-const stripAttachments = (sessionId: string, localIds: string[]): boolean => {
-  const session = getSession(sessionId)
-  if (!session || localIds.length === 0) {
-    return false
-  }
-  const wanted = new Set(localIds)
-  let changed = false
-  const updated = mapSessionMessages(session, (message) => {
-    if (message.role !== 'user') {
-      return message
-    }
-    const files = message.files.filter((file) => {
-      if (wanted.has(file.id)) {
-        changed = true
-        return false
-      }
-      return true
-    })
-    return files.length === message.files.length ? message : { ...message, files }
-  })
-  if (!changed) {
-    return false
-  }
-  updateSession(sessionId, () => updated)
-  persist(sessionId)
-  return true
-}
-
 /**
  * 服务端判定 file_id 失效时，清掉对应附件的 serverId 并丢弃旧的上传任务，
  * 下一次补齐会重新读取本地原件上传。报错里点名了 file_id 就只重置这些，
@@ -1169,7 +1194,7 @@ const healUnsupportedImage = (
   request: Request,
   error: unknown,
   sentMessages: MessageParam[] | null,
-  heal: { ids: Set<string>; fallback: boolean }
+  heal: { ids: Set<string>; fallback: boolean; omitted: Map<string, FileAttachment> }
 ): boolean => {
   const id = blamedServerId(error, sentMessages)
   if (id) {
@@ -1182,7 +1207,15 @@ const healUnsupportedImage = (
       return false
     }
     if (heal.ids.has(hit.id)) {
-      stripAttachments(sessionId, [hit.id])
+      heal.omitted.set(hit.id, hit)
+      resetAttachmentServerIds(sessionId, new Set([id]))
+      markAttachmentInvalid(hit.id)
+      logEvent(
+        'chat',
+        'attachment.omitted',
+        { fileId: hit.id, reason: 'server-rejected-image' },
+        'warn'
+      )
     } else {
       heal.ids.add(hit.id)
       resetAttachmentServerIds(sessionId, new Set([id]))
@@ -1236,7 +1269,17 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   /** 最近一次实际发出的 messages：报错里的 messages.N.content.M 靠它定位 */
   let sentMessages: MessageParam[] | null = null
   /** 图片自愈进度：已重置过的附件 id；定位失败时是否已用过兜底 */
-  const heal = { ids: new Set<string>(), fallback: false }
+  const omitted = new Map<string, FileAttachment>()
+  const heal = { ids: new Set<string>(), fallback: false, omitted }
+  logEvent('chat', 'reply.started', {
+    sessionId,
+    replyId: initial.id,
+    historyMessages: request.history.length,
+    inheritedMessages: request.inherited?.messages.length ?? 0,
+    questionFiles: request.question.files.length,
+    thinking: initial.thinking,
+    search: initial.search,
+  })
   const usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
   const requestStartedAt = Date.now()
@@ -1247,7 +1290,10 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       let preparing = true
       let receivedContent = false
       try {
-        const prepared = await prepareFiles(sessionId, request, controller.signal)
+        const prepared = await prepareFiles(sessionId, request, controller.signal, omitted)
+        if (!prepared.question.content.trim() && prepared.question.files.length === 0) {
+          throw new ApiError('protocol', { key: 'replyNoReadableAttachment' })
+        }
         preparing = false
         // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
         const latestReminder = prepared.prefix
@@ -1265,6 +1311,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.inherited?.messages
         )
         sentMessages = messages
+        logEvent('chat', 'request.prepared', {
+          sessionId,
+          replyId: initial.id,
+          attempt,
+          messagesCount: messages.length,
+          bodyBytes: new Blob([JSON.stringify(messages)]).size,
+          omittedFiles: omitted.size,
+        })
         const events = streamMessage(
           useSettings.getState().apiKey ?? '',
           {
@@ -1317,6 +1371,19 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         reply = settleReply(reply, 'done', Date.now())
         break
       } catch (error) {
+        logEvent(
+          'chat',
+          'reply.attempt.failed',
+          {
+            sessionId,
+            replyId: initial.id,
+            attempt,
+            preparing,
+            cancelled: controller.signal.aborted,
+            ...diagnosticError(error),
+          },
+          controller.signal.aborted ? 'info' : 'error'
+        )
         if (controller.signal.aborted) {
           reply = settleReply(reply, 'stopped', Date.now())
           break
@@ -1326,7 +1393,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             kind: 'upload',
             message: '',
             localMessage: describeUploadError(error),
-            retryable: isRetryableApiError(error),
+            status: error instanceof ApiError ? error.status : undefined,
+            retryable: !(error instanceof UnsupportedImageError) && isRetryableUploadError(error),
           })
           break
         }
@@ -1378,6 +1446,33 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       }
     }
   } finally {
+    if (omitted.size > 0) {
+      reply = {
+        ...reply,
+        contextWarnings: [
+          {
+            key: 'contextAttachmentsSkipped',
+            params: {
+              count: omitted.size,
+              files: [...omitted.values()]
+                .slice(0, 3)
+                .map((file) => file.name)
+                .join('、'),
+            },
+          },
+        ],
+      }
+    }
+    logEvent('chat', 'reply.settled', {
+      sessionId,
+      replyId: initial.id,
+      status: reply.status,
+      stopReason: reply.stopReason,
+      elapsedMs: Date.now() - requestStartedAt,
+      omittedFiles: omitted.size,
+      inputTokens: reply.usage?.input_tokens,
+      outputTokens: reply.usage?.output_tokens,
+    })
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)

@@ -94,6 +94,8 @@ export type AssistantMessage = MessageBranch & {
   usage?: MessageUsage
   /** 每次请求分别保存用量与时间，续写不覆盖已产生的费用。 */
   usageHistory?: { createdAt: number; usage: MessageUsage }[]
+  /** 本轮未能读取的附件提示；原始消息与原件仍保留。 */
+  contextWarnings?: TranslationMessage[]
   error?: {
     /** upload：发送前补传附件失败，请求没有发出 */
     kind: ApiErrorKind | 'upload'

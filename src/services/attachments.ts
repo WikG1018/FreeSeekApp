@@ -1,9 +1,11 @@
 import { create } from 'zustand'
 import type { LinkedMessage, TranslationMessage } from '../i18n/index.js'
 import { uploadFile } from './api/client.js'
-import { classifyApiError, getUploadErrorInfo, isRetryableApiError } from './api/errors.js'
+import { classifyApiError, getUploadErrorInfo, isRetryableUploadError } from './api/errors.js'
+import type { UploadProgress } from './api/multipart.js'
+import { diagnosticError, logEvent } from './diagnostics/log.js'
 import type { FilePurpose } from './api/types.js'
-import { UnsupportedImageError, normalizeImageFile } from './image.js'
+import { ImageDimensionsError, UnsupportedImageError, normalizeImageFile } from './image.js'
 import { ACCEPT_FILE_EXTS } from './uploadExts.js'
 
 /** 允许上传的扩展名，按扩展名白名单过滤，清单见 uploadExts.ts */
@@ -63,8 +65,14 @@ export const validateFiles = (files: File[], currentCount: number): TranslationM
  * 服务端原文多为英文且较长，不直接展示。
  */
 export const describeUploadError = (error: unknown): TranslationMessage => {
+  if (error instanceof ImageDimensionsError) {
+    return { key: 'uploadImageTooLarge' }
+  }
   if (error instanceof UnsupportedImageError) {
     return { key: 'uploadImageUnsupported' }
+  }
+  if (error && typeof error === 'object' && 'localMessage' in error && error.localMessage) {
+    return error.localMessage as TranslationMessage
   }
   // 逐类给出可操作的原因；一律「上传失败」会让用户以为是文件问题，实际可能是 Key 或网络
   switch (classifyApiError(error)) {
@@ -140,7 +148,8 @@ const enqueueUpload = (
   file: Blob,
   name: string,
   isImage: boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onProgress?: (progress: UploadProgress) => void
 ) =>
   new Promise<string>((resolve, reject) => {
     queue.push(async () => {
@@ -151,8 +160,11 @@ const enqueueUpload = (
       try {
         const raw = file instanceof File ? file : new File([file], name, { type: file.type })
         // 图片先规范格式：BMP/TIFF/HEIC 等接口不收的，转成 PNG 再传
-        const body = isImage ? await normalizeImageFile(raw) : raw
-        resolve((await uploadFile(apiKey, body, getUploadPurpose(name, isImage), signal)).id)
+        const body = isImage ? await normalizeImageFile(raw, signal) : raw
+        signal.throwIfAborted()
+        resolve(
+          (await uploadFile(apiKey, body, getUploadPurpose(name, isImage), signal, onProgress)).id
+        )
       } catch (error) {
         reject(error)
       }
@@ -166,7 +178,7 @@ const enqueueUpload = (
  * 任务只在内存里，历史附件补传未完成时，刷新后会在下次请求前重新上传。
  */
 export type UploadTask =
-  | { status: 'uploading' }
+  | { status: 'uploading'; progress?: number; processing?: boolean }
   | { status: 'done'; serverId: string }
   | { status: 'error'; error: TranslationMessage; retryable: boolean }
 
@@ -196,20 +208,71 @@ export const uploadAttachment = (
     return current.promise
   }
   const controller = new AbortController()
+  const started = performance.now()
+  logEvent('upload', 'queued', {
+    fileId: id,
+    extension: getFileExt(name),
+    bytes: blob.size,
+    mimeType: blob.type,
+    image: isImage,
+    queuedJobs: queue.length,
+    activeJobs: running,
+  })
   setTask(id, { status: 'uploading' })
-  const promise = enqueueUpload(apiKey, blob, name, isImage, controller.signal)
+  let lastProgressAt = 0,
+    processing = false,
+    transportLinked = false
+  const promise = enqueueUpload(apiKey, blob, name, isImage, controller.signal, (progress) => {
+    if (!transportLinked) {
+      transportLinked = true
+      logEvent('upload', 'transport.linked', { fileId: id, requestId: progress.requestId })
+    }
+    const nextProcessing = progress.phase !== 'uploading'
+    if (performance.now() - lastProgressAt < 200 && processing === nextProcessing) {
+      return
+    }
+    lastProgressAt = performance.now()
+    processing = nextProcessing
+    if (!controller.signal.aborted) {
+      setTask(id, {
+        status: 'uploading',
+        processing,
+        progress:
+          !processing && progress.total
+            ? Math.min(99, Math.floor((progress.loaded / progress.total) * 100))
+            : undefined,
+      })
+    }
+  })
     .then((serverId) => {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason
+      }
       setTask(id, { status: 'done', serverId })
+      logEvent('upload', 'completed', {
+        fileId: id,
+        elapsedMs: Math.round(performance.now() - started),
+      })
       return serverId
     })
     .catch((error: unknown) => {
+      logEvent(
+        'upload',
+        controller.signal.aborted ? 'cancelled' : 'failed',
+        {
+          fileId: id,
+          elapsedMs: Math.round(performance.now() - started),
+          ...diagnosticError(error),
+        },
+        controller.signal.aborted ? 'info' : 'error'
+      )
       if (controller.signal.aborted) {
         setTask(id, null)
       } else {
         setTask(id, {
           status: 'error',
           error: describeUploadError(error),
-          retryable: isRetryableApiError(error),
+          retryable: !(error instanceof UnsupportedImageError) && isRetryableUploadError(error),
         })
         const notice = describeUploadQuota(error)
         if (notice) {
@@ -230,6 +293,10 @@ export const cancelUpload = (id: string) => {
   setTask(id, null)
 }
 
+/** 本次进程内不反复提交已证实无法解析的原件；原件与消息元数据均保留。 */
+export const markAttachmentInvalid = (id: string) =>
+  setTask(id, { status: 'error', retryable: false, error: { key: 'uploadParseFailed' } })
+
 /** 各扩展名对应的 MIME：部分系统（如 Windows）给不出 file.type，按扩展名补齐 */
 const MIME_BY_EXT: Record<string, string> = {
   png: 'image/png',
@@ -237,10 +304,18 @@ const MIME_BY_EXT: Record<string, string> = {
   jpeg: 'image/jpeg',
   gif: 'image/gif',
   webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  svgz: 'image/svg+xml',
+  avif: 'image/avif',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  ico: 'image/x-icon',
+  jfif: 'image/jpeg',
 }
 
 /** 取文件的 MIME：优先用浏览器给出的类型，缺失时按扩展名推断 */
-export const resolveMimeType = (file: File) => file.type || MIME_BY_EXT[getFileExt(file.name)] || ''
+export const resolveMimeType = (file: File) => MIME_BY_EXT[getFileExt(file.name)] || file.type || ''
 
 export const isImage = (mimeType: string) => mimeType.startsWith('image/')
 

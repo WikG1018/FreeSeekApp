@@ -7,7 +7,7 @@ export type Notice = {
   /** 模板答复使用正文样式；其余统一为红色错误提示。 */
   presentation?: 'response'
   /** 需要用户处理的问题附带的操作 */
-  action?: 'apiKey' | 'topUp'
+  action?: 'apiKey' | 'topUp' | 'newChat'
 }
 
 const getTemplateText = (reply: AssistantMessage) =>
@@ -26,10 +26,16 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
         : reply.error.message
     // 历史补传错误刷新后仍需说明原因，恢复沿用附件卡片或重新生成。
     if (kind === 'upload') {
-      return { text: message || translate('uploadFileStatusFailed') }
+      return {
+        text: message || translate('uploadFileStatusFailed'),
+        action: status === 401 ? 'apiKey' : status === 402 ? 'topUp' : undefined,
+      }
     }
     if (kind === 'network') {
       return { text: localMessage ? message : translate('commonNetworkErrorToast') }
+    }
+    if (localMessage?.key === 'replyContextTooLong') {
+      return { text: message, action: 'newChat' }
     }
     switch (classifyStatus(status)) {
       case 'unauthorized':

@@ -196,7 +196,12 @@ export type MessageUsage = {
   /** message_start 中为 0，message_delta 中为全轮累计值 */
   output_tokens: number
   /** 仅当 message_delta 中有对外输出的搜索结果块时出现 */
-  server_tool_use?: { web_search_requests: number; tool_search: number }
+  server_tool_use?: {
+    web_search_requests: number
+    tool_search?: number
+    tool_fetch?: number
+    tool_image_search?: number
+  }
 }
 
 /** content_block_start 携带的初始内容块；工具块已是完整内容 */

@@ -17,6 +17,8 @@ export const runInstall = async () => {
   const result = await installUpdate()
   if (!result.installed && result.reason === 'permission') {
     showToast({ key: 'updateInstallPermission' })
+  } else if (!result.installed && result.reason !== 'web') {
+    showToast({ key: 'updateInstallFailed', type: 'error' })
   }
   return result
 }
@@ -76,9 +78,7 @@ export const useUpdateStatusText = (): string => {
     case 'checking':
       return t('updateChecking')
     case 'downloading':
-      return percent >= 0
-        ? t('updateDownloadingShort', { percent })
-        : t('updateDownloading')
+      return percent >= 0 ? t('updateDownloadingShort', { percent }) : t('updateDownloading')
     case 'ready':
       return t('updateReadyShort')
     case 'available':

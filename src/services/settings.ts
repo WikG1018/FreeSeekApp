@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { logEvent, registerLogSecret } from './diagnostics/log.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -36,7 +37,13 @@ const KEYS = {
 const read = (key: string) => {
   try {
     return localStorage.getItem(key)
-  } catch {
+  } catch (error) {
+    logEvent(
+      'storage',
+      'settings.read.failed',
+      { errorName: error instanceof Error ? error.name : 'Error' },
+      'warn'
+    )
     return null
   }
 }
@@ -48,7 +55,13 @@ const write = (key: string, value: string | null) => {
     } else {
       localStorage.setItem(key, value)
     }
-  } catch {
+  } catch (error) {
+    logEvent(
+      'storage',
+      'settings.write.failed',
+      { errorName: error instanceof Error ? error.name : 'Error' },
+      'error'
+    )
     // 存储不可用时只在内存中生效
   }
 }
@@ -127,6 +140,8 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
 }
 
 export const setApiKey = (apiKey: string | null) => {
+  registerLogSecret(apiKey)
+  logEvent('app', 'api-key.changed', { configured: Boolean(apiKey) })
   write(KEYS.apiKey, apiKey)
   useSettings.setState({ apiKey })
 }
@@ -142,6 +157,7 @@ export const setSearch = (search: boolean) => {
 }
 
 export const setFontScale = (fontScale: number) => {
+  logEvent('ui', 'font-scale.changed', { scale: fontScale })
   const value = Math.min(1.25, Math.max(0.85, Number(fontScale.toFixed(2))))
   write(KEYS.fontScale, String(value))
   useSettings.setState({ fontScale: value })

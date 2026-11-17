@@ -270,6 +270,9 @@
   .functionRow {
     flex-shrink: 0;
   }
+  .remove {
+    opacity: 1;
+  }
 }
 
 .functionRow {
@@ -505,7 +508,6 @@
   }
 }
 
-
 /* 手机版工具行按钮视觉尺寸保持紧凑，可点区域补到 44px。
    只上下扩展、左右不扩，避免相邻开关互相盖住。 */
 .toggle,
@@ -522,4 +524,31 @@
   right: 0;
   height: 44px;
   transform: translateY(-50%);
+}
+.uploadProgress {
+  position: absolute;
+  inset: auto 4px 5px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--fs-glass-bg-strong);
+  border-radius: 4px;
+}
+.uploadRecovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 8px;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+  button {
+    min-height: 36px;
+    border: 0;
+    padding: 4px 8px;
+    color: var(--dsw-alias-brand-text);
+    background: transparent;
+    cursor: pointer;
+  }
 }

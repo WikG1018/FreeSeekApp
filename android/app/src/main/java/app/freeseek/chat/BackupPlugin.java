@@ -33,6 +33,8 @@ public class BackupPlugin extends Plugin {
     }
     @PluginMethod
     public void create(PluginCall call) {
+        JSObject meta = new JSObject(); meta.put("bytes", call.getDouble("size", 0.0));
+        DiagnosticsLog.record(getContext(), "backup", "save.started", meta);
         String name = call.getString("fileName", "freeseek-backup.zip");
         if (!name.matches("[A-Za-z0-9_.-]+\\.zip") || call.getDouble("size", -1.0) < 0) {
             call.reject("invalid backup"); return;
@@ -48,6 +50,7 @@ public class BackupPlugin extends Plugin {
         if (call == null) { return; }
         Uri uri = result.getData() == null ? null : result.getData().getData();
         if (result.getResultCode() != Activity.RESULT_OK || uri == null) {
+            DiagnosticsLog.record(getContext(), "backup", "save.cancelled", new JSObject());
             JSObject cancelled = new JSObject(); cancelled.put("cancelled", true); call.resolve(cancelled); return;
         }
         io.execute(() -> {
@@ -57,7 +60,7 @@ public class BackupPlugin extends Plugin {
                 String id = UUID.randomUUID().toString();
                 saves.put(id, new Save(uri, stream, call.getDouble("size", 0.0).longValue()));
                 JSObject response = new JSObject(); response.put("id", id); call.resolve(response);
-            } catch (Exception error) { call.reject("cannot create backup", error); }
+            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.create-failed", error); call.reject("cannot create backup", error); }
         });
     }
     @PluginMethod
@@ -71,7 +74,7 @@ public class BackupPlugin extends Plugin {
                 byte[] bytes = Base64.decode(data, Base64.DEFAULT);
                 if (save.written + bytes.length > save.expected) { throw new IllegalStateException("backup size mismatch"); }
                 save.stream.write(bytes); save.written += bytes.length; call.resolve();
-            } catch (Exception error) { call.reject("cannot write backup", error); }
+            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.write-failed", error); call.reject("cannot write backup", error); }
         });
     }
     @PluginMethod
@@ -81,8 +84,10 @@ public class BackupPlugin extends Plugin {
             try {
                 Save save = saves.get(id);
                 if (save == null || save.written != save.expected) { throw new IllegalStateException("backup is incomplete"); }
-                save.stream.flush(); save.stream.close(); saves.remove(id); call.resolve();
-            } catch (Exception error) { call.reject("cannot finish backup", error); }
+                save.stream.flush(); save.stream.close(); saves.remove(id);
+                JSObject meta = new JSObject(); meta.put("bytes", save.written);
+                DiagnosticsLog.record(getContext(), "backup", "save.completed", meta); call.resolve();
+            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.finish-failed", error); call.reject("cannot finish backup", error); }
         });
     }
     @PluginMethod

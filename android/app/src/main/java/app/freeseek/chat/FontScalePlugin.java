@@ -20,6 +20,8 @@ public class FontScalePlugin extends Plugin {
         getActivity().runOnUiThread(() -> {
             if (getBridge() != null && getBridge().getWebView() != null) {
                 getBridge().getWebView().getSettings().setTextZoom(Math.round(textZoom));
+                JSObject meta = new JSObject(); meta.put("textZoom", Math.round(textZoom));
+                DiagnosticsLog.record(getContext(), "ui", "font-scale.applied", meta);
             }
         });
         call.resolve(new JSObject());
