@@ -1,7 +1,7 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
 import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
-import { readServerSentEvents } from './sse.js'
+import { StreamIdleTimeoutError, readServerSentEvents } from './sse.js'
 import type {
   ApiErrorBody,
   CreateMessageRequest,
@@ -163,29 +163,43 @@ export async function* streamMessage(
   if (!response.body || !contentType.includes('text/event-stream')) {
     throw await readErrorResponse(response, 'protocol', '')
   }
-  for await (const { event: eventName, data } of readServerSentEvents(response.body, signal)) {
-    let payload: unknown
-    try {
-      payload = JSON.parse(data)
-    } catch {
-      if (eventName !== 'error') {
+  try {
+    for await (const { event: eventName, data } of readServerSentEvents(
+      response.body,
+      signal,
+      (globalThis as { __FS_STREAM_IDLE_MS__?: number }).__FS_STREAM_IDLE_MS__
+    )) {
+      let payload: unknown
+      try {
+        payload = JSON.parse(data)
+      } catch {
+        if (eventName !== 'error') {
+          continue
+        }
+      }
+      if (isErrorBody(payload)) {
+        throw new ApiError('stream', payload.error.message)
+      }
+      if (eventName === 'error') {
+        throw new ApiError('stream', data)
+      }
+      const event = readMessageEvent(payload)
+      if (!event) {
         continue
       }
+      yield event
+      if (event.type === 'message_stop') {
+        return
+      }
     }
-    if (isErrorBody(payload)) {
-      throw new ApiError('stream', payload.error.message)
+  } catch (error) {
+    if (error instanceof StreamIdleTimeoutError) {
+      // 连接静默挂起：按网络问题归类（可重试），给本地文案
+      throw new ApiError('network', 'Stream idle timeout', undefined, {
+        key: 'streamIdleTimeout',
+      })
     }
-    if (eventName === 'error') {
-      throw new ApiError('stream', data)
-    }
-    const event = readMessageEvent(payload)
-    if (!event) {
-      continue
-    }
-    yield event
-    if (event.type === 'message_stop') {
-      return
-    }
+    throw error
   }
   // 服务端没有提供错误内容时保持为空，不推测断流原因。
   throw new ApiError('interrupted', '')

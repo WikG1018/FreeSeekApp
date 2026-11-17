@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
+import type { MessageParam } from '../api/types.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import {
   extractFileIds,
@@ -51,6 +52,8 @@ const SAFETY_CHECK = { level: 'high' } as const
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
+/** 图片自愈（重置重传 → 再失败就移除该附件）的最大请求数 */
+const IMAGE_HEAL_ATTEMPTS = 6
 /** 上次打开的会话：重启 App 后恢复，避免总是回到欢迎页 */
 const ACTIVE_SESSION_KEY = 'freeseek:active-session'
 
@@ -1017,6 +1020,72 @@ const collectServerFileIds = (request: Request): Set<string> => {
  * 下一次补齐会重新读取本地原件上传。报错里点名了 file_id 就只重置这些，
  * 没点名（如 invalid file_id）则重置本次请求用到的全部附件。
  */
+/** 把命中的附件 serverId 清空（下次发送前会重新上传），返回受影响的本地附件 id */
+const resetAttachmentServerIds = (sessionId: string, serverIds: Set<string>): string[] => {
+  const session = getSession(sessionId)
+  if (!session || serverIds.size === 0) {
+    return []
+  }
+  const localIds: string[] = []
+  const messages = session.messages.map((message) => {
+    if (message.role !== 'user') {
+      return message
+    }
+    let changed = false
+    const files = message.files.map((file) => {
+      if (!file.serverId || !serverIds.has(file.serverId)) {
+        return file
+      }
+      localIds.push(file.id)
+      changed = true
+      return { ...file, serverId: null }
+    })
+    return changed ? { ...message, files } : message
+  })
+  if (localIds.length === 0) {
+    return []
+  }
+  updateSession(sessionId, (current) => ({ ...current, messages }))
+  // 上传任务里可能还留着同一个失效的 serverId，清掉后 ensureServerId 才会重新上传
+  localIds.forEach(cancelUpload)
+  persist(sessionId)
+  return localIds
+}
+
+/** 从会话消息里彻底移除附件（图片救不回来时用，别让一张图卡死整个对话） */
+const stripAttachments = (sessionId: string, localIds: string[]): boolean => {
+  const session = getSession(sessionId)
+  if (!session || localIds.length === 0) {
+    return false
+  }
+  const wanted = new Set(localIds)
+  let changed = false
+  const messages = session.messages.map((message) => {
+    if (message.role !== 'user') {
+      return message
+    }
+    const files = message.files.filter((file) => {
+      if (wanted.has(file.id)) {
+        changed = true
+        return false
+      }
+      return true
+    })
+    return files.length === message.files.length ? message : { ...message, files }
+  })
+  if (!changed) {
+    return false
+  }
+  updateSession(sessionId, (current) => ({ ...current, messages }))
+  persist(sessionId)
+  return true
+}
+
+/**
+ * 服务端判定 file_id 失效时，清掉对应附件的 serverId 并丢弃旧的上传任务，
+ * 下一次补齐会重新读取本地原件上传。报错里点名了 file_id 就只重置这些，
+ * 没点名（如 invalid file_id）则重置本次请求用到的全部附件。
+ */
 const reuploadInvalidatedFiles = (
   sessionId: string,
   request: Request,
@@ -1027,39 +1096,65 @@ const reuploadInvalidatedFiles = (
     return false
   }
   const mentioned = force || !(error instanceof Error) ? [] : extractFileIds(error.message)
-  // 重试时原始快照里还是上一轮已被清掉的 serverId，先换成会话里的最新消息
   const targets =
     mentioned.length > 0
       ? new Set(mentioned)
       : collectServerFileIds(refreshRequest(sessionId, request))
-  const session = getSession(sessionId)
-  if (targets.size === 0 || !session) {
-    return false
+  return resetAttachmentServerIds(sessionId, targets).length > 0
+}
+
+/** 报错里的 messages.N.content.M 指向的具体图片 file_id；定位不了返回 null */
+const blamedServerId = (error: unknown, sentMessages: MessageParam[] | null): string | null => {
+  if (!(error instanceof Error) || !sentMessages) {
+    return null
   }
-  const localIds: string[] = []
-  const messages = session.messages.map((message) => {
-    if (message.role !== 'user') {
-      return message
+  const match = /messages\.(\d+)\.content\.(\d+)/i.exec(error.message)
+  if (!match) {
+    return null
+  }
+  const message = sentMessages[Number(match[1])]
+  const blocks = message && typeof message.content !== 'string' ? message.content : null
+  const block = blocks?.[Number(match[2])]
+  return block && block.type === 'image' && block.source.type === 'file'
+    ? block.source.file_id
+    : null
+}
+
+/**
+ * 「图片不被接受」自愈：先按报错定位到具体哪张，只重置它（重传时转成 PNG）；
+ * 同一张第二次被点名说明救不回来，直接从会话里移除该附件再重发。
+ * 定位失败时退一次「全部重置」。返回是否需要重试。
+ */
+const healUnsupportedImage = (
+  sessionId: string,
+  request: Request,
+  error: unknown,
+  sentMessages: MessageParam[] | null,
+  heal: { ids: Set<string>; fallback: boolean }
+): boolean => {
+  const id = blamedServerId(error, sentMessages)
+  if (id) {
+    const session = getSession(sessionId)
+    const hit = session?.messages
+      .filter((message): message is UserMessage => message.role === 'user')
+      .flatMap((message) => message.files)
+      .find((file) => file.serverId === id)
+    if (!hit) {
+      return false
     }
-    let changed = false
-    const files = message.files.map((file) => {
-      if (!file.serverId || !targets.has(file.serverId)) {
-        return file
-      }
-      localIds.push(file.id)
-      changed = true
-      return { ...file, serverId: null }
-    })
-    return changed ? { ...message, files } : message
-  })
-  if (localIds.length === 0) {
+    if (heal.ids.has(hit.id)) {
+      stripAttachments(sessionId, [hit.id])
+    } else {
+      heal.ids.add(hit.id)
+      resetAttachmentServerIds(sessionId, new Set([id]))
+    }
+    return true
+  }
+  if (heal.fallback) {
     return false
   }
-  updateSession(sessionId, (current) => ({ ...current, messages }))
-  // 上传任务里可能还留着同一个失效的 serverId，清掉后 ensureServerId 才会重新上传
-  localIds.forEach(cancelUpload)
-  persist(sessionId)
-  return true
+  heal.fallback = true
+  return reuploadInvalidatedFiles(sessionId, request, error, true)
 }
 
 /** 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾 */
@@ -1099,6 +1194,11 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   }
   streamFlushes.set(sessionId, flush)
 
+  /** 最近一次实际发出的 messages：报错里的 messages.N.content.M 靠它定位 */
+  let sentMessages: MessageParam[] | null = null
+  /** 图片自愈进度：已重置过的附件 id；定位失败时是否已用过兜底 */
+  const heal = { ids: new Set<string>(), fallback: false }
+
   try {
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
@@ -1122,6 +1222,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           latestReminder,
           prepared.inherited?.messages
         )
+        sentMessages = messages
         const events = streamMessage(
           useSettings.getState().apiKey ?? '',
           {
@@ -1187,12 +1288,13 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           }
           continue
         }
-        // 图片被判定不可用：多为 BMP/HEIC 等格式。重置附件后重传，上传前会规范成 PNG。
+        // 图片被判定不可用：多为导入记录里的 BMP/HEIC/损坏图。
+        // 定位到具体哪张就只处理它；救不回来直接移除该附件，别让一张图卡死整个对话。
         if (
-          attempt < FILE_RETRY_LIMIT &&
+          attempt < IMAGE_HEAL_ATTEMPTS &&
           !receivedContent &&
           isUnsupportedImageError(error) &&
-          reuploadInvalidatedFiles(sessionId, request, error, true)
+          healUnsupportedImage(sessionId, request, error, sentMessages, heal)
         ) {
           await waitForRetry(attempt, controller.signal)
           if (controller.signal.aborted) {

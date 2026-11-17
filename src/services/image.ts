@@ -126,15 +126,49 @@ const toPng = async (blob: Blob): Promise<Blob | null> => {
   }
 }
 
+/** 快速验证图片能否解码（不重编码）；损坏的 PNG/JPEG 服务端一样会拒收 */
+const decodes = async (blob: Blob): Promise<boolean> => {
+  try {
+    const bitmap = await createImageBitmap(blob)
+    bitmap.close()
+    return true
+  } catch {
+    // createImageBitmap 不支持的格式（部分 SVG/TIFF）交给 <img> 再试
+    try {
+      await decodeWithImg(blob)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
 /**
  * 上传前把图片规范成接口支持的格式。
  * 返回新的 File（扩展名与 MIME 都和真实内容一致）；无法处理时抛 UnsupportedImageError。
+ *
+ * 注意「魔数对」不等于「内容有效」：导入的聊天记录里常有截断的 PNG/JPEG，
+ * 魦数校验会放行、服务端发消息时才拒绝，所以支持的格式也要验证可解码，
+ * 解不了就重编码；重编码也不行（彻底损坏）才抛错。
  */
 export const normalizeImageFile = async (file: File): Promise<File> => {
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer())
   const actual = sniffImageMime(head)
   if (actual && SUPPORTED.has(actual)) {
-    return file.type === actual ? file : new File([file], file.name, { type: actual })
+    if (file.type !== actual) {
+      const renamed = new File([file], file.name, { type: actual })
+      if (await decodes(renamed)) {
+        return renamed
+      }
+    } else if (await decodes(file)) {
+      return file
+    }
+    // 魦数对但解不开：损坏图，尝试修复式重编码
+    const repaired = await toPng(file)
+    if (!repaired) {
+      throw new UnsupportedImageError()
+    }
+    return new File([repaired], replaceExt(file.name, 'png'), { type: 'image/png' })
   }
   const png = await toPng(file)
   if (!png) {

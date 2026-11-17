@@ -101,10 +101,28 @@ export class ServerSentEventDecoder {
 /**
  * 逐个产出字节流中的 SSE 事件；流读完即结束。
  * 中止或调用方提前退出时取消读取以释放连接，不依赖底层网络把中止传到响应体。
+ *
+ * idleTimeoutMs：连接「静默看门狗」。移动网络下连接可能被悄悄挂起——
+ * 不报错、不关闭、也永远不再来数据，界面就会一直转圈。
+ * 超过该时长没有任何字节到达时取消读取并抛 StreamIdleTimeoutError。
  */
+export const streamIdle = {
+  /** 测试可注入较小的值；生产用 120 秒（搜索等服务器端工具可能让事件间隔较长） */
+  timeoutMs: 120_000,
+}
+
+/** 流静默超时：连接活着但长时间没有数据 */
+export class StreamIdleTimeoutError extends Error {
+  constructor() {
+    super('Stream idle timeout')
+    this.name = 'StreamIdleTimeoutError'
+  }
+}
+
 export async function* readServerSentEvents(
   stream: ReadableStream<Uint8Array>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  idleTimeoutMs: number = streamIdle.timeoutMs
 ): AsyncGenerator<ServerSentEvent> {
   const reader = stream.getReader()
   const onAbort = () => {
@@ -115,18 +133,38 @@ export async function* readServerSentEvents(
   const textDecoder = new TextDecoder()
   const decoder = new ServerSentEventDecoder()
   let finished = false
+  /** 每读到一段数据就重置；到点仍没数据视为连接已死 */
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  const clearIdle = () => {
+    if (idleTimer !== undefined) {
+      clearTimeout(idleTimer)
+      idleTimer = undefined
+    }
+  }
   try {
     for (;;) {
-      const { done, value } = await reader.read()
-      if (done) {
+      clearIdle()
+      const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
+        idleTimer = setTimeout(() => {
+          idleTimer = undefined
+          // 取消读取让 pending 的 read 尽快结束；随后抛超时
+          reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
+          reject(new StreamIdleTimeoutError())
+        }, idleTimeoutMs)
+        reader
+          .read()
+          .then(({ done, value }) => resolve({ done, value }), reject)
+      })
+      if (chunk.done) {
         finished = true
         yield* decoder.push(textDecoder.decode())
         yield* decoder.end()
         return
       }
-      yield* decoder.push(textDecoder.decode(value, { stream: true }))
+      yield* decoder.push(textDecoder.decode(chunk.value, { stream: true }))
     }
   } finally {
+    clearIdle()
     signal?.removeEventListener('abort', onAbort)
     if (!finished) {
       reader.cancel().catch(() => {})
