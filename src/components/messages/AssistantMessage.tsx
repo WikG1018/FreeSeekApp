@@ -111,18 +111,6 @@ export const AssistantMessage = memo(function AssistantMessage({
                 </button>
               </>
             ) : null}
-            {notice.action === 'account' ? (
-              <>
-                {' '}
-                <button
-                  type="button"
-                  className={styles.noticeAction}
-                  onClick={() => openSettings('account')}
-                >
-                  {t('accountOpen')}
-                </button>
-              </>
-            ) : null}
             {notice.action === 'topUp' ? (
               <>
                 {' '}

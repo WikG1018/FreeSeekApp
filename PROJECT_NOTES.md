@@ -144,6 +144,16 @@
 - **构建期**：新增 `ACCOUNT_ORIGIN` define，打包时可预填服务端地址（`ACCOUNT_ORIGIN=https://api.x.com pnpm build`）。
 - **验证**：服务端 22 项单测（计价/鉴权/幂等/验签/不保存对话/语音配额）+ 客户端新增 `account-check.mjs` 7 项（注册→模拟充值→账号模式对话→余额扣减 29.86→账单→退出）；原有 26+18+7+12+8+9 全绿。
 
+
+## v1.4.0 移除账号、API 教学、打赏（2026-11-17）
+
+用户决定去掉账号登录功能，回到纯 BYOK；API 填写页加入应用内打开官方充值/新建 API Key 页面 + 教学；新增打赏开发者。
+
+- **移除方式**：客户端相关文件 `git checkout v1.2.2 --`（client.ts/speech.ts/store.ts/describe.ts/AssistantMessage/ChatInput/Welcome/SettingsDialog/settingsDialogState/main.tsx/env.d.ts/rspack.config.ts/i18n 中英文），删除 `src/components/account/`、`src/services/account.ts`、`src/services/api/runtime.ts`、`server/`、账号截图；杀掉 8788 本地 mock 服务。**教训：替换 old_string 里带 `<Section>` 开标签时会把开标签一起吞掉，产生语法错误——补丁后必须立刻 typecheck。**
+- **教学**：`ApiTutorial` 组件（AccountPage 顶部）：四步 ol + 双按钮（应用内 Browser 打开 top_up / api_keys）；原「登录官方」单链并入这两个直达入口。
+- **打赏**：About 页「支持开发者」分组 → `DonateDialog`（居中弹窗 + 二维码图片）。二维码是 PIL 生成的**占位图**（伪 QR 图案），换收款码只需替换 `src/assets/donate-qr.png`，无需改代码。
+- E2E：check.mjs 扩到 31 项（四步教学文案、两个直达入口、按钮真实打开 platform.deepseek.com（网页端 window.open popup 断言）、打赏入口与二维码可见）。
+
 ## 已知取舍
 
 

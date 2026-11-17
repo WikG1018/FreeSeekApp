@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import { credential, handleUnauthorized, refreshMe, useAccount } from '../account.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
@@ -932,7 +931,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
   request = refreshRequest(sessionId, request)
-  const apiKey = credential()
+  const apiKey = useSettings.getState().apiKey ?? ''
   const serverIds = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   const aborted = new Promise<never>((_, reject) => {
@@ -1114,7 +1113,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.inherited?.messages
         )
         const events = streamMessage(
-          credential(),
+          useSettings.getState().apiKey ?? '',
           {
             model: initial.model ?? MODEL,
             // 人设提示词覆盖默认助手身份说明
@@ -1182,9 +1181,6 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
           reply = settleReply(reply, 'done', Date.now())
         } else if (error instanceof ApiError) {
-          if (error.status === 401) {
-            handleUnauthorized()
-          }
           reply = settleReply(reply, 'error', Date.now(), {
             kind: error.kind,
             message: error.message,
@@ -1211,10 +1207,6 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       ),
     }))
     persist(sessionId)
-    // 账号模式：每次回复结束后刷新余额（服务端按 token 计费，金额只有服务端知道）
-    if (useAccount.getState().mode === 'account') {
-      void refreshMe().catch(() => {})
-    }
   }
 }
 

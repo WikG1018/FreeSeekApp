@@ -7,7 +7,6 @@ import { getContextRounds } from '../../services/chat/reply.js'
 import { cancelInherit, useChatStore } from '../../services/chat/store.js'
 import { setDefaultPersona, usePersonas } from '../../services/personas.js'
 import { useSettings } from '../../services/settings.js'
-import { useAccount } from '../../services/account.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { IconCloseFill14 } from '../base/icons.js'
 import { PersonaManager } from '../personas/PersonaManager.js'
@@ -24,9 +23,6 @@ export const Welcome = () => {
   const personas = usePersonas((state) => state.personas)
   const defaultPersonaId = usePersonas((state) => state.defaultId)
   const apiKey = useSettings((state) => state.apiKey)
-  const accountMode = useAccount((state) => state.mode)
-  const accountToken = useAccount((state) => state.token)
-  const hasCredential = accountMode === 'account' ? !!accountToken : !!apiKey
   const [managerOpen, setManagerOpen] = useState(false)
   return (
     <div className={styles.container}>
@@ -79,7 +75,7 @@ export const Welcome = () => {
           </div>
         ) : null}
         <div className={styles.inputArea}>
-          {hasCredential ? null : (
+          {apiKey ? null : (
             <button
               type="button"
               className={styles.apiKeyCta}

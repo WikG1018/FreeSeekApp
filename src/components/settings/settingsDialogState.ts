@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { useSettings } from '../../services/settings.js'
-import { useAccount } from '../../services/account.js'
 
 /** 设置页路由：一级目录与各二级页面 */
 export type SettingsPageId =
@@ -50,11 +49,7 @@ export const hasSettingsOpen = () => useSettingsDialog.getState().open
 
 /** 没有 API Key 时打开「API 服务」页，返回是否已有 Key */
 export const ensureApiKey = () => {
-  const account = useAccount.getState()
-  if (account.mode === 'account' && account.token) {
-    return true
-  }
-  if (account.mode === 'key' && useSettings.getState().apiKey) {
+  if (useSettings.getState().apiKey) {
     return true
   }
   openSettings('account')

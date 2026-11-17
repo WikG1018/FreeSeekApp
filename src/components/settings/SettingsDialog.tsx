@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import logo from '../../assets/logo.png'
+import donateQr from '../../assets/donate-qr.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
   IconCheckOutline16,
@@ -15,6 +16,7 @@ import {
   IconEyeOutline16,
   IconFollowsystemOutline16,
   IconGlobeLanguageOutline14,
+  IconHeartOutline16,
   IconInfoOutline16,
   IconLightOutline16,
   IconLinkOutline16,
@@ -46,8 +48,6 @@ import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
-import { AccountPanels } from '../account/AccountPage.js'
-import { useAccount } from '../../services/account.js'
 import { PricingForm } from '../usage/PricingForm.js'
 import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
@@ -63,12 +63,13 @@ import styles from './Settings.module.css'
 const APP_VERSION =
   document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? '—'
 
-/** DeepSeek 开放平台：申请与管理 API Key（唯一的必要外链） */
-const PLATFORM_URL = 'https://platform.deepseek.com/'
+/** DeepSeek 开放平台：充值与创建 API Key（应用内浏览器打开，需登录官方账号） */
+const TOPUP_URL = 'https://platform.deepseek.com/top_up'
+const API_KEYS_URL = 'https://platform.deepseek.com/api_keys'
 
 const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
   home: 'settings',
-  account: 'accountPageTitle',
+  account: 'settingsApiService',
   appearance: 'avatarMenuSettingsDialogThemeItemLabel',
   font: 'settingsFontSize',
   language: 'settingsLocalePreference',
@@ -131,7 +132,6 @@ const SettingsRoot = () => {
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
-  const accountMode = useAccount((state) => state.mode)
 
   // Esc 关闭设置页；确认弹窗打开时交给弹窗自己处理
   useEffect(() => {
@@ -174,12 +174,7 @@ const SettingsRoot = () => {
         <div className={styles.scroll}>
           <div key={page} className={styles.pageBody}>
             {page === 'home' ? <HomePage push={push} /> : null}
-            {page === 'account' ? (
-              <>
-                <AccountPanels />
-                {accountMode === 'key' ? <ApiKeySection editor={apiKeyEditor} /> : null}
-              </>
-            ) : null}
+            {page === 'account' ? <AccountPage editor={apiKeyEditor} /> : null}
             {page === 'appearance' ? <AppearancePage /> : null}
             {page === 'font' ? <FontPage /> : null}
             {page === 'language' ? <LanguagePage /> : null}
@@ -207,8 +202,6 @@ const SettingsRoot = () => {
 const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
   const apiKey = useSettings((state) => state.apiKey)
-  const accountMode = useAccount((state) => state.mode)
-  const accountUser = useAccount((state) => state.user)
   const theme = useSettings((state) => state.themePreference)
   const locale = useSettings((state) => state.locale)
   const ttsVoice = useSettings((state) => state.ttsVoice)
@@ -256,14 +249,8 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
       <Section title={t('settingsSectionAccount')}>
         <Row
           icon={<IconUserOutline16 />}
-          label={t('accountPageTitle')}
-          value={
-            accountMode === 'account' && accountUser
-              ? accountUser.username
-              : apiKey
-                ? t('settingsApiKeyConfigured')
-                : t('settingsApiKeyMissing')
-          }
+          label={t('settingsApiService')}
+          value={apiKey ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
           onClick={() => push('account')}
         />
       </Section>
@@ -323,14 +310,15 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   )
 }
 
-/** 二级页：自带 API Key（账号模式切换由 AccountPanels 负责） */
-const ApiKeySection = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
+/** 二级页：API 服务 */
+const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> }) => {
   const t = useTranslate()
   const { apiKey, editing, setEditing, form, showInput } = editor
   const [showKey, setShowKey] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
   return (
     <>
+      <ApiTutorial />
       <Section>
         <div className={styles.accountBlock}>
           <div className={styles.accountStatus}>
@@ -404,11 +392,15 @@ const ApiKeySection = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> 
         <Row label={t('settingsApiBillingLabel')} value={t('settingsApiBillingValue')} />
         <Row
           icon={<IconLinkOutline16 />}
-          label={t('settingsLoginOfficial')}
-          onClick={() => void openExternal(PLATFORM_URL)}
+          label={t('settingsApiOpenKeys')}
+          onClick={() => void openExternal(API_KEYS_URL)}
+        />
+        <Row
+          icon={<IconLinkOutline16 />}
+          label={t('settingsApiOpenTopup')}
+          onClick={() => void openExternal(TOPUP_URL)}
         />
       </Section>
-      <p className={styles.paragraph}>{t('settingsLoginOfficialHint')}</p>
       {clearOpen ? (
         <Modal
           title={t('settingsApiKeyClear')}
@@ -581,10 +573,66 @@ const DataPage = ({
   )
 }
 
+/** API Key 教学：四步走 + 两个应用内直达入口 */
+const ApiTutorial = () => {
+  const t = useTranslate()
+  const steps = [1, 2, 3, 4].map((index) => t(`settingsApiStep${index}` as TranslationKey))
+  return (
+    <div className={styles.tutorial}>
+      <div className={styles.tutorialTitle}>{t('settingsApiTutorialTitle')}</div>
+      <ol className={styles.tutorialSteps}>
+        {steps.map((step, index) => (
+          <li key={index} className={styles.tutorialStep}>
+            <span className={styles.tutorialBadge}>{index + 1}</span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+      <div className={styles.tutorialActions}>
+        <button
+          type="button"
+          className={styles.tutorialButton}
+          onClick={() => void openExternal(API_KEYS_URL)}
+        >
+          {t('settingsApiOpenKeys')}
+        </button>
+        <button
+          type="button"
+          className={styles.tutorialButton}
+          onClick={() => void openExternal(TOPUP_URL)}
+        >
+          {t('settingsApiOpenTopup')}
+        </button>
+      </div>
+      <div className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</div>
+    </div>
+  )
+}
+
+/** 打赏开发者：收款二维码（替换 src/assets/donate-qr.png 即可换成自己的码） */
+const DonateDialog = ({ onClose }: { onClose: () => void }) => {
+  const t = useTranslate()
+  return (
+    <Modal title={t('donateTitle')} centered closable onClose={onClose}>
+      <div className={styles.donate}>
+        <p className={styles.donateIntro}>{t('donateIntro')}</p>
+        <img
+          className={styles.donateQr}
+          src={donateQr}
+          alt={t('donateTitle')}
+          draggable={false}
+        />
+        <p className={styles.donateHint}>{t('donateScanHint')}</p>
+      </div>
+    </Modal>
+  )
+}
+
 /** 二级页：关于（完全本地，不跳转私有仓库） */
 const AboutPage = () => {
   const t = useTranslate()
   const [licenseOpen, setLicenseOpen] = useState(false)
+  const [donateOpen, setDonateOpen] = useState(false)
   return (
     <>
       <div className={styles.brandBlock}>
@@ -599,6 +647,13 @@ const AboutPage = () => {
       </Section>
       <Section title={t('settingsUpstreamTitle')}>
         <p className={styles.paragraph}>{t('settingsUpstreamText')}</p>
+      </Section>
+      <Section title={t('settingsSupportSection')}>
+        <Row
+          icon={<IconHeartOutline16 />}
+          label={t('donateTitle')}
+          onClick={() => setDonateOpen(true)}
+        />
       </Section>
       <Section title={t('settingsFontSize')}>
         <p className={styles.paragraph}>{t('settingsFontAttribution')}</p>
@@ -616,6 +671,7 @@ const AboutPage = () => {
           <pre className={styles.licenseText}>{LICENSE_TEXT}</pre>
         </Modal>
       ) : null}
+      {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}
       <div className={styles.footer}>FreeSeek</div>
     </>
   )

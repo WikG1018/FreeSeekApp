@@ -1,6 +1,5 @@
 import { isTranslationKey, translate } from '../../i18n/index.js'
 import { classifyStatus } from '../api/errors.js'
-import { useAccount } from '../account.js'
 import type { AssistantMessage } from './types.js'
 
 export type Notice = {
@@ -8,7 +7,7 @@ export type Notice = {
   /** 模板答复使用正文样式；其余统一为红色错误提示。 */
   presentation?: 'response'
   /** 需要用户处理的问题附带的操作 */
-  action?: 'apiKey' | 'topUp' | 'account'
+  action?: 'apiKey' | 'topUp'
 }
 
 const getTemplateText = (reply: AssistantMessage) =>
@@ -32,16 +31,11 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     if (kind === 'network') {
       return { text: translate('commonNetworkErrorToast') }
     }
-    const accountMode = useAccount.getState().mode === 'account'
     switch (classifyStatus(status)) {
       case 'unauthorized':
-        return accountMode
-          ? { text: translate('accountTokenExpired'), action: 'account' }
-          : { text: translate('replyInvalidApiKey'), action: 'apiKey' }
+        return { text: translate('replyInvalidApiKey'), action: 'apiKey' }
       case 'insufficientBalance':
-        return accountMode
-          ? { text: translate('accountBalanceLow'), action: 'account' }
-          : { text: translate('replyInsufficientBalance'), action: 'topUp' }
+        return { text: translate('replyInsufficientBalance'), action: 'topUp' }
       case 'rateLimited':
         return { text: translate('replyRateLimited') }
       case 'serverBusy':

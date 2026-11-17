@@ -256,6 +256,18 @@ export const IconFileOutline16 = () => (
   </svg>
 )
 
+/** 打赏开发者 */
+export const IconHeartOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M8 13.6c-.2 0-.38-.07-.53-.2C4.2 10.5 2 8.55 2 6.15 2 4.4 3.4 3 5.15 3c1.1 0 2.14.55 2.85 1.47C8.71 3.55 9.75 3 10.85 3 12.6 3 14 4.4 14 6.15c0 2.4-2.2 4.35-5.47 7.25-.15.13-.33.2-.53.2ZM5.15 4.2C4.06 4.2 3.2 5.07 3.2 6.15c0 1.77 1.78 3.42 4.8 6.11 3.02-2.69 4.8-4.34 4.8-6.11 0-1.08-.86-1.95-1.95-1.95-.94 0-1.85.62-2.32 1.55a.63.63 0 0 1-1.06 0c-.47-.93-1.38-1.55-2.32-1.55Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
 export const IconPaperclipOutline16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
