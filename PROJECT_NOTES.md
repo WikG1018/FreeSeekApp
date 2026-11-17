@@ -207,6 +207,15 @@
 - **用量面板重做**：主数字卡（总费用 + 今日/请求/命中率/搜索）+ 两块明细 + 图表卡 + 排行（序号、第一名高亮）。
 - E2E：新增 onboarding 5/5；其余 42+18+6+12+7+7+6 全绿。
 
+
+## v2.0.0 新图标 + 开源首发（2026-11-17）
+
+- **图标**：用户提供双鲸矢量图（透明底、深蓝 #172B49）。`scripts/make_icons.py` 重写为「从 assets/icon-source.png 生成全套」：裁 alpha 边界 → 按比例合成白底方图 / 透明前景 / 纯白背景 / 应用内 Logo / 启动图；Android 各密度传统图标（圆角/圆形）+ 自适应图层（108dp，内容占 60%），并补 `<monochrome>`；自适应 XML 去掉旧的 16.7% inset（旧图层自带留白，去掉后构图更饱满）。
+- **开源**：新建公开仓库 `WikG1018/FreeSeekApp`（原 `freeseek` 保持私有）；`src/services/update.ts` 的 `REPO` 改指新仓库；v2.0.0 Release 同时发布在公开与私有仓库。
+- **文档**：README.md 改为中文主文档（功能表/安装/三步开始/官方记录迁移/更新机制/构建/结构/隐私/FAQ/打赏），新增 README.en.md；删除 README.zh-CN.md 避免三份文档漂移。
+- **仓库卫生**：早期脚本把截图写到 `freeseek/freeseek/shots`，加上 `shots/` 开发截图共 5.5MB 被误提交；已 `git rm --cached` 并从工作区删除，`.gitignore` 增加 `shots/`、`freeseek/`（文档截图只保留 `docs/screenshots`）。**教训：截图脚本的输出路径必须用绝对路径或 `join(import.meta.dirname, ...)`。**
+- 版本号 2.0.0 / versionCode 22；E2E 全量通过（42+18+6+12+7+5+6）。
+
 ## 已知取舍
 
 
