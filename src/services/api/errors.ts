@@ -114,3 +114,10 @@ export const getUploadErrorInfo = (error: unknown): UploadErrorInfo | null => {
   }
   return null
 }
+
+
+/** 服务端在「发消息」阶段判定图片不可用：多为格式不支持或图片本身损坏 */
+export const isUnsupportedImageError = (error: unknown): boolean =>
+  error instanceof ApiError && /uploaded an (unsupported|invalid) image/i.test(error.message)
+
+export { describeKnownApiError } from './knownErrors.js'

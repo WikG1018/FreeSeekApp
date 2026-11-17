@@ -2,7 +2,12 @@ import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
-import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
+import {
+  extractFileIds,
+  getFileErrorCode,
+  isRetryableApiError,
+  isUnsupportedImageError,
+} from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
@@ -1012,11 +1017,16 @@ const collectServerFileIds = (request: Request): Set<string> => {
  * 下一次补齐会重新读取本地原件上传。报错里点名了 file_id 就只重置这些，
  * 没点名（如 invalid file_id）则重置本次请求用到的全部附件。
  */
-const reuploadInvalidatedFiles = (sessionId: string, request: Request, error: unknown): boolean => {
-  if (!(error instanceof ApiError) || !getFileErrorCode(error)) {
+const reuploadInvalidatedFiles = (
+  sessionId: string,
+  request: Request,
+  error: unknown,
+  force = false
+): boolean => {
+  if (!force && (!(error instanceof ApiError) || !getFileErrorCode(error))) {
     return false
   }
-  const mentioned = extractFileIds(error.message)
+  const mentioned = force || !(error instanceof Error) ? [] : extractFileIds(error.message)
   // 重试时原始快照里还是上一轮已被清掉的 serverId，先换成会话里的最新消息
   const targets =
     mentioned.length > 0
@@ -1169,6 +1179,20 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           attempt < FILE_RETRY_LIMIT &&
           !receivedContent &&
           reuploadInvalidatedFiles(sessionId, request, error)
+        ) {
+          await waitForRetry(attempt, controller.signal)
+          if (controller.signal.aborted) {
+            reply = settleReply(reply, 'stopped', Date.now())
+            break
+          }
+          continue
+        }
+        // 图片被判定不可用：多为 BMP/HEIC 等格式。重置附件后重传，上传前会规范成 PNG。
+        if (
+          attempt < FILE_RETRY_LIMIT &&
+          !receivedContent &&
+          isUnsupportedImageError(error) &&
+          reuploadInvalidatedFiles(sessionId, request, error, true)
         ) {
           await waitForRetry(attempt, controller.signal)
           if (controller.signal.aborted) {

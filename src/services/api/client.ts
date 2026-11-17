@@ -1,5 +1,6 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
 import { readMessageEvent } from './parseEvent.js'
+import { describeKnownApiError } from './knownErrors.js'
 import { readServerSentEvents } from './sse.js'
 import type {
   ApiErrorBody,
@@ -34,11 +35,12 @@ export class ApiError extends Error {
   constructor(
     readonly kind: ApiErrorKind,
     message: string | TranslationMessage,
-    readonly status?: number
+    readonly status?: number,
+    localMessage?: TranslationMessage
   ) {
     super(typeof message === 'string' ? message : translate(message.key, message.params))
     this.name = 'ApiError'
-    this.localMessage = typeof message === 'string' ? undefined : message
+    this.localMessage = localMessage ?? (typeof message === 'string' ? undefined : message)
   }
 }
 
@@ -63,7 +65,8 @@ const readErrorResponse = async (
   } catch {
     // 非 JSON 响应体直接展示原文
   }
-  return new ApiError(kind, message, response.status)
+  // 原文保留在 error.message 里供匹配，界面展示用本地文案
+  return new ApiError(kind, message, response.status, describeKnownApiError(message))
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
