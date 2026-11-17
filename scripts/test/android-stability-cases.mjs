@@ -2,6 +2,52 @@ import assert from 'node:assert/strict'
 
 export const runAndroidStabilityCases = async ({ run, behavior }) => {
   await run(
+    'landscape software keyboard keeps text and send control within the viewport',
+    async (page) => {
+      await page.setViewportSize({ width: 800, height: 360 })
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.settings.setApiKey('fake')
+        a.drafts.setDraftText(null, 'Landscape draft')
+        Object.defineProperty(window.visualViewport, 'height', {
+          configurable: true,
+          get: () => 120,
+        })
+        Object.defineProperty(window.visualViewport, 'offsetTop', {
+          configurable: true,
+          get: () => 0,
+        })
+      })
+      for (const existing of [false, true]) {
+        if (existing) {
+          await page.evaluate(async () => {
+            const a = window.__audit,
+              f = a.fixtures
+            const session = f.session({
+              messages: [f.user('u', 'hello'), f.assistant('a', 'reply')],
+            })
+            await a.seed([session])
+            a.drafts.setDraftText(session.id, 'Continue')
+          })
+        }
+        await page.locator('textarea').focus()
+        await page.evaluate(() => visualViewport.dispatchEvent(new Event('resize')))
+        await page.waitForTimeout(350)
+        for (const locator of [
+          page.locator('textarea'),
+          page.getByRole('button', { name: '发送', exact: true }),
+        ]) {
+          const rect = await locator.boundingBox()
+          assert.ok(
+            rect && rect.y >= 0 && rect.height >= 20 && rect.y + rect.height <= 121,
+            JSON.stringify({ existing, rect })
+          )
+        }
+        await page.locator('textarea').blur()
+      }
+    }
+  )
+  await run(
     'cancel then retry same attachment cannot inherit or overwrite the cancelled job',
     async (page) => {
       behavior({ delay: 150 })

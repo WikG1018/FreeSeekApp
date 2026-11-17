@@ -10,6 +10,11 @@
   background-color: var(--dsw-specific-sidebar-fill);
 }
 
+:global([data-ime-compact]) .sider {
+  overflow-y: auto;
+  padding-top: calc(var(--fs-safe-top) + 6px);
+}
+
 .top {
   display: flex;
   align-items: center;
@@ -196,7 +201,12 @@
 
 /* 撒娇：每 6 秒轻晃两下（4%–12% 与 16%–24% 两个来回） */
 @keyframes donatePlead {
-  0%, 4%, 12%, 16%, 24%, 100% {
+  0%,
+  4%,
+  12%,
+  16%,
+  24%,
+  100% {
     transform: rotate(0deg);
   }
   8% {
@@ -220,7 +230,8 @@
 
 /* 心跳节律：两连跳后休息 */
 @keyframes heartBeat {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   12% {
@@ -263,7 +274,10 @@
 
 /* 与撒娇同步的胶囊呼吸：撒娇时刻微微放大提醒 */
 @keyframes pleaPulse {
-  0%, 4%, 24%, 100% {
+  0%,
+  4%,
+  24%,
+  100% {
     transform: scale(1);
   }
   14% {

@@ -283,6 +283,38 @@
   padding: 12px;
 }
 
+:global([data-ime-compact]) .wrapper {
+  flex-shrink: 0;
+  max-height: calc(var(--app-viewport-height) - var(--fs-safe-top) - 8px);
+}
+
+:global([data-ime-compact]) .textareaWrapper {
+  flex: 1;
+  min-height: 0;
+}
+
+:global([data-ime-compact]) .textarea,
+:global([data-ime-compact]) .mirror {
+  min-height: 32px;
+  padding-top: 8px;
+}
+
+:global([data-ime-compact]) .functionRow {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 4px 8px;
+}
+
+:global([data-ime-compact]) .attachments {
+  flex-shrink: 0;
+  padding: 4px 8px 0;
+}
+
+:global([data-ime-compact]) .attachment {
+  width: 24px;
+  height: 24px;
+}
+
 .toggles {
   display: flex;
   flex: 1;

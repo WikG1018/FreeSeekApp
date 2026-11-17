@@ -98,6 +98,21 @@
   animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) 60ms both;
 }
 
+/* 横屏软键盘留给内容的高度很小，聚焦期间优先保留输入与发送操作。 */
+:global([data-ime-compact]) .welcome {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  justify-content: flex-end;
+  margin: 0;
+  padding: calc(var(--fs-safe-top) + 4px) 16px 4px;
+  gap: 0;
+}
+
+:global([data-ime-compact]) .welcome > :not(.inputArea) {
+  display: none;
+}
+
 /* 未配置 API Key 时的轻量入口，不打断首屏 */
 .apiKeyCta {
   display: block;
@@ -181,5 +196,4 @@
     width: 48px;
     height: 48px;
   }
-
 }

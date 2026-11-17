@@ -1,3 +1,7 @@
+:global([data-ime-compact]) .header {
+  display: none;
+}
+
 .header {
   position: absolute;
   top: 0;

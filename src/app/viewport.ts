@@ -42,7 +42,7 @@ export const usePreventPageScroll = (enabled: boolean) => {
   }, [enabled])
 }
 
-/** 移动端页面跟随视觉视口，键盘弹出后顶栏和输入框仍留在可见区域。 */
+/** 各宽度页面跟随视觉视口，覆盖手机横屏和平板软键盘。 */
 export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
   const frameRef = useRef<HTMLDivElement>(null)
 
@@ -57,6 +57,7 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
     const reset = () => {
       frame.style.removeProperty('--app-viewport-height')
       frame.style.removeProperty('--app-viewport-top')
+      frame.removeAttribute('data-ime-compact')
     }
     const update = () => {
       // 双指缩放由浏览器处理，保持当前布局尺寸。
@@ -73,6 +74,10 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
         `${(viewport?.height ?? window.innerHeight) / layoutScale}px`
       )
       frame.style.setProperty('--app-viewport-top', `${(viewport?.offsetTop ?? 0) / layoutScale}px`)
+      frame.toggleAttribute(
+        'data-ime-compact',
+        (viewport?.height ?? innerHeight) / layoutScale < 260
+      )
     }
     const scheduleFrame = () => {
       cancelAnimationFrame(animationFrame)

@@ -169,6 +169,14 @@
   pointer-events: auto;
 }
 
+:global([data-ime-compact]) .header {
+  display: none;
+}
+
+:global([data-ime-compact]) .dock {
+  padding: 0 12px 4px;
+}
+
 .caveat {
   display: none;
 }

@@ -67,16 +67,13 @@ export const App = () => {
     state.activeId === null ? false : state.sessionLoadErrors[state.activeId] === true
   )
   const fontScale = useSettings((state) => state.fontScale)
-  const frameRef = useMobileViewport(
-    isMobile,
-    Capacitor.getPlatform() === 'android' ? 1 : fontScale
-  )
+  const frameRef = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : fontScale)
   const streaming = useChatStore((state) =>
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
 
-  usePreventPageScroll(isMobile)
+  usePreventPageScroll(isMobile || Capacitor.getPlatform() === 'android')
 
   useEffect(() => {
     document.documentElement.lang = locale
