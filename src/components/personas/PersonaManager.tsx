@@ -10,6 +10,12 @@ import {
   usePersonas,
   type Persona,
 } from '../../services/personas.js'
+import {
+  IconAddOutline16,
+  IconCheckOutline16,
+  IconEditOutline16,
+  IconTrashOutline16,
+} from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import styles from './PersonaManager.module.css'
 
@@ -35,29 +41,30 @@ const PersonaEditor = ({ persona, onDone }: { persona: 'new' | Persona; onDone: 
   }
   return (
     <div className={styles.editor}>
-      <label className={styles.fieldLabel} htmlFor="persona-name">
-        {t('personaNameLabel')}
+      <label className={styles.field} htmlFor="persona-name">
+        <span className={styles.fieldLabel}>{t('personaNameLabel')}</span>
+        <input
+          id="persona-name"
+          className={styles.input}
+          value={name}
+          placeholder={t('personaNamePlaceholder')}
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+        />
       </label>
-      <input
-        id="persona-name"
-        className={styles.input}
-        value={name}
-        placeholder={t('personaNamePlaceholder')}
-        onChange={(event) => setName(event.target.value)}
-      />
-      <label className={styles.fieldLabel} htmlFor="persona-prompt">
-        {t('personaPromptLabel')}
+      <label className={styles.field} htmlFor="persona-prompt">
+        <span className={styles.fieldLabel}>{t('personaPromptLabel')}</span>
+        <textarea
+          id="persona-prompt"
+          className={styles.textarea}
+          value={prompt}
+          placeholder={t('personaPromptPlaceholder')}
+          rows={9}
+          onChange={(event) => setPrompt(event.target.value)}
+        />
       </label>
-      <textarea
-        id="persona-prompt"
-        className={styles.textarea}
-        value={prompt}
-        placeholder={t('personaPromptPlaceholder')}
-        rows={8}
-        onChange={(event) => setPrompt(event.target.value)}
-      />
       <div className={styles.editorActions}>
-        <button type="button" className={styles.secondaryButton} onClick={onDone}>
+        <button type="button" className={styles.ghostButton} onClick={onDone}>
           {t('cancel')}
         </button>
         <button
@@ -73,7 +80,7 @@ const PersonaEditor = ({ persona, onDone }: { persona: 'new' | Persona; onDone: 
   )
 }
 
-/** 人设库管理：查看、新建、编辑、删除与设置默认 */
+/** 人设库管理：顶部是显眼的新建入口，下面是人设卡片列表 */
 export const PersonaManager = ({ onClose }: { onClose: () => void }) => {
   const t = useTranslate()
   const personas = usePersonas((state) => state.personas)
@@ -82,74 +89,95 @@ export const PersonaManager = ({ onClose }: { onClose: () => void }) => {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   return (
-    <Modal title={t('personaManagerTitle')} closable onClose={onClose} className={styles.dialog}>
+    <Modal
+      title={editing ? (editing === 'new' ? t('personaAdd') : t('personaEditAction')) : t('personaManagerTitle')}
+      closable
+      onClose={editing ? () => setEditing(null) : onClose}
+      className={styles.dialog}
+      mainClassName={styles.main}
+    >
       {editing !== null ? (
         <PersonaEditor persona={editing} onDone={() => setEditing(null)} />
       ) : (
-        <div className={styles.list}>
-          <div className={styles.hint}>{t('personaManagerHint')}</div>
-          {personas.map((persona) => (
-            <div
-              key={persona.id}
-              className={clsx(styles.item, persona.id === defaultId && styles.itemActive)}
-            >
-              <div className={styles.itemMain}>
-                <div className={styles.itemName}>
-                  {persona.name}
-                  {persona.id === defaultId ? (
-                    <span className={styles.badge}>{t('personaDefaultBadge')}</span>
-                  ) : null}
-                </div>
-                <div className={styles.itemPrompt}>
-                  {persona.prompt || t('personaDefaultPromptHint')}
-                </div>
-              </div>
-              <div className={styles.itemActions}>
-                {persona.id !== defaultId ? (
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    onClick={() => setDefaultPersona(persona.id)}
-                  >
-                    {t('personaSetDefault')}
-                  </button>
-                ) : null}
-                {!isBuiltin(persona) ? (
-                  <>
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      onClick={() => setEditing(persona)}
-                    >
-                      {t('personaEditAction')}
-                    </button>
-                    <button
-                      type="button"
-                      className={clsx(styles.secondaryButton, styles.dangerButton)}
-                      onClick={() => {
-                        if (confirmDelete === persona.id) {
-                          removePersona(persona.id)
-                          setConfirmDelete(null)
-                        } else {
-                          setConfirmDelete(persona.id)
-                        }
-                      }}
-                    >
-                      {confirmDelete === persona.id ? t('personaDeleteConfirm') : t('delete')}
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            </div>
-          ))}
-          <button
-            type="button"
-            className={clsx(styles.secondaryButton, styles.addButton)}
-            onClick={() => setEditing('new')}
-          >
+        <>
+          <button type="button" className={styles.addButton} onClick={() => setEditing('new')}>
+            <span className={styles.addIcon}>
+              <IconAddOutline16 />
+            </span>
             {t('personaAdd')}
           </button>
-        </div>
+          <p className={styles.hint}>{t('personaManagerHint')}</p>
+
+          <div className={styles.list}>
+            {personas.map((persona) => {
+              const selected = persona.id === defaultId
+              const builtin = isBuiltin(persona)
+              return (
+                <div
+                  key={persona.id}
+                  className={clsx(styles.item, selected && styles.itemActive)}
+                >
+                  <button
+                    type="button"
+                    className={styles.itemMain}
+                    aria-pressed={selected}
+                    onClick={() => setDefaultPersona(persona.id)}
+                  >
+                    <span className={styles.itemHeader}>
+                      <span className={styles.itemName}>{persona.name}</span>
+                      {selected ? (
+                        <span className={styles.badgeActive}>
+                          <IconCheckOutline16 />
+                          {t('personaDefaultBadge')}
+                        </span>
+                      ) : null}
+                      {builtin ? <span className={styles.badge}>{t('personaBuiltinBadge')}</span> : null}
+                    </span>
+                    <span className={styles.itemPrompt}>
+                      {persona.prompt || t('personaDefaultPromptHint')}
+                    </span>
+                  </button>
+                  {builtin ? null : (
+                    <div className={styles.itemActions}>
+                      <button
+                        type="button"
+                        className={styles.iconAction}
+                        aria-label={t('personaEditAction')}
+                        onClick={() => setEditing(persona)}
+                      >
+                        <IconEditOutline16 />
+                      </button>
+                      <button
+                        type="button"
+                        className={clsx(
+                          styles.iconAction,
+                          confirmDelete === persona.id && styles.iconActionDanger
+                        )}
+                        aria-label={
+                          confirmDelete === persona.id ? t('personaDeleteConfirm') : t('delete')
+                        }
+                        onClick={() => {
+                          if (confirmDelete === persona.id) {
+                            removePersona(persona.id)
+                            setConfirmDelete(null)
+                          } else {
+                            setConfirmDelete(persona.id)
+                          }
+                        }}
+                      >
+                        {confirmDelete === persona.id ? (
+                          <span className={styles.deleteConfirmText}>{t('personaDeleteConfirm')}</span>
+                        ) : (
+                          <IconTrashOutline16 />
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
     </Modal>
   )

@@ -559,6 +559,17 @@ const DataPage = ({
   const t = useTranslate()
   return (
     <>
+      {/* 官方 App 导出 → 本应用导入 的操作指引 */}
+      <div className={styles.officialTip}>
+        <div className={styles.officialTipTitle}>{t('officialExportTitle')}</div>
+        <ol className={styles.officialTipSteps}>
+          <li>{t('officialExportStep1')}</li>
+          <li>{t('officialExportStep2')}</li>
+          <li>{t('officialExportStep3')}</li>
+          <li>{t('officialExportStep4')}</li>
+        </ol>
+        <div className={styles.officialTipHint}>{t('officialExportHint')}</div>
+      </div>
       <Section>
         <ImportHistory historyImport={historyImport} disabled={disabled} />
         <ExportHistory disabled={disabled} />

@@ -1,8 +1,10 @@
+import { Onboarding } from '../components/onboarding/Onboarding.js'
+import { shouldShowOnboarding } from '../services/onboarding.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { hasSettingsOpen } from '../components/settings/settingsDialogState.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Capacitor,
   registerPlugin,
@@ -49,6 +51,8 @@ export const App = () => {
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
+  // 首次使用：没绑 Key 且没看过引导时弹一次
+  const [onboarding, setOnboarding] = useState(() => shouldShowOnboarding(useSettings.getState().apiKey))
   const initError = useChatStore((state) => state.initError)
   const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
   const importingHistory = useChatStore((state) => state.importingHistory)
@@ -210,6 +214,7 @@ export const App = () => {
         <SearchPanel />
       </div>
       <SettingsDialog />
+      {onboarding ? <Onboarding onDone={() => setOnboarding(false)} /> : null}
       <Toast />
     </>
   )

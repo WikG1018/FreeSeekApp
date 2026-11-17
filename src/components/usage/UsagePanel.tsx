@@ -18,11 +18,20 @@ const formatTokens = (value: number) => value.toLocaleString()
 const formatCost = (value: number) =>
   value === 0 ? '—' : value >= 1 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
 
+/** 紧凑金额：面板里的大数字用 */
+const compactCost = (value: number) => formatCost(value)
+
+/** 千分位紧凑：42,319 → 42.3k */
+const compactTokens = (value: number) =>
+  value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
+
+type Stats = UsageStats
+
 /** 统计内容：设置页与抽屉弹窗共用；价格编辑统一收进「价格设置」二级页 */
 export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) => {
   const t = useTranslate()
   const pricing = usePricing((state) => state.pricing)
-  const [stats, setStats] = useState<UsageStats | null>(null)
+  const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -55,69 +64,91 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
   if (!stats || stats.total.requests === 0) {
     return <div className={styles.empty}>{t('usageEmpty')}</div>
   }
+
+  const inputTokens = stats.total.cacheReadTokens + stats.total.cacheMissTokens
+  const hitRate = inputTokens > 0 ? Math.round((stats.total.cacheReadTokens / inputTokens) * 100) : 0
+
   return (
     <div className={styles.content}>
-      <div className={styles.cardGrid}>
-        <div className={styles.card}>
-          <div className={styles.cardLabel}>{t('usageTotalCost')}</div>
-          <div className={styles.cardValue}>{formatCost(stats.total.costCny)}</div>
+      {/* 主数字：总花费 + 今天 */}
+      <div className={styles.hero}>
+        <div className={styles.heroTop}>
+          <span className={styles.heroLabel}>{t('usageTotalCost')}</span>
+          <span className={styles.heroToday}>
+            {t('usageToday')} {compactCost(today?.costCny ?? 0)}
+          </span>
         </div>
-        <div className={styles.card}>
-          <div className={styles.cardLabel}>{t('usageRequests')}</div>
-          <div className={styles.cardValue}>{formatTokens(stats.total.requests)}</div>
+        <div className={styles.heroValue}>{compactCost(stats.total.costCny)}</div>
+        <div className={styles.heroMeta}>
+          <span>{t('usageRequests')} {formatTokens(stats.total.requests)}</span>
+          <span className={styles.heroDot} />
+          <span>{t('usageCacheHit')} {hitRate}%</span>
+          <span className={styles.heroDot} />
+          <span>{t('usageWebSearches')} {formatTokens(stats.total.webSearches)}</span>
         </div>
-        <div className={styles.card}>
-          <div className={styles.cardLabel}>{t('usageInputTokens')}</div>
-          <div className={styles.cardValue}>
-            {formatTokens(stats.total.cacheReadTokens + stats.total.cacheMissTokens)}
+      </div>
+
+      {/* 两项明细 */}
+      <div className={styles.tiles}>
+        <div className={styles.tile}>
+          <div className={styles.tileLabel}>{t('usageInputTokens')}</div>
+          <div className={styles.tileValue}>{compactTokens(inputTokens)}</div>
+          <div className={styles.tileSub}>
+            {t('usageCacheHit')} {compactTokens(stats.total.cacheReadTokens)} ·{' '}
+            {t('usageCacheMiss')} {compactTokens(stats.total.cacheMissTokens)}
           </div>
-          <div className={styles.cardSub}>
-            {t('usageCacheHit')} {formatTokens(stats.total.cacheReadTokens)} ·{' '}
-            {t('usageCacheMiss')} {formatTokens(stats.total.cacheMissTokens)}
-          </div>
         </div>
-        <div className={styles.card}>
-          <div className={styles.cardLabel}>{t('usageOutputTokens')}</div>
-          <div className={styles.cardValue}>{formatTokens(stats.total.outputTokens)}</div>
-          <div className={styles.cardSub}>
-            {t('usageWebSearches')} {formatTokens(stats.total.webSearches)}
+        <div className={styles.tile}>
+          <div className={styles.tileLabel}>{t('usageOutputTokens')}</div>
+          <div className={styles.tileValue}>{compactTokens(stats.total.outputTokens)}</div>
+          <div className={styles.tileSub}>
+            {t('usageToday')} {formatTokens(today?.requests ?? 0)} {t('usageRequests')}
           </div>
         </div>
       </div>
 
-      <div className={styles.sectionTitle}>
-        {t('usageToday')}：{formatCost(today?.costCny ?? 0)} · {t('usageRequests')}{' '}
-        {formatTokens(today?.requests ?? 0)}
-      </div>
-
-      <div className={styles.chart} aria-label={t('usageLast14Days')}>
-        {days.map((day) => (
-          <div
-            key={day.date}
-            className={styles.chartBarWrap}
-            title={`${day.date} · ${formatCost(day.costCny)} · ${formatTokens(day.requests)} ${t('usageRequests')}`}
-          >
+      {/* 近 14 天柱状图 */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>{t('usageLast14Days')}</span>
+          <span className={styles.sectionHint}>
+            {t('usageToday')} {formatCost(today?.costCny ?? 0)}
+          </span>
+        </div>
+        <div className={styles.chart} aria-label={t('usageLast14Days')}>
+          {days.map((day) => (
             <div
-              className={styles.chartBar}
-              style={{ height: `${Math.max(2, (day.costCny / maxCost) * 100)}%` }}
-            />
-            <div className={styles.chartLabel}>{day.date.slice(8)}</div>
-          </div>
-        ))}
+              key={day.date}
+              className={styles.chartBarWrap}
+              title={`${day.date} · ${formatCost(day.costCny)} · ${formatTokens(day.requests)} ${t('usageRequests')}`}
+            >
+              <div
+                className={styles.chartBar}
+                style={{ height: `${Math.max(3, (day.costCny / maxCost) * 100)}%` }}
+              />
+              <div className={styles.chartLabel}>{day.date.slice(8)}</div>
+            </div>
+          ))}
+        </div>
       </div>
-      <div className={styles.chartCaption}>{t('usageLast14Days')}</div>
 
-      <div className={styles.sectionTitle}>{t('usageBySession')}</div>
-      <div className={styles.sessionList}>
-        {stats.sessions.slice(0, 5).map((item) => (
-          <div key={item.id} className={styles.sessionRow}>
-            <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
-            <span className={styles.sessionMeta}>
-              {formatTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok ·{' '}
-              {formatCost(item.costCny)}
-            </span>
-          </div>
-        ))}
+      {/* 会话排行 */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>{t('usageBySession')}</span>
+        </div>
+        <div className={styles.sessionList}>
+          {stats.sessions.slice(0, 5).map((item, index) => (
+            <div key={item.id} className={styles.sessionRow}>
+              <span className={styles.rank}>{index + 1}</span>
+              <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
+              <span className={styles.sessionMeta}>
+                {compactTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok
+                <span className={styles.sessionCost}>{formatCost(item.costCny)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {onOpenPricing ? (
