@@ -8,6 +8,7 @@ import {
   IconCheckOutline16,
   IconChevronLeftOutline16,
   IconChevronRightOutline14,
+  IconLinkOutline16,
   IconDarkOutline16,
   IconDataOutline16,
   IconDownloadOutline16,
@@ -597,27 +598,26 @@ const ApiTutorial = () => {
         ))}
       </ol>
       <div className={styles.tutorialActions}>
-        <button
-          type="button"
-          className={styles.tutorialButton}
-          onClick={() => void openExternal(API_KEYS_URL)}
-        >
-          {t('settingsApiOpenKeys')}
-        </button>
-        <button
-          type="button"
-          className={styles.tutorialButton}
-          onClick={() => void openExternal(TOPUP_URL)}
-        >
-          {t('settingsApiOpenTopup')}
-        </button>
-        <button
-          type="button"
-          className={styles.tutorialButton}
-          onClick={() => void openExternal(BALANCE_URL)}
-        >
-          {t('settingsApiOpenBalance')}
-        </button>
+        {[
+          { label: t('settingsApiOpenKeys'), url: API_KEYS_URL },
+          { label: t('settingsApiOpenTopup'), url: TOPUP_URL },
+          { label: t('settingsApiOpenBalance'), url: BALANCE_URL },
+        ].map((item) => (
+          <button
+            key={item.url}
+            type="button"
+            className={styles.tutorialButton}
+            onClick={() => void openExternal(item.url)}
+          >
+            <span className={styles.tutorialButtonIcon}>
+              <IconLinkOutline16 />
+            </span>
+            <span className={styles.tutorialButtonLabel}>{item.label}</span>
+            <span className={styles.tutorialButtonChevron}>
+              <IconChevronRightOutline14 />
+            </span>
+          </button>
+        ))}
       </div>
       <div className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</div>
     </div>
