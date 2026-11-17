@@ -9,7 +9,7 @@ import { openExternal } from '../utils/openExternal.js'
  * - 结果缓存 6 小时，避免每次启动都请求
  * - 下载优先走原生流式下载（有进度、可断点式续用已下好的包），失败退回系统下载器
  */
-const REPO = 'WikG1018/freeseek'
+const REPO = 'WikG1018/FreeSeekApp'
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
 /** 国内网络常见的 GitHub 反代；顺序即优先级 */
 const MIRRORS = ['', 'https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']

@@ -1,7 +1,7 @@
 {
   "name": "freeseek",
-  "version": "1.5.2",
-  "description": "畅聊：使用自己的 DeepSeek API Key，无次数与额度限制的本地聊天 App。基于 deepseek-ai/chat-demo (MIT) 二次开发。",
+  "version": "2.0.0",
+  "description": "FreeSeek 畅聊：自带 DeepSeek API Key 的安卓聊天客户端，无次数与额度限制。基于官方开源 chat-demo (MIT)。",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -48,5 +48,13 @@
     "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
     "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WikG1018/FreeSeekApp.git"
+  },
+  "homepage": "https://github.com/WikG1018/FreeSeekApp",
+  "bugs": {
+    "url": "https://github.com/WikG1018/FreeSeekApp/issues"
   }
 }

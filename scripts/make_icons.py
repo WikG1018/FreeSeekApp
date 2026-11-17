@@ -1,106 +1,124 @@
 # -*- coding: utf-8 -*-
-"""生成 FreeSeek 图标：两只像素小鲸鱼（一蓝一粉）。
+"""从 assets/icon-source.png（双鲸图形，透明底）生成全套图标。
 
-先按 10 倍尺寸绘制平滑鲸鱼轮廓（圆头、横向双瓣尾鳍、胸鳍、喷水孔），
-BOX 下采样到 64 网格形成像素块，再 NEAREST 放大到 1024，保证边缘干净。
+产物：
+- assets/icon.png / icon-only.png：1024 方形图标（白底）
+- assets/icon-foreground.png / icon-background.png：Android 自适应图标图层
+- assets/logo.png、src/assets/logo.png：应用内 Logo（透明底）
+- assets/splash.png：启动图（白底 + 居中图形）
+- android/app/src/main/res/mipmap-*：各密度图标与自适应图层
+
+图形本身是矢量稿导出的 PNG，脚本只做裁剪、缩放与底色合成，不重绘。
 """
+from pathlib import Path
+
 from PIL import Image, ImageDraw
 
-BLUE = (37, 99, 235)
-BLUE_DARK = (30, 64, 175)
-BLUE_BELLY = (191, 219, 254)
-PINK = (236, 72, 153)
-PINK_DARK = (190, 24, 93)
-PINK_BELLY = (251, 207, 232)
-EYE = (15, 23, 42)
-BG = (239, 246, 255)
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "assets" / "icon-source.png"
+NAVY = (23, 43, 73)
 
-GRID = 64
-SS = 10  # 超采样倍率
-SIZE = 1024
-
-
-def draw_whales(d: ImageDraw.ImageDraw, s: int):
-    def box(x0, y0, x1, y1, color):
-        d.ellipse([x0 * s, y0 * s, x1 * s, y1 * s], fill=color)
-
-    def poly(points, color):
-        d.polygon([(x * s, y * s) for x, y in points], fill=color)
-
-    def rect(x0, y0, x1, y1, color):
-        d.rectangle([x0 * s, y0 * s, x1 * s - 1, y1 * s - 1], fill=color)
-
-    # —— 蓝鲸：头朝右，左上方 ——
-    box(12, 15, 44, 34, BLUE)                     # 身体
-    box(34, 16, 49, 34, BLUE)                     # 圆头
-    poly([(13, 22), (6, 16), (4, 18), (11, 24)], BLUE)   # 尾鳍上瓣
-    poly([(13, 27), (6, 33), (4, 31), (11, 25)], BLUE)   # 尾鳍下瓣
-    box(15, 24, 43, 34, BLUE_BELLY)               # 腹部
-    poly([(27, 30), (34, 29), (30, 36)], BLUE_DARK)       # 胸鳍
-    d.ellipse([41 * s, 21 * s, 44 * s, 24 * s], fill=EYE)  # 眼睛
-    rect(39, 12, 41, 15, BLUE_BELLY)              # 喷水孔
-    rect(40, 8, 42, 12, BLUE_BELLY)
-    poly([(39, 8), (40, 6), (41, 8)], BLUE_BELLY)  # 水花
-
-    # —— 粉鲸：头朝左，右下方，略小 ——
-    box(24, 38, 52, 54, PINK)                     # 身体
-    box(20, 40, 33, 54, PINK)                     # 圆头
-    poly([(50, 44), (57, 39), (58, 42), (52, 46)], PINK)  # 尾鳍上瓣
-    poly([(50, 48), (57, 53), (58, 50), (52, 46)], PINK)  # 尾鳍下瓣
-    box(26, 46, 50, 54, PINK_BELLY)               # 腹部
-    poly([(39, 52), (43, 51), (41, 56)], PINK_DARK)       # 胸鳍
-    d.ellipse([27 * s, 45 * s, 30 * s, 48 * s], fill=EYE)  # 眼睛
+# Android 密度 → 传统图标边长 / 自适应图层边长（108dp）
+DENSITIES = {
+    "mdpi": (48, 108),
+    "hdpi": (72, 162),
+    "xhdpi": (96, 216),
+    "xxhdpi": (144, 324),
+    "xxxhdpi": (192, 432),
+}
 
 
-def quantize() -> Image.Image:
-    """平滑绘制 → 64 网格像素 → 缩到 56 格居中，四周留 4 格安全区。"""
-    high = Image.new('RGBA', (GRID * SS, GRID * SS), (0, 0, 0, 0))
-    draw_whales(ImageDraw.Draw(high), SS)
-    low = high.resize((GRID, GRID), Image.BOX)
-    bbox = low.getbbox()
-    content = low.crop(bbox).resize((56, 56), Image.NEAREST)
-    canvas = Image.new('RGBA', (GRID, GRID), (0, 0, 0, 0))
-    canvas.paste(content, (4, 4), content)
-    # 去除下采样产生的半透明杂边：alpha 二值化，保证像素块边缘干净
-    px = canvas.load()
-    for y in range(GRID):
-        for x in range(GRID):
-            r, g, b, a = px[x, y]
-            px[x, y] = (r, g, b, 255) if a >= 128 else (0, 0, 0, 0)
-    return canvas
+def load_art() -> Image.Image:
+    """读入源图并按 alpha 裁掉空白边。"""
+    art = Image.open(SRC).convert("RGBA")
+    box = art.getbbox()
+    return art.crop(box) if box else art
 
 
-def render(with_background: bool) -> Image.Image:
-    content = quantize().resize((1024, 1024), Image.NEAREST)
-    if not with_background:
-        return content
-    canvas = Image.new('RGBA', (SIZE, SIZE), BG + (255,))
-    canvas.paste(content, (0, 0), content)
-    return canvas
+def place(art: Image.Image, canvas: int, width_ratio: float, background) -> Image.Image:
+    """把图形按目标宽度比例居中放到方形画布上。"""
+    target_w = max(1, round(canvas * width_ratio))
+    scale = target_w / art.width
+    target_h = max(1, round(art.height * scale))
+    scaled = art.resize((target_w, target_h), Image.LANCZOS)
+    out = Image.new("RGBA", (canvas, canvas), background)
+    out.alpha_composite(scaled, ((canvas - target_w) // 2, (canvas - target_h) // 2))
+    return out
 
 
-def rounded_icon(path: str, radius_ratio: float = 0.22):
-    img = render(True)
-    mask = Image.new('L', (SIZE, SIZE), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        [0, 0, SIZE, SIZE], radius=int(SIZE * radius_ratio), fill=255
+def rounded_mask(size: int, radius_ratio: float = 0.22) -> Image.Image:
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    radius = round(size * radius_ratio)
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=255)
+    return mask
+
+
+def circle_mask(size: int) -> Image.Image:
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, size - 1, size - 1], fill=255)
+    return mask
+
+
+def with_round_background(art: Image.Image, size: int, width_ratio: float, circle=False):
+    """白底圆角/圆形图标：图形画在白色底上，再套形状蒙版。"""
+    base = place(art, size, width_ratio, (255, 255, 255, 255))
+    mask = circle_mask(size) if circle else rounded_mask(size)
+    base.putalpha(mask)
+    return base
+
+
+def main() -> None:
+    art = load_art()
+    assets = ROOT / "assets"
+
+    # 应用商店/网页用方形图标
+    place(art, 1024, 0.72, (255, 255, 255, 255)).save(assets / "icon.png", optimize=True)
+    place(art, 1024, 0.72, (255, 255, 255, 255)).save(assets / "icon-only.png", optimize=True)
+    # 自适应图层：前景透明、图形落在 66% 安全区内；背景纯白
+    place(art, 1024, 0.58, (0, 0, 0, 0)).save(assets / "icon-foreground.png", optimize=True)
+    Image.new("RGBA", (1024, 1024), (255, 255, 255, 255)).save(
+        assets / "icon-background.png", optimize=True
     )
-    out = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
-    out.paste(img, (0, 0), mask)
-    out.save(path)
+    # 应用内 Logo（透明底，界面里配白/深色背景都好看）
+    logo = place(art, 512, 0.92, (0, 0, 0, 0))
+    logo.save(assets / "logo.png", optimize=True)
+    (ROOT / "src" / "assets").mkdir(parents=True, exist_ok=True)
+    logo.save(ROOT / "src" / "assets" / "logo.png", optimize=True)
+    # 启动图
+    place(art, 2732, 0.24, (255, 255, 255, 255)).save(assets / "splash.png", optimize=True)
+
+    # Android 各密度
+    res = ROOT / "android" / "app" / "src" / "main" / "res"
+    for density, (legacy, adaptive) in DENSITIES.items():
+        folder = res / f"mipmap-{density}"
+        folder.mkdir(parents=True, exist_ok=True)
+        with_round_background(art, legacy, 0.66).save(folder / "ic_launcher.png", optimize=True)
+        with_round_background(art, legacy, 0.62, circle=True).save(
+            folder / "ic_launcher_round.png", optimize=True
+        )
+        place(art, adaptive, 0.60, (0, 0, 0, 0)).save(
+            folder / "ic_launcher_foreground.png", optimize=True
+        )
+        Image.new("RGBA", (adaptive, adaptive), (255, 255, 255, 255)).save(
+            folder / "ic_launcher_background.png", optimize=True
+        )
+
+    # 自适应图标描述：去掉旧 inset，并加 monochrome（Android 13 主题图标）
+    adaptive_xml = """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
+"""
+    anydpi = res / "mipmap-anydpi-v26"
+    anydpi.mkdir(parents=True, exist_ok=True)
+    (anydpi / "ic_launcher.xml").write_text(adaptive_xml, encoding="utf-8")
+    (anydpi / "ic_launcher_round.xml").write_text(adaptive_xml, encoding="utf-8")
+
+    print("icons written:", art.size)
 
 
-def make_splash(path: str, size: int = 2732):
-    img = Image.new('RGB', (size, size), BG)
-    mark = render(False).resize((int(size * 0.42), int(size * 0.42)), Image.LANCZOS)
-    img.paste(mark, ((size - mark.width) // 2, (size - mark.height) // 2), mark.split()[-1])
-    img.save(path, quality=92)
-
-
-import os
-
-os.makedirs('assets', exist_ok=True)
-rounded_icon('assets/icon.png')
-render(False).save('assets/logo.png')
-make_splash('assets/splash.png')
-print('pixel whales generated')
+if __name__ == "__main__":
+    main()
