@@ -3,6 +3,37 @@ import 'core-js/stable'
 import 'abortcontroller-polyfill/dist/polyfill-patch-fetch'
 import { ResizeObserver as ResizeObserverPolyfill } from '@juggle/resize-observer'
 
+// idb 8 使用 cursor.request；Chrome/WebView 76 之前缺少它，会让遍历在首条记录后提前结束。
+// 从产生游标的原生请求关联回去，覆盖导入、旧库索引迁移、文件统计与日志清理。
+if (
+  typeof IDBCursor === 'function' &&
+  typeof IDBRequest === 'function' &&
+  !('request' in IDBCursor.prototype)
+) {
+  const descriptor = Object.getOwnPropertyDescriptor(IDBRequest.prototype, 'result')
+  if (descriptor?.get && descriptor.configurable) {
+    const readResult = descriptor.get
+    const requests = new WeakMap<IDBCursor, IDBRequest>()
+    Object.defineProperty(IDBRequest.prototype, 'result', {
+      ...descriptor,
+      get(this: IDBRequest) {
+        const result: unknown = readResult.call(this)
+        if (result instanceof IDBCursor) {
+          requests.set(result, this)
+        }
+        return result
+      },
+    })
+    Object.defineProperty(IDBCursor.prototype, 'request', {
+      configurable: true,
+      enumerable: true,
+      get(this: IDBCursor) {
+        return requests.get(this)
+      },
+    })
+  }
+}
+
 if (typeof window.ResizeObserver !== 'function') {
   window.ResizeObserver = ResizeObserverPolyfill as typeof window.ResizeObserver
 }

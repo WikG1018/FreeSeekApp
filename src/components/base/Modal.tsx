@@ -35,6 +35,7 @@ export const Modal = ({
   children,
   footer,
   closable = false,
+  dismissible = true,
   centered = false,
   className,
   mainClassName,
@@ -45,6 +46,8 @@ export const Modal = ({
   footer?: ReactNode
   /** 标题栏右侧显示关闭按钮 */
   closable?: boolean
+  /** 阻止处理中的弹窗被遮罩、Esc 或系统返回键提前收起。 */
+  dismissible?: boolean
   /** 居中弹窗：危险确认等场景在移动端也保持居中对话框，而不是底部 Sheet */
   centered?: boolean
   className?: string
@@ -62,7 +65,7 @@ export const Modal = ({
   /** 播放退出动画后真正卸载；重复调用只生效一次 */
   const requestCloseRef = useRef(() => {})
   requestCloseRef.current = () => {
-    if (closingRef.current) {
+    if (!dismissible || closingRef.current) {
       return
     }
     closingRef.current = true

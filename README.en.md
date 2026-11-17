@@ -23,6 +23,8 @@ DeepSeek's official app throttles heavy users: daily quotas, long conversations 
 - **Thinking & web search**, attachments, speech input and read-aloud
 - **Local history** — chats and files live in IndexedDB, with no cloud conversation sync
 - **In-app updates** — checks GitHub Releases, falls back to mirrors in mainland China, pre-downloads the APK and installs from the sidebar
+- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Pin chats from their menus. Settings and donations are in the footer.
+- **Backup import** — streams official DeepSeek chat records up to 128 MiB each. Existing data is replaced after the archive and record counts pass validation. Older Android WebViews can restore multiple chats and attachments.
 
 ## Install
 

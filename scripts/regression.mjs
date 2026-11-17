@@ -777,7 +777,7 @@ try {
           version: (await indexedDB.databases()).find((db) => db.name === 'freeseek').version,
         }
       })
-      assert.deepEqual(result, { original: 'KEPT', version: 12 })
+      assert.deepEqual(result, { original: 'KEPT', version: 13 })
     },
     (context) =>
       context.addInitScript(() => {

@@ -67,6 +67,62 @@ export const officialFixture = (megabytes = 64, sessions = 1) => {
 
 export const runImportCases = async ({ run }) => {
   await run(
+    'early cursor exhaustion aborts replacement and keeps all original records',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const archive = await a.exportArchive([
+          f.session({ id: 'new-a' }),
+          f.session({ id: 'new-b' }),
+        ])
+        await a.seed([f.session({ id: 'original-a' }), f.session({ id: 'original-b' })])
+        const descriptor = Object.getOwnPropertyDescriptor(IDBCursor.prototype, 'request')
+        let rejected = false
+        try {
+          Object.defineProperty(IDBCursor.prototype, 'request', {
+            configurable: true,
+            get: () => undefined,
+          })
+          await a.backup.importHistory(new File([archive], 'cursor-failure.zip'))
+        } catch {
+          rejected = true
+        } finally {
+          Object.defineProperty(IDBCursor.prototype, 'request', descriptor)
+        }
+        return { rejected, ids: (await a.db.loadSessionSummaries()).map((s) => s.id).sort() }
+      })
+      assert.deepEqual(result, { rejected: true, ids: ['original-a', 'original-b'] })
+    }
+  )
+  await run(
+    'thousands of ZIP entries use bounded batched reads on legacy Blob implementations',
+    async (page) => {
+      const fixture = officialFixture(1, 1300)
+      const result = await page.evaluate(async (base64) => {
+        const raw = atob(base64),
+          data = Uint8Array.from(raw, (c) => c.charCodeAt(0)),
+          file = new File([data], 'many.zip')
+        let reads = 0
+        const slice = file.slice.bind(file)
+        file.slice = (...args) => {
+          reads++
+          return slice(...args)
+        }
+        let entries = 0
+        for await (const entry of window.__audit.readArchive(file)) {
+          for await (const chunk of entry.stream) {
+            void chunk
+          }
+          entries++
+        }
+        return { reads, entries }
+      }, fixture.buffer.toString('base64'))
+      assert.equal(result.entries, 1302)
+      assert.ok(result.reads < 120, JSON.stringify(result))
+    }
+  )
+  await run(
     'large official JSON imports through the UI, stays responsive, and round-trips without truncation',
     async (page) => {
       const fixture = officialFixture()

@@ -91,6 +91,7 @@ export const importArchive = async (
   }
   const imported = new Set<string>()
   const images = new Map<string, string>()
+  const sessionsWithImages = new Set<string>()
   /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
   const stored = new Map<string, string>()
   let manifest = false
@@ -139,6 +140,9 @@ export const importArchive = async (
         }
         imported.add(sessionId)
         currentSessionId = sessionId
+        if (local.images.size > 0) {
+          sessionsWithImages.add(sessionId)
+        }
         for (const [imagePath, id] of local.images) {
           images.set(imagePath, id)
         }
@@ -175,6 +179,6 @@ export const importArchive = async (
   ) {
     fail('backupIncomplete')
   }
-  await db.updateStagingFileTypes(stored)
+  await db.updateStagingFileTypes(stored, sessionsWithImages)
   return undefined
 }

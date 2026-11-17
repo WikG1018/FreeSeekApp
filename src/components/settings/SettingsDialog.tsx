@@ -1080,7 +1080,8 @@ const ImportConfirm = ({
             : t('historyImportFinalTitle')
       }
       centered
-      onClose={() => !busy && historyImport.cancel()}
+      dismissible={!busy}
+      onClose={historyImport.cancel}
       footer={
         <div className={styles.importFooter}>
           {busy ? (
@@ -1089,7 +1090,7 @@ const ImportConfirm = ({
               <span>
                 {phase === 'checking'
                   ? t('historyImportChecking')
-                  : progress && progress.total > 0
+                  : progress && progress.total > 0 && progress.processed < progress.total
                     ? t('historyImportProgress', {
                         processed: progress.processed,
                         total: progress.total,
@@ -1142,7 +1143,7 @@ const ImportConfirm = ({
               style={percent === null ? undefined : { width: `${percent}%` }}
             />
           </div>
-          {progress?.reading && (
+          {progress?.reading && progress.reading.total >= 1024 * 1024 && (
             <div className={styles.importProgressHint}>
               {t('historyImportReading', {
                 read: (progress.reading.bytes / 1024 / 1024).toFixed(1),
@@ -1264,7 +1265,12 @@ const useHistoryImport = () => {
     phase,
     progress,
     errorKey,
-    select: setFile,
+    select: (next: File) => {
+      setErrorKey(null)
+      setStatus(null)
+      setProgress(null)
+      setFile(next)
+    },
     cancel: () => setFile(null),
     dismissResult: () => setResult(null),
     confirm,

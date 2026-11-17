@@ -4,7 +4,7 @@ import { allSessionMessages } from './sessionData.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
-const DB_VERSION = 12
+const DB_VERSION = 13
 
 /** 文件原件按附件的本地 id 存储，所有引用同一 id 的消息共用一份；用于缩略图、打开查看，以及没有 serverId 时补传。 */
 export type StoredFile = {
@@ -69,16 +69,21 @@ const getDB = () =>
       if (!summaries.indexNames.contains('fileIds')) {
         summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
       }
-      // 为已安装用户重建引用索引，保护接续会话中仍使用的附件。
-      if (oldVersion < 12) {
+      // v13 重建旧 WebView 可能未遍历完整的摘要/引用索引，正文与原件保持原样。
+      if (oldVersion < 13) {
         void (async () => {
           try {
+            const expected = await tx.objectStore('sessions').count()
+            await summaries.clear()
             for (
               let cursor = await tx.objectStore('sessions').openCursor();
               cursor;
               cursor = await cursor.continue()
             ) {
               await summaries.put(storedSummary(cursor.value))
+            }
+            if ((await summaries.count()) !== expected) {
+              throw new Error('Incomplete session index migration')
             }
           } catch {
             abortTransaction(tx)
@@ -195,12 +200,22 @@ export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
   putFiles('filesStaging', files)
 
 /** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
-export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>): Promise<void> => {
+export const updateStagingFileTypes = async (
+  types: ReadonlyMap<string, string>,
+  sessionIds: ReadonlySet<string>
+): Promise<void> => {
+  // 无图片或未保存原件时所有 MIME 已是空值；不要为了空操作重新读取巨型会话。
+  if (types.size === 0 || sessionIds.size === 0) {
+    return
+  }
   const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
   await Promise.all([
     (async () => {
-      for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
-        const session = cursor.value
+      for (const id of sessionIds) {
+        const session = await tx.store.get(id)
+        if (!session) {
+          continue
+        }
         let changed = false
         for (const message of session.messages) {
           if (message.role !== 'user') {
@@ -215,7 +230,7 @@ export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>)
           }
         }
         if (changed) {
-          await cursor.update(session)
+          await tx.store.put(session)
         }
       }
     })(),
@@ -236,6 +251,8 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
   const move = async (from: 'sessionsStaging' | 'filesStaging', to: 'sessions' | 'files') => {
     try {
       const target = tx.objectStore(to)
+      const expected = await tx.objectStore(from).count()
+      let copied = 0
       await target.clear()
       if (to === 'sessions') {
         await tx.objectStore('sessionSummaries').clear()
@@ -245,12 +262,19 @@ export const commitStaging = async (): Promise<SessionSummary[]> => {
         cursor;
         cursor = await cursor.continue()
       ) {
-        await target.put(cursor.value)
+        // 某些旧 WebView 每次读取 cursor.value 都会再次反序列化；整条长会话只取一次。
+        const value = cursor.value
+        await target.put(value)
+        copied++
         if (to === 'sessions') {
-          const summary = storedSummary(cursor.value as Session)
+          const summary = storedSummary(value as Session)
           await tx.objectStore('sessionSummaries').put(summary)
           summaries.push(toSessionSummary(summary))
         }
+      }
+      // 即使底层游标或存储实现异常，也不能把不完整复制当成成功而清空原记录。
+      if (copied !== expected || (await target.count()) !== expected) {
+        throw new Error('Incomplete history replacement')
       }
       await tx.objectStore(from).clear()
     } catch (error) {

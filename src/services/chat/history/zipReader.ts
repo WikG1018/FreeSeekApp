@@ -43,6 +43,31 @@ const readBytes = async (file: File, start: number, length: number) => {
   return bytes
 }
 
+type ByteReader = (start: number, length: number) => Promise<Uint8Array>
+
+/** 旧 WebView 的每次 Blob 读取都要异步过桥，合并连续的小读取，最多缓存一片。 */
+const cachedReader = (file: File): ByteReader => {
+  let offset = 0
+  let cached = new Uint8Array(0)
+  return async (start, length) => {
+    if (start < 0 || length < 0 || start + length > file.size) {
+      return invalid()
+    }
+    if (length === 0) {
+      return new Uint8Array(0)
+    }
+    if (start < offset || start + length > offset + cached.length) {
+      cached = await readBytes(
+        file,
+        start,
+        Math.min(file.size - start, Math.max(READ_CHUNK_BYTES, length))
+      )
+      offset = start
+    }
+    return cached.subarray(start - offset, start - offset + length)
+  }
+}
+
 /** ZIP64、分卷与加密文件不属于导出格式，一律拒绝。 */
 const checkExtra = (bytes: Uint8Array) => {
   const view = viewOf(bytes)
@@ -118,13 +143,14 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
     invalid()
   }
   const entries: Entry[] = []
+  const read = cachedReader(file)
   const paths = new Set<string>()
   let cursor = 0
   for (let index = 0; index < count; index++) {
     if (cursor + 46 > size) {
       invalid()
     }
-    const view = viewOf(await readBytes(file, offset + cursor, 46))
+    const view = viewOf(await read(offset + cursor, 46))
     if (view.getUint32(0, true) !== 0x02014b50) {
       invalid()
     }
@@ -150,7 +176,8 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
     ) {
       invalid()
     }
-    const name = await readBytes(file, offset + cursor + 46, nameLength)
+    // 名称需跨条目保留，复制短名称，避免把整片索引缓存挂在每个条目上。
+    const name = (await read(offset + cursor + 46, nameLength)).slice()
     const path = decodePath(name, flags)
     // 目录和同名文件也不能互相覆盖。
     const identity = path.endsWith('/') ? path.slice(0, -1) : path
@@ -158,7 +185,7 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
       invalid()
     }
     paths.add(identity)
-    checkExtra(await readBytes(file, offset + cursor + 46 + nameLength, extraLength))
+    checkExtra(await read(offset + cursor + 46 + nameLength, extraLength))
     entries.push({
       path,
       name,
@@ -177,11 +204,11 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
   return { entries: entries.sort((a, b) => a.offset - b.offset), offset }
 }
 
-const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
+const readEntryOffset = async (read: ByteReader, entry: Entry, boundary: number) => {
   if (entry.offset + 30 > boundary) {
     invalid()
   }
-  const view = viewOf(await readBytes(file, entry.offset, 30))
+  const view = viewOf(await read(entry.offset, 30))
   const nameLength = view.getUint16(26, true)
   const extraLength = view.getUint16(28, true)
   const start = entry.offset + 30 + nameLength + extraLength
@@ -205,7 +232,7 @@ const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
       invalid()
     }
   }
-  const metadata = await readBytes(file, entry.offset + 30, nameLength + extraLength)
+  const metadata = await read(entry.offset + 30, nameLength + extraLength)
   if (entry.name.some((byte, index) => byte !== metadata[index])) {
     invalid()
   }
@@ -214,7 +241,7 @@ const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
     if (end + 12 > boundary) {
       invalid()
     }
-    const descriptor = viewOf(await readBytes(file, end, Math.min(16, boundary - end)))
+    const descriptor = viewOf(await read(end, Math.min(16, boundary - end)))
     const shift = descriptor.getUint32(0, true) === 0x08074b50 ? 4 : 0
     if (
       shift + 12 > descriptor.byteLength ||
@@ -246,9 +273,10 @@ export const countArchiveEntries = async (file: File): Promise<number> => {
  */
 export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
   const directory = await readDirectory(file)
+  const read = cachedReader(file)
   for (const [index, entry] of directory.entries.entries()) {
     const boundary = directory.entries[index + 1]?.offset ?? directory.offset
-    const start = await readEntryOffset(file, entry, boundary)
+    const start = await readEntryOffset(read, entry, boundary)
     if (entry.path.endsWith('/')) {
       continue
     }
@@ -271,8 +299,7 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
       }
       const inflate = entry.method === 8 ? new Inflate(append) : null
       for (let offset = 0; offset < entry.compressedSize; offset += READ_CHUNK_BYTES) {
-        const chunk = await readBytes(
-          file,
+        const chunk = await read(
           start + offset,
           Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
         )
@@ -304,7 +331,7 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
   }
 }
 
-/** 读出整个条目：会话 JSON 需要完整解析，图片需要识别类型后整张保存。 */
+/** 收集需要完整 Blob 的附件等条目；JSON 由 readJsonEntry 分块解析。 */
 export const readEntry = async (entry: ArchiveEntry): Promise<Blob> => {
   const parts: Blob[] = []
   for await (const chunk of entry.stream) {
