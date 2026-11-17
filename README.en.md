@@ -6,7 +6,7 @@ Built on DeepSeek's open-source [chat-demo](https://github.com/deepseek-ai/chat-
 
 <p>
   <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="Welcome" />
-  <img src="docs/screenshots/mobile-chat-footer.png" width="23.5%" alt="Chat" />
+  <img src="docs/screenshots/mobile-sider.png" width="23.5%" alt="Sidebar with pinned chats" />
   <img src="docs/screenshots/mobile-persona-manager.png" width="23.5%" alt="Personas" />
   <img src="docs/screenshots/mobile-usage-panel.png" width="23.5%" alt="Usage" />
 </p>
@@ -18,6 +18,7 @@ DeepSeek's official app throttles heavy users: daily quotas, long conversations 
 ## Features
 
 - **Continue from any chat** — a new conversation inherits all context of an old one
+- **Model selection** — choose DeepSeek Flash or V4 Pro in API settings. Advanced settings support OpenAI Chat Completions, Responses, Anthropic Messages and Gemini endpoints, model discovery and a test request. Enable the model switcher in Settings to choose a model from the composer.
 - **Personas** — built-in writer / translator / coder / copywriter / brainstorm presets, plus your own
 - **Usage & cost** — per-reply tokens and cost, per-conversation totals, 14-day chart, session ranking at official peak/off-peak rates
 - **Thinking & web search**, attachments, speech input and read-aloud
@@ -38,11 +39,11 @@ Download the latest `freeseek-v*-release.apk` from [Releases](https://github.com
 
 To bring history over from the official app: official app → Settings → Data management → Export all conversations, then import the `.zip` here.
 
-FreeSeek 2.1.0 backups preserve message branches, all available attachment originals, inherited context, personas, usage and custom pricing. Android uses the system file picker to save the ZIP. Restore new backups with 2.1.0 or later; older and official exports remain importable. API keys are excluded.
+FreeSeek 2.4.0 writes v2 backups with message branches, available attachment originals, inherited context, personas, pinned chats, model references, usage and custom pricing. Restore them with 2.4.0 or later. FreeSeek also reads v1 backups and official DeepSeek chat exports. API credentials stay on the device. In Settings → About FreeSeek, you can share a diagnostic ZIP with another app or save it to a file.
 
 ## Build
 
-Requires Node 24+, pnpm 10, JDK 21 and Android SDK 36.
+Requires Node 24+, pnpm 10, JDK 21 and Android SDK 37.
 
 ```sh
 pnpm install

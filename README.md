@@ -8,7 +8,7 @@
 
 <p>
   <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="首页" />
-  <img src="docs/screenshots/mobile-chat-footer.png" width="23.5%" alt="对话" />
+  <img src="docs/screenshots/mobile-sider.png" width="23.5%" alt="侧边栏和置顶对话" />
   <img src="docs/screenshots/mobile-persona-manager.png" width="23.5%" alt="人设管理" />
   <img src="docs/screenshots/mobile-usage-panel.png" width="23.5%" alt="用量与费用" />
 </p>
@@ -80,7 +80,7 @@ Android 通过原生网络支持第三方流式请求；网页版仍要求服务
 
 已在 Android 10 / WebView 74 模拟器验证启动、模拟响应聊天、图片、图表、备份导入恢复及系统保存器。厂商实机与真实接口仍需用户反馈；仅凭天玑或骁龙型号不能判断上述故障根因。
 
-2.2.0 起，在 **设置 → 关于 FreeSeek → 诊断日志 → 导出诊断包** 保存 ZIP；Android 使用系统保存器，可自行选择位置，也可取消。反馈问题时附上诊断包、发生时间和操作步骤。
+打开 **设置 → 关于 FreeSeek → 导出并分享诊断包**，在系统面板中选择接收应用。需要保存在手机上时，点 **保存诊断包到文件** 并选择位置。反馈问题时附上诊断包、发生时间和操作步骤。
 
 包内包含版本与运行环境、网络和权限状态、存储数量与体积、请求状态与耗时、上传进度及重试、上下文消息数量与请求体积、备份和更新结果、语音状态及客户端/原生异常栈。日志仅保存在本机，保留最近 7 天，客户端最多 2000 条、原生最多 1000 条。日志存储不可用时尽量导出当前进程的内存记录。
 
@@ -100,7 +100,7 @@ Android 通过原生网络支持第三方流式请求；网页版仍要求服务
 
 官方 App → 设置 → **数据管理** → 导出全部对话，得到 `.zip`；回到 FreeSeek → 设置 → 数据管理 → 导入历史对话。导入会整份替换本机会话，操作前会两次确认。
 
-FreeSeek 2.1.0 起导出的 `freeseek-backup-*.zip` 保存完整消息分支、图片和文档原件、接续上下文、人设库及用量；Android 会打开系统保存器选择位置。新备份需用 2.1.0 或更高版本恢复，旧版及官方备份仍可导入。API Key 不在备份中。
+2.4.0 导出的 `freeseek-backup-*.zip` 保存完整消息分支、可用的附件原件、接续上下文、人设库、置顶状态与用量。Android 会打开系统保存器供你选择位置。这类 v2 备份需使用 FreeSeek 2.4.0 或更高版本恢复。旧版 v1 备份与 DeepSeek 官方备份也可导入。API Key 只保存在本机。
 
 ## 更新机制
 
