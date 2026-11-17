@@ -1,4 +1,4 @@
-import clsx from 'clsx'
+import type { Ref } from 'react'
 import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
@@ -12,19 +12,19 @@ import styles from './MobileHeader.module.css'
  */
 export const MobileHeader = ({
   title,
-  scrolled = false,
+  headerRef,
 }: {
   title?: string
-  scrolled?: boolean
+  headerRef?: Ref<HTMLDivElement>
 }) => {
   const t = useTranslate()
   return (
-    <div className={clsx(styles.header, scrolled && styles.headerScrolled)}>
+    <div ref={headerRef} className={styles.header} data-testid="chat-header">
       <span className={styles.action}>
         <IconButton
           size="m"
           tone="primary"
-              hitArea
+          hitArea
           icon={<IconMenuOutline20 />}
           aria-label={t('expandSiderbarButton')}
           onClick={openMobileSider}

@@ -4,9 +4,10 @@
   display: flex;
   flex-direction: column;
   /* 顶部悬浮栏高度：消息列表以此为上边距，滚动时内容从栏下穿过 */
-  --message-list-top-inset: 68px;
+  --message-list-top-inset: 76px;
   /* 底部悬浮输入栏预留：最后一条消息能滚到栏边 */
-  --composer-inset: 150px;
+  --composer-height: 140px;
+  --composer-inset: 180px;
   animation: pageIn var(--fs-duration-base) var(--fs-ease-out) both;
 }
 
@@ -33,29 +34,6 @@
   pointer-events: none;
   background: transparent;
   isolation: isolate;
-
-  /* 渐隐层：栏内实底（胶囊下方不透出正文），栏底以下 14px 柔化收尾 */
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0 0 -14px;
-    z-index: 0;
-    pointer-events: none;
-    background: var(--dsw-alias-bg-base);
-    opacity: 0;
-    transition: opacity var(--fs-duration-base) var(--fs-ease-out);
-    -webkit-mask-image: linear-gradient(
-      to bottom,
-      #000 0,
-      #000 calc(100% - 14px),
-      transparent 100%
-    );
-    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 14px), transparent 100%);
-  }
-}
-
-.headerScrolled::before {
-  opacity: 1;
 }
 
 /* 标题胶囊：玻璃底 + 44 高 */
@@ -68,12 +46,12 @@
   min-height: 44px;
   padding: 0 16px;
   border-radius: 999px;
-  border: 1px solid var(--fs-glass-border);
-  background: var(--fs-glass-bg);
+  border: 1px solid var(--fs-floating-border);
+  background: var(--fs-floating-surface);
   backdrop-filter: blur(18px) saturate(1.3);
   -webkit-backdrop-filter: blur(18px) saturate(1.3);
   pointer-events: auto;
-  box-shadow: var(--fs-glass-shadow);
+  box-shadow: var(--fs-floating-shadow);
 }
 
 /* 新对话圆键：44 玻璃圆 */
@@ -87,15 +65,15 @@
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--fs-glass-border);
+  border: 1px solid var(--fs-floating-border);
   border-radius: 50%;
-  background: var(--fs-glass-bg);
+  background: var(--fs-floating-surface);
   backdrop-filter: blur(18px) saturate(1.3);
   -webkit-backdrop-filter: blur(18px) saturate(1.3);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: var(--fs-glass-shadow);
+  box-shadow: var(--fs-floating-shadow);
   transition: transform var(--fs-duration-fast) var(--fs-ease-out);
 
   &:active {
@@ -145,23 +123,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px 12px calc(var(--fs-safe-bottom) + 10px);
+  padding: 12px 16px calc(var(--fs-safe-bottom) + 12px);
   pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 255, 255, 0) 0%,
-    var(--dsw-alias-bg-base) 52%,
-    var(--dsw-alias-bg-base) 100%
-  );
-
-  [data-ds-dark-theme] & {
-    background: linear-gradient(
-      to bottom,
-      rgba(21, 21, 23, 0) 0%,
-      var(--dsw-alias-bg-base) 52%,
-      var(--dsw-alias-bg-base) 100%
-    );
-  }
+  background: transparent;
 }
 
 .dockInner {
@@ -182,13 +146,8 @@
 }
 
 @media not all and (min-width: 768px) {
-  .view {
-    --message-list-top-inset: calc(var(--fs-safe-top) + 58px);
-    --composer-inset: 168px;
-  }
-
   .dock {
-    padding: 18px 12px calc(var(--fs-safe-bottom) + 8px);
+    padding: 12px 16px calc(var(--fs-safe-bottom) + 12px);
   }
 
   .dockInner {

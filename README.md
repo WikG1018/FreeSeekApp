@@ -29,6 +29,13 @@ DeepSeek 官方 App 在算力紧张时会限制使用：每日额度、长对话
 
 ## 功能
 
+聊天页支持沉浸阅读：正文从悬浮顶栏和输入框下方滚过，边缘渐变淡出；输入框在闲置时收成单行，输入、附件或大字号展开时自动调整消息留白。
+
+<p>
+  <img src="docs/screenshots/immersive-light.png" width="40%" alt="浅色沉浸聊天" />
+  <img src="docs/screenshots/immersive-dark.png" width="40%" alt="深色沉浸聊天" />
+</p>
+
 Android 10–17 兼容目标：使用 compileSdk/targetSdk 37，保留旧 WebView 兼容层。构建使用 JDK 21、AGP 9.2.1 与 Gradle 9.4.1。运行验证和具体边界见 [Android 10–17 自审记录](docs/reviews/2026-11-17-android10-17.md) 及 [2.4.0 功能验收](docs/reviews/2026-11-18-models-personas-share.md)，系统版本覆盖不等同于全部厂商实机验收。
 
 文字草稿在本机自动保存，重启后可继续输入；未发送附件需要重新选择。录音/朗读在应用进入后台时停止。导入或导出的单条会话/索引 JSON 限制为 32MiB；过大时提示拆分，原记录继续保留，附件仍分块处理。

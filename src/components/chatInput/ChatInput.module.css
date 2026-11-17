@@ -11,8 +11,8 @@
   line-height: var(--line-height);
   /* dsh-Go 式玻璃输入条：胶囊 28 → 聚焦展开为 20 圆角 */
   border-radius: 28px;
-  border: 1px solid var(--fs-glass-border);
-  background: var(--fs-glass-bg);
+  border: 1px solid var(--fs-floating-border);
+  background: var(--fs-floating-surface);
   backdrop-filter: blur(20px) saturate(1.3);
   -webkit-backdrop-filter: blur(20px) saturate(1.3);
   overflow: hidden;
@@ -23,17 +23,15 @@
     transform var(--fs-duration-base) var(--fs-ease-out);
 
   [data-ds-dark-theme] & {
-    border-color: var(--fs-glass-border);
-    background: var(--fs-glass-bg);
+    border-color: var(--fs-floating-border);
+    background: var(--fs-floating-surface);
   }
 
   &:focus-within {
     border-radius: 20px;
-    transform: translateY(-2px);
+    transform: none;
     border-color: rgba(37, 99, 235, 0.32);
-    box-shadow:
-      0 14px 40px rgba(15, 23, 42, 0.13),
-      0 2px 8px rgba(15, 23, 42, 0.06);
+    box-shadow: var(--fs-floating-shadow);
 
     [data-ds-dark-theme] & {
       border-color: rgba(120, 160, 255, 0.4);
@@ -42,9 +40,7 @@
 }
 
 .session {
-  box-shadow:
-    var(--fs-glass-shadow),
-    0 2px 6px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--fs-floating-shadow);
 }
 
 .home {
@@ -232,7 +228,8 @@
   caret-color: var(--dsw-alias-brand-text);
 
   &::placeholder {
-    color: var(--dsw-alias-label-caption);
+    color: var(--dsw-alias-label-secondary);
+    opacity: 1;
     user-select: none;
   }
 }
@@ -260,7 +257,7 @@
     flex-shrink: 0;
     max-height: calc(var(--app-viewport-height, var(--fs-viewport-height)) - 120px);
     /* 手机上内容更密，输入栏取更实的底色，避免正文透上来 */
-    background: var(--fs-glass-bg-strong);
+    background: var(--fs-floating-surface);
   }
 
   .textareaWrapper {
@@ -278,6 +275,7 @@
 
 .functionRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 4px;
@@ -323,7 +321,8 @@
 
 .toggles {
   display: flex;
-  flex: 1;
+  flex: 1 1 176px;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -388,6 +387,7 @@
 }
 
 .right {
+  margin-left: auto;
   display: flex;
   flex-shrink: 0;
   align-items: center;
@@ -589,4 +589,41 @@
     background: transparent;
     cursor: pointer;
   }
+}
+
+/* 闲置时收成单行悬浮胶囊；输入或操作附件后展开完整工具。 */
+.compact {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  column-gap: 4px;
+  min-height: 56px;
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+.compact .textareaWrapper {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.compact .textarea,
+.compact .mirror {
+  min-height: 44px;
+  padding: 10px 6px 0;
+}
+.compact .functionRow,
+.compact .right {
+  display: contents;
+}
+.compact .toggles {
+  display: none;
+}
+.compact .right button {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: center;
+  align-self: center;
+}
+.compact .right .attachTrigger {
+  grid-column: 1;
 }

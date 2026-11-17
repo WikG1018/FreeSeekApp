@@ -4,16 +4,15 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--scroll-color) transparent;
+  overflow: hidden;
 }
 
 /* 回到底部：上滑阅读时浮现在输入框上方 */
 .toBottom {
   position: absolute;
-  right: 20px;
-  bottom: calc(var(--composer-inset, 150px) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--composer-height, 150px) + 16px);
   z-index: 30;
   display: flex;
   align-items: center;
@@ -23,13 +22,10 @@
   padding: 0;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 50%;
-  background: var(--dsw-alias-bg-layer-2);
+  background: var(--fs-floating-surface);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
-  box-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.08),
-    0 6px 18px rgba(15, 23, 42, 0.12);
-  animation: rise var(--fs-duration-base) var(--fs-ease-out) both;
+  box-shadow: var(--fs-floating-shadow);
   transition:
     background-color var(--fs-duration-fast) var(--fs-ease-out),
     transform var(--fs-duration-fast) var(--fs-ease-out);
@@ -39,42 +35,43 @@
   }
 
   &:active {
-    transform: scale(0.92);
-  }
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
-@media not all and (min-width: 768px) {
-  .toBottom {
-    right: 16px;
-    bottom: calc(var(--composer-inset, 168px) + 10px);
+    transform: translateX(-50%) scale(0.95);
   }
 }
 
 .scroll {
-  display: contents;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-color: var(--scroll-color) transparent;
+  scroll-padding-top: var(--message-list-top-inset, 76px);
+  scroll-padding-bottom: var(--composer-inset, 150px);
+  /* 遮罩固定在可视滚动层；内容贯穿屏幕，控件区域平滑淡出。 */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--message-fade-top, 88px),
+    #000 calc(100% - var(--message-fade-bottom, 180px)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--message-fade-top, 88px),
+    #000 calc(100% - var(--message-fade-bottom, 180px)),
+    transparent 100%
+  );
 }
 
 @media not all and (min-width: 768px) {
-  .container {
-    overflow: hidden;
+  .scroll {
     scrollbar-gutter: auto;
   }
-
-  .scroll {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    scrollbar-color: var(--scroll-color) transparent;
+  .scroll .column {
+    width: 100%;
+    max-width: calc(100% - 32px);
   }
 }
 
@@ -97,4 +94,8 @@
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   cursor: pointer;
+}
+
+:global([data-ime-compact]) .toBottom {
+  display: none;
 }

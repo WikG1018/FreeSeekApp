@@ -29,6 +29,9 @@
   --fs-glass-bg-strong: rgba(255, 255, 255, 0.985);
   --fs-glass-border: rgba(15, 23, 42, 0.07);
   --fs-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.09);
+  --fs-floating-surface: rgba(247, 248, 250, 0.985);
+  --fs-floating-border: rgba(15, 23, 42, 0.09);
+  --fs-floating-shadow: 0 4px 18px rgba(15, 23, 42, 0.08);
 }
 
 @supports (top: max(0px, 1px)) {
@@ -94,6 +97,9 @@ body[data-ds-dark-theme] {
   --fs-glass-bg-strong: rgba(38, 38, 40, 0.995);
   --fs-glass-border: rgba(255, 255, 255, 0.12);
   --fs-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+  --fs-floating-surface: rgba(47, 48, 51, 0.985);
+  --fs-floating-border: rgba(255, 255, 255, 0.1);
+  --fs-floating-shadow: 0 4px 18px rgba(0, 0, 0, 0.24);
 }
 
 body.change-theme *,

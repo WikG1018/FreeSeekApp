@@ -201,16 +201,8 @@ export const MessageList = ({
   const uploadRetryId = getUploadRetryId(messages, streaming)
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
-      <div
-        ref={isMobile ? undefined : scrollRef}
-        className={styles.container}
-        data-testid={isMobile ? undefined : 'message-scroll'}
-      >
-        <div
-          ref={isMobile ? scrollRef : undefined}
-          className={styles.scroll}
-          data-testid={isMobile ? 'message-scroll' : undefined}
-        >
+      <div className={styles.container}>
+        <div ref={scrollRef} className={styles.scroll} data-testid="message-scroll">
           <div ref={contentRef} className={styles.column}>
             {visibleStart > 0 ? (
               <button

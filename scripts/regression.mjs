@@ -9,6 +9,7 @@ import { runStabilityCases } from './test/stability-cases.mjs'
 import { runCompatibilityCases } from './test/compatibility-cases.mjs'
 import { runAndroidStabilityCases } from './test/android-stability-cases.mjs'
 import { runProviderCases } from './test/provider-cases.mjs'
+import { runImmersiveCases } from './test/immersive-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -157,6 +158,7 @@ try {
     },
   })
   await runProviderCases({ run })
+  await runImmersiveCases({ run })
   await runStabilityCases({
     run,
     root,

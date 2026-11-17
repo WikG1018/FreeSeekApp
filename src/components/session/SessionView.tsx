@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useCallback, useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
@@ -60,18 +60,50 @@ export const SessionView = ({
       }, 0),
     [session, pricing]
   )
-  // 滚动后才浮现顶栏渐隐（dsh-Go：静止时是一整块干净页面）
-  const [scrolled, setScrolled] = useState(false)
+  const viewRef = useRef<HTMLDivElement>(null),
+    dockRef = useRef<HTMLDivElement>(null),
+    headerRef = useRef<HTMLDivElement>(null)
+  // 遮罩和末尾留白随输入框真实高度变化，长草稿、附件和字体缩放不会盖住最后一条消息。
+  useLayoutEffect(() => {
+    const view = viewRef.current,
+      dock = dockRef.current,
+      header = headerRef.current
+    if (!view || !dock || !header) {
+      return
+    }
+    const measure = () => {
+      const height = view.clientHeight,
+        top = header.offsetHeight,
+        bottom = dock.offsetHeight,
+        compact = height < 260
+      view.style.setProperty('--composer-height', `${bottom}px`)
+      view.style.setProperty('--composer-inset', `${bottom + (compact ? 8 : 40)}px`)
+      view.style.setProperty('--message-list-top-inset', `${top ? top + 16 : 8}px`)
+      view.style.setProperty(
+        '--message-fade-top',
+        `${Math.min(top ? top + 28 : 0, Math.max(0, height - bottom - 32))}px`
+      )
+      view.style.setProperty(
+        '--message-fade-bottom',
+        `${Math.min(bottom + 28, Math.max(0, height - top - 24))}px`
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(view)
+    observer.observe(dock)
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [isMobile, session.id])
   const priced = getVisibleMessages(session).every(
     (message) => message.role !== 'assistant' || hasKnownPricing(message)
   )
-  const onScrolledChange = useCallback((value: boolean) => setScrolled(value), [])
   return (
-    <div className={styles.view}>
+    <div ref={viewRef} className={styles.view} data-testid="chat-view">
       {isMobile ? (
-        <MobileHeader title={title} scrolled={scrolled} />
+        <MobileHeader title={title} headerRef={headerRef} />
       ) : (
-        <div className={clsx(styles.header, scrolled && styles.headerScrolled)}>
+        <div ref={headerRef} className={styles.header} data-testid="chat-header">
           <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
             <div className={styles.title}>{title}</div>
             {showUsage && tokens > 0 ? (
@@ -90,8 +122,8 @@ export const SessionView = ({
           </button>
         </div>
       )}
-      <MessageList session={session} streaming={streaming} onScrolledChange={onScrolledChange} />
-      <div className={styles.dock}>
+      <MessageList session={session} streaming={streaming} />
+      <div ref={dockRef} className={styles.dock} data-testid="chat-dock">
         <div className={styles.dockInner}>
           <ChatInput sessionId={session.id} />
         </div>

@@ -74,6 +74,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const mirrorRef = useRef<HTMLDivElement>(null)
   /** 附件面板展开状态：点 + 展开拍照/相册/文件，选完或点外部收起 */
   const [attachOpen, setAttachOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   useEffect(() => {
     if (!attachOpen) {
@@ -182,6 +183,15 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const compact =
+    isMobile &&
+    !editing &&
+    !text &&
+    !attachments.length &&
+    !attachOpen &&
+    !showModelSwitcher &&
+    voice.status === 'idle' &&
+    (custom || (!thinking && !search))
 
   const send = () => {
     if (
@@ -196,6 +206,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       return
     }
     stopReadAloud()
+    setEditing(false)
     if (isMobile) {
       textareaRef.current?.blur()
     } else {
@@ -206,11 +217,23 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   return (
     <div
       ref={wrapperRef}
+      data-testid="chat-composer"
       className={clsx(
         styles.wrapper,
         sessionId === null ? styles.home : styles.session,
-        showModelSwitcher && styles.hasModelSwitcher
+        showModelSwitcher && styles.hasModelSwitcher,
+        compact && styles.compact
       )}
+      onFocusCapture={() => {
+        if (document.activeElement === textareaRef.current) {
+          setEditing(true)
+        }
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setEditing(false)
+        }
+      }}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           textareaRef.current?.focus({ preventScroll: true })
@@ -352,6 +375,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           )}
           <IconButton
             size={isMobile ? 's' : 'm'}
+            className={styles.attachTrigger}
             tone="primary"
             hitArea
             icon={attachOpen ? <IconCloseOutline16 /> : <IconAddOutline16 />}
