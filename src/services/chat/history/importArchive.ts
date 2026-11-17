@@ -6,6 +6,7 @@ import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
 import { toLocalSession } from './toLocal.js'
 import {
   ArchiveError,
+  countArchiveEntries,
   isZipFile,
   readArchive,
   readEntry,
@@ -78,7 +79,10 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
  * 会话读完立即暂存，只保留图片路径映射；图片全部读完后逐会话回填 MIME，不改变图片身份。
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
-export const importArchive = async (file: File): Promise<void> => {
+export const importArchive = async (
+  file: File,
+  onProgress?: (processed: number, total: number) => void
+): Promise<void> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
   }
@@ -100,6 +104,10 @@ export const importArchive = async (file: File): Promise<void> => {
     await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
     stored.set(id, type)
   }
+
+  const total = await countArchiveEntries(file)
+  let processed = 0
+  onProgress?.(processed, total)
 
   try {
     for await (const entry of readArchive(file)) {
@@ -138,6 +146,8 @@ export const importArchive = async (file: File): Promise<void> => {
       } else {
         fail('backupIncomplete')
       }
+      processed += 1
+      onProgress?.(processed, total)
     }
   } catch (error) {
     throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error

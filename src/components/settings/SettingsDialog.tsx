@@ -915,25 +915,82 @@ const ImportConfirm = ({
     )
   }
 
+  const { busy, phase, progress, errorKey } = historyImport
+  const percent =
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
+      : null
   return (
     <Modal
-      title={t('historyImportFinalTitle')}
+      title={errorKey ? t('historyImportFailedTitle') : t('historyImportFinalTitle')}
       centered
-      onClose={historyImport.cancel}
+      onClose={() => !busy && historyImport.cancel()}
       footer={
-        <>
-          <Button variant="outlined" size="m" autoFocus onClick={() => setStage('warn')}>
-            {t('historyImportBack')}
-          </Button>
-          <Button variant="danger" size="m" onClick={() => void historyImport.confirm()}>
-            {t('historyImportFinalConfirm')}
-          </Button>
-        </>
+        <div className={styles.importFooter}>
+          {busy ? (
+            <div className={styles.importBusy}>
+              <span className={styles.importSpinner} aria-hidden />
+              <span>
+                {phase === 'checking'
+                  ? t('historyImportChecking')
+                  : progress && progress.total > 0
+                    ? t('historyImportProgress', {
+                        processed: progress.processed,
+                        total: progress.total,
+                      })
+                    : t('historyImportWriting')}
+              </span>
+            </div>
+          ) : null}
+          <div className={styles.importActions}>
+            <Button
+              variant="outlined"
+              size="m"
+              autoFocus
+              disabled={busy}
+              onClick={() => (errorKey ? historyImport.cancel() : setStage('warn'))}
+            >
+              {errorKey ? t('close') : t('historyImportBack')}
+            </Button>
+            <Button
+              variant="danger"
+              size="m"
+              disabled={busy}
+              onClick={() => void historyImport.confirm()}
+            >
+              {busy
+                ? t('historyImportBusyButton')
+                : errorKey
+                  ? t('historyImportRetry')
+                  : t('historyImportFinalConfirm')}
+            </Button>
+          </div>
+        </div>
       }
     >
       <div className={styles.importWarnFinal}>
         {t('historyImportFinalBody', { count: sessionCount })}
       </div>
+      {busy ? (
+        <div className={styles.importProgress}>
+          <div className={styles.importProgressTrack}>
+            <span
+              className={
+                percent === null ? styles.importProgressIndeterminate : styles.importProgressFill
+              }
+              style={percent === null ? undefined : { width: `${percent}%` }}
+            />
+          </div>
+          <div className={styles.importProgressHint}>{t('historyImportNoClose')}</div>
+        </div>
+      ) : null}
+      {errorKey ? (
+        <div className={styles.importErrorBox}>
+          <div className={styles.importErrorTitle}>{t('historyImportFailedTitle')}</div>
+          <div className={styles.importErrorBody}>{t(errorKey)}</div>
+          <div className={styles.importErrorHint}>{t('historyImportFailedHint')}</div>
+        </div>
+      ) : null}
     </Modal>
   )
 }
@@ -994,6 +1051,10 @@ const useHistoryImport = () => {
   const [status, setStatus] = useState<Status>(null)
   /** 成功导入的会话数；非 null 时弹出「导入完成」对话框 */
   const [result, setResult] = useState<number | null>(null)
+  /** 导入阶段：checking 校验 / importing 写入；失败回到 idle 并给出原因 */
+  const [phase, setPhase] = useState<'idle' | 'checking' | 'importing'>('idle')
+  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null)
+  const [errorKey, setErrorKey] = useState<TranslationKey | null>(null)
   const importing = useRef(false)
 
   const confirm = async () => {
@@ -1001,15 +1062,25 @@ const useHistoryImport = () => {
       return
     }
     importing.current = true
-    setFile(null)
     setBusy(true)
     setStatus(null)
+    setErrorKey(null)
+    setProgress(null)
+    setPhase('checking')
     try {
-      const count = await importHistory(file)
+      const count = await importHistory(file, (processed, total) => {
+        setPhase('importing')
+        setProgress({ processed, total })
+      })
       setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
+      setFile(null)
       setResult(count)
-    } catch {
+      setPhase('idle')
+    } catch (error) {
+      // 失败时保留文件与弹窗：把原因写在按钮上方，可直接重试
+      setErrorKey(error instanceof BackupError ? error.key : 'historyImportFailed')
       setStatus({ key: 'historyImportFailed', error: true })
+      setPhase('idle')
     } finally {
       importing.current = false
       setBusy(false)
@@ -1021,6 +1092,9 @@ const useHistoryImport = () => {
     busy,
     status,
     result,
+    phase,
+    progress,
+    errorKey,
     select: setFile,
     cancel: () => setFile(null),
     dismissResult: () => setResult(null),
