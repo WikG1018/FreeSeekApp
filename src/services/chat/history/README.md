@@ -59,3 +59,8 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 | [../backup.ts](../backup.ts)                                                   | 导入导出入口与串行队列         |
 
 支持单卷 ZIP32 的 STORE / DEFLATE，导出使用 STORE。ZIP64、加密、分卷及非 UTF-8 的非 ASCII 文件名不支持；条目名统一按 NFC 比较。不另设业务大小上限，但受 ZIP32 容量和浏览器资源限制，导出会生成完整下载 Blob。
+# FreeSeek 完整备份
+
+2.1.0 起，本机导出使用独立格式：`manifest.json` 标记 `freeseek_backup_version: 1` 并列出会话、原件、人设和单价；`freeseek/sessions/*.json` 保存完整会话；`freeseek/files/*.bin` 按附件本地 ID 去重保存原件及 MIME。
+
+导入先校验清单、消息结构、路径、大小与 CRC，只写暂存；所有条目成功后才原子替换会话和文件，再恢复人设与单价。API Key 始终排除。旧版及官方 v3 ZIP 继续由原有读取器导入；旧格式本来缺失的原件或元数据无法补造。

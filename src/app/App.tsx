@@ -52,7 +52,9 @@ export const App = () => {
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
   // 首次使用：没绑 Key 且没看过引导时弹一次
-  const [onboarding, setOnboarding] = useState(() => shouldShowOnboarding(useSettings.getState().apiKey))
+  const [onboarding, setOnboarding] = useState(() =>
+    shouldShowOnboarding(useSettings.getState().apiKey)
+  )
   const initError = useChatStore((state) => state.initError)
   const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
   const importingHistory = useChatStore((state) => state.importingHistory)
@@ -64,7 +66,11 @@ export const App = () => {
   const sessionLoadError = useChatStore((state) =>
     state.activeId === null ? false : state.sessionLoadErrors[state.activeId] === true
   )
-  const frameRef = useMobileViewport(isMobile)
+  const fontScale = useSettings((state) => state.fontScale)
+  const frameRef = useMobileViewport(
+    isMobile,
+    Capacitor.getPlatform() === 'android' ? 1 : fontScale
+  )
   const streaming = useChatStore((state) =>
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
@@ -77,7 +83,6 @@ export const App = () => {
   }, [locale])
 
   // 字体大小：Android 用原生 textZoom（只缩放文字，不改布局）；网页预览用 #root 等比缩放
-  const fontScale = useSettings((state) => state.fontScale)
   useEffect(() => {
     if (Capacitor.getPlatform() === 'android') {
       document.documentElement.style.setProperty('--fs-ui-scale', '1')

@@ -13,6 +13,8 @@ import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from 
 import { useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
+import { allSessionMessages, mapSessionMessages } from './sessionData.js'
+import { sumMessageUsage, usageEntries } from './usage.js'
 import {
   clearAllDrafts,
   clearDraft,
@@ -149,6 +151,7 @@ const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
 let accessSequence = 0
 let historyEpoch = 0
+let inheritSequence = 0
 /** 用于只在 activeId 变化时写入 localStorage */
 let lastActiveId: string | null = null
 let initTask: Promise<void> | undefined
@@ -261,6 +264,21 @@ export const retrySaveSessions = () => {
   }
 }
 
+/** 保存失败时，导出仍可从内存取回尚未落盘的原件。 */
+export const loadBackupFile = async (id: string): Promise<Blob | undefined> => {
+  for (const files of pendingFiles.values()) {
+    const file = files.find((file) => file.id === id)
+    if (file) {
+      return file.blob
+    }
+  }
+  return db.loadFile(id)
+}
+
+export const flushChatUpdates = () => {
+  streamFlushes.forEach((flush) => flush())
+}
+
 /** 离开前先合并尚未绘制的增量；隐藏期间浏览器可能暂停动画帧。 */
 export const bindChatPersistence = () => {
   const save = () => {
@@ -340,8 +358,7 @@ export const initChat = (): Promise<void> => {
       if (epoch === historyEpoch) {
         // 恢复上次打开的会话；记录不存在（已删除）时回到欢迎页
         const saved = readActiveSession()
-        const restore =
-          saved && summaries.some((session) => session.id === saved) ? saved : null
+        const restore = saved && summaries.some((session) => session.id === saved) ? saved : null
         lastActiveId = restore
         set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
         if (restore) {
@@ -446,6 +463,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     // 已开始的单条删除先同步到内存，避免本次替换失败后列表残留已被删除的记录。
     await Promise.all(deletionTasks)
     historyEpoch += 1
+    inheritSequence += 1
     initTask = undefined
     sessionLoads.clear()
     await waitForIdle()
@@ -470,6 +488,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionLoadErrors: {},
       sessionSaveErrors: {},
       activeId: null,
+      inheritFrom: null,
     })
     return summaries.length
   } finally {
@@ -487,6 +506,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
 
 export const newChat = () => {
   if (!get().importingHistory) {
+    inheritSequence += 1
     set({ activeId: null, inheritFrom: null })
     trimSessionCache()
   }
@@ -501,10 +521,19 @@ export const startInheritSession = (id: string) => {
   if (!summary) {
     return
   }
-  const attach = (messages: Message[]) => {
-    if (get().importingHistory) {
+  const sequence = ++inheritSequence
+  const epoch = historyEpoch
+  const attach = (session: Session | undefined) => {
+    if (
+      !session ||
+      get().importingHistory ||
+      epoch !== historyEpoch ||
+      sequence !== inheritSequence ||
+      !get().sessions.some((item) => item.id === id)
+    ) {
       return
     }
+    const messages = [...(session.inherited?.messages ?? []), ...getVisibleMessages(session)]
     set({
       inheritFrom: { fromId: summary.id, fromTitle: summary.title, messages },
       activeId: null,
@@ -513,24 +542,26 @@ export const startInheritSession = (id: string) => {
   }
   const cached = getSession(id)
   if (cached) {
-    attach(getVisibleMessages(cached))
+    attach(cached)
     return
   }
   void db
     .loadSession(id)
-    .then((stored) => attach(stored ? getVisibleMessages(normalizeSession(stored)) : []))
+    .then((stored) => attach(stored ? normalizeSession(stored) : undefined))
     .catch(db.reportStorageError('read session for inheritance'))
 }
 
 /** 取消对话接续 */
 export const cancelInherit = () => {
+  inheritSequence += 1
   set({ inheritFrom: null })
 }
 
 export const selectSession = (id: string) => {
   if (!get().importingHistory && get().sessions.some((session) => session.id === id)) {
+    inheritSequence += 1
     touchSession(id)
-    set({ activeId: id })
+    set({ activeId: id, inheritFrom: null })
     void ensureSessionLoaded(id)
     trimSessionCache()
   }
@@ -601,6 +632,7 @@ const removeSessionData = async (id: string): Promise<boolean> => {
         Object.entries(state.sessionSaveErrors).filter(([key]) => key !== id)
       ),
       activeId: state.activeId === id ? null : state.activeId,
+      inheritFrom: state.inheritFrom?.fromId === id ? null : state.inheritFrom,
     }))
     return true
   } catch (error) {
@@ -875,9 +907,8 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
   if (serverIds.size === 0) {
     return
   }
-  updateSession(sessionId, (session) => ({
-    ...session,
-    messages: session.messages.map((message) =>
+  updateSession(sessionId, (session) =>
+    mapSessionMessages(session, (message) =>
       message.role === 'user' && message.files.some((file) => serverIds.has(file.id))
         ? {
             ...message,
@@ -886,8 +917,8 @@ const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
             ),
           }
         : message
-    ),
-  }))
+    )
+  )
   persist(sessionId)
 }
 
@@ -916,14 +947,14 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
   if (!session) {
     return request
   }
-  const byId = new Map(session.messages.map((message) => [message.id, message]))
+  const byId = new Map(allSessionMessages(session).map((message) => [message.id, message]))
   const pick = <T extends Message>(message: T): T =>
     (byId.get(message.id) as T | undefined) ?? message
   return {
     history: request.history.map(pick),
     question: pick(request.question),
     prefix: request.prefix,
-    inherited: request.inherited,
+    inherited: session.inherited,
     persona: request.persona,
   }
 }
@@ -965,7 +996,11 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   }
 
   const pending = new Map<string, FileAttachment>()
-  for (const [user] of getContextRounds(request.history).toReversed()) {
+  const context = [
+    ...getContextRounds(request.inherited?.messages ?? []),
+    ...getContextRounds(request.history),
+  ]
+  for (const [user] of context.toReversed()) {
     for (const file of user.files) {
       if (!file.serverId && !serverIds.has(file.id) && !pending.has(file.id)) {
         pending.set(file.id, file)
@@ -987,13 +1022,14 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
 
   // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
   const session = getSession(sessionId)
+  const byId = new Map(session?.messages.map((message) => [message.id, message]))
   const resolve = <T extends Message>(message: T): T =>
-    (session?.messages.find((m) => m.id === message.id) as T | undefined) ?? message
+    (byId.get(message.id) as T | undefined) ?? message
   return {
     history: request.history.map(resolve),
     question: resolve(request.question),
     prefix: request.prefix,
-    inherited: request.inherited,
+    inherited: session?.inherited ?? request.inherited,
     persona: request.persona,
   }
 }
@@ -1012,6 +1048,9 @@ const collectServerFileIds = (request: Request): Set<string> => {
   for (const [user] of getContextRounds(request.history)) {
     add(user.files)
   }
+  for (const [user] of getContextRounds(request.inherited?.messages ?? [])) {
+    add(user.files)
+  }
   return ids
 }
 
@@ -1027,7 +1066,7 @@ const resetAttachmentServerIds = (sessionId: string, serverIds: Set<string>): st
     return []
   }
   const localIds: string[] = []
-  const messages = session.messages.map((message) => {
+  const updated = mapSessionMessages(session, (message) => {
     if (message.role !== 'user') {
       return message
     }
@@ -1045,7 +1084,7 @@ const resetAttachmentServerIds = (sessionId: string, serverIds: Set<string>): st
   if (localIds.length === 0) {
     return []
   }
-  updateSession(sessionId, (current) => ({ ...current, messages }))
+  updateSession(sessionId, () => updated)
   // 上传任务里可能还留着同一个失效的 serverId，清掉后 ensureServerId 才会重新上传
   localIds.forEach(cancelUpload)
   persist(sessionId)
@@ -1060,7 +1099,7 @@ const stripAttachments = (sessionId: string, localIds: string[]): boolean => {
   }
   const wanted = new Set(localIds)
   let changed = false
-  const messages = session.messages.map((message) => {
+  const updated = mapSessionMessages(session, (message) => {
     if (message.role !== 'user') {
       return message
     }
@@ -1076,7 +1115,7 @@ const stripAttachments = (sessionId: string, localIds: string[]): boolean => {
   if (!changed) {
     return false
   }
-  updateSession(sessionId, (current) => ({ ...current, messages }))
+  updateSession(sessionId, () => updated)
   persist(sessionId)
   return true
 }
@@ -1135,7 +1174,7 @@ const healUnsupportedImage = (
   const id = blamedServerId(error, sentMessages)
   if (id) {
     const session = getSession(sessionId)
-    const hit = session?.messages
+    const hit = (session ? allSessionMessages(session) : [])
       .filter((message): message is UserMessage => message.role === 'user')
       .flatMap((message) => message.files)
       .find((file) => file.serverId === id)
@@ -1198,6 +1237,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   let sentMessages: MessageParam[] | null = null
   /** 图片自愈进度：已重置过的附件 id；定位失败时是否已用过兜底 */
   const heal = { ids: new Set<string>(), fallback: false }
+  const usageBase = request.prefix ? initial.usage : undefined
+  const usageHistory = request.prefix ? usageEntries(initial) : []
+  const requestStartedAt = Date.now()
 
   try {
     for (let attempt = 0; ; attempt += 1) {
@@ -1253,6 +1295,19 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             titleRequests.delete(controller)
           }
           reply = applyEvent(reply, event, Date.now(), blockIndexes)
+          const usage =
+            event.type === 'message_start'
+              ? event.message.usage
+              : event.type === 'message_delta'
+                ? event.usage
+                : undefined
+          if (usage) {
+            reply = {
+              ...reply,
+              usage: sumMessageUsage(usageBase, usage),
+              usageHistory: [...usageHistory, { createdAt: requestStartedAt, usage }],
+            }
+          }
           if (document.visibilityState === 'hidden') {
             flush()
           } else {

@@ -96,7 +96,12 @@ type PersonaState = {
 }
 
 const initialDefault = (): string => {
-  const saved = localStorage.getItem(DEFAULT_KEY)
+  let saved: string | null = null
+  try {
+    saved = localStorage.getItem(DEFAULT_KEY)
+  } catch {
+    /* 存储不可用时使用默认人设。 */
+  }
   return saved && [...BUILTIN_PERSONAS, ...loadCustom()].some((p) => p.id === saved)
     ? saved
     : 'builtin-default'
@@ -106,6 +111,17 @@ export const usePersonas = create<PersonaState>(() => ({
   personas: [...BUILTIN_PERSONAS, ...loadCustom()],
   defaultId: initialDefault(),
 }))
+
+/** 仅恢复已校验的本机人设备份；内置人设始终来自当前版本。 */
+export const restorePersonas = (custom: Persona[], defaultId: string): void => {
+  const personas = [...BUILTIN_PERSONAS, ...custom]
+  const selected = personas.some((persona) => persona.id === defaultId)
+    ? defaultId
+    : 'builtin-default'
+  persistCustom(personas)
+  persistDefault(selected)
+  usePersonas.setState({ personas, defaultId: selected })
+}
 
 export const isBuiltin = (persona: Persona): boolean => persona.id.startsWith(BUILTIN_PREFIX)
 
@@ -122,11 +138,13 @@ export const addPersona = (name: string, prompt: string): string => {
 
 export const updatePersona = (id: string, name: string, prompt: string): void => {
   commit(
-    usePersonas.getState().personas.map((persona) =>
-      persona.id === id && !isBuiltin(persona)
-        ? { ...persona, name: name.trim(), prompt: prompt.trim() }
-        : persona
-    )
+    usePersonas
+      .getState()
+      .personas.map((persona) =>
+        persona.id === id && !isBuiltin(persona)
+          ? { ...persona, name: name.trim(), prompt: prompt.trim() }
+          : persona
+      )
   )
 }
 

@@ -37,8 +37,8 @@ DeepSeek 官方 App 在算力紧张时会限制使用：每日额度、长对话
 | 深度思考 / 智能搜索 | 与官方一致的开关，搜索结果带来源与引用 |
 | 附件与文件 | 图片、文档、PDF 等，上传即进入对话上下文 |
 | 语音 | 语音输入（ASR）与朗读（TTS），Android 端已适配权限 |
-| 离线可用 | 全部数据在本机，除调用 DeepSeek 接口外不访问任何服务器 |
-| 应用内更新 | 启动自动检查 GitHub Release，国内自动切换镜像，**提前下载好 APK**，侧边栏一键安装 |
+| 本机存储 | 会话和附件保存在本机，不提供云端会话同步 |
+| 应用内更新 | 检查 GitHub Release，国内可切换镜像；下载后核验完整性、签名、包名和版本，再由侧边栏安装 |
 | 深色模式 / 字体大小 | 跟随系统或手动切换；字体四档（Android 用原生 textZoom） |
 
 ## 安装
@@ -59,19 +59,24 @@ DeepSeek 官方 App 在算力紧张时会限制使用：每日额度、长对话
 
 官方 App → 设置 → **数据管理** → 导出全部对话，得到 `.zip`；回到 FreeSeek → 设置 → 数据管理 → 导入历史对话。导入会整份替换本机会话，操作前会两次确认。
 
+FreeSeek 2.1.0 起导出的 `freeseek-backup-*.zip` 保存完整消息分支、图片和文档原件、接续上下文、人设库及用量；Android 会打开系统保存器选择位置。新备份需用 2.1.0 或更高版本恢复，旧版及官方备份仍可导入。API Key 不在备份中。
+
 ## 更新机制
 
 - 启动 4 秒后自动查询 GitHub Release（结果缓存 6 小时）
 - GitHub API 直连失败时，依次切换 `gh-proxy.com`、`ghfast.top`、`ghproxy.net` 镜像
 - 发现新版本立即在后台下载 APK（原生流式下载、有进度），下好后在侧边栏显示「可安装」
-- 点击安装会拉起系统安装器；首次需要允许「安装未知应用」
+- 下载完成后校验长度、上游摘要（提供时）和 APK 签名，确认与已安装应用的证书一致、版本更高，才允许拉起安装器；首次需要允许「安装未知应用」
 
 ## 自行构建
 
-需要 Node.js 22.12+、pnpm 10、JDK 21、Android SDK（compileSdk 36）。
+需要 Node.js 24+、pnpm 10、JDK 21、Android SDK（compileSdk 36）。
 
 ```sh
 pnpm install
+pnpm exec playwright install chromium
+pnpm type && pnpm lint
+pnpm test:smoke && pnpm test
 pnpm build            # 产出 dist/
 npx cap sync android
 cd android && .\gradlew.bat assembleDebug   # macOS/Linux 用 ./gradlew
@@ -97,7 +102,7 @@ scripts/             图标生成与冒烟脚本
 ## 隐私与安全
 
 - 会话与附件存本机 IndexedDB，API Key 存本机 localStorage，**不上传任何第三方服务器**
-- 请求只发往 `api.deepseek.com`；应用不含统计、埋点、崩溃上报 SDK
+- 对话请求发往 `api.deepseek.com`；检查更新会访问 GitHub 及备用镜像，搜索来源的图标可能访问对应网站。应用不含统计、埋点、崩溃上报 SDK
 - 语音录制在本机完成编码，仅把音频提交给官方语音接口
 - 导出的 ZIP 不包含 API Key
 

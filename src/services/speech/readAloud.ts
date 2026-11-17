@@ -96,43 +96,60 @@ export const toggleReadAloud = (
 
   void (async () => {
     let nextTime = 0
-    let lastSource: AudioBufferSourceNode | null = null
+    let started = false
+    let pendingSources = 0
+    let streamEnded = false
     let rest = new Uint8Array(0)
     try {
       const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
       const reader = stream.getReader()
-      controller.signal.addEventListener('abort', () => void reader.cancel().catch(() => {}))
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) {
-          break
-        }
-        const bytes = new Uint8Array(rest.length + value.length)
-        bytes.set(rest)
-        bytes.set(value, rest.length)
-        const samples = toFloat32(bytes)
-        rest = bytes.slice(samples.length * 2)
-        if (samples.length === 0) {
-          continue
-        }
-        const buffer = context.createBuffer(1, samples.length, TTS_SAMPLE_RATE)
-        buffer.copyToChannel(samples, 0)
-        const source = context.createBufferSource()
-        source.buffer = buffer
-        source.connect(context.destination)
-        // 网络慢于播放时从当前时间续上，不补播过去的时间
-        nextTime = Math.max(nextTime, context.currentTime + (lastSource ? 0 : START_DELAY))
-        source.start(nextTime)
-        nextTime += buffer.duration
-        lastSource = source
-        if (useReadAloud.getState().status === 'loading') {
-          useReadAloud.setState({ status: 'playing' })
-        }
+      const cancelReader = () => {
+        void reader.cancel().catch(() => {})
       }
-      if (lastSource) {
-        lastSource.onended = () => finish(controller)
-      } else {
-        finish(controller)
+      controller.signal.addEventListener('abort', cancelReader, { once: true })
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) {
+            break
+          }
+          const bytes = new Uint8Array(rest.length + value.length)
+          bytes.set(rest)
+          bytes.set(value, rest.length)
+          const samples = toFloat32(bytes)
+          rest = bytes.slice(samples.length * 2)
+          if (samples.length === 0) {
+            continue
+          }
+          const buffer = context.createBuffer(1, samples.length, TTS_SAMPLE_RATE)
+          buffer.copyToChannel(samples, 0)
+          const source = context.createBufferSource()
+          pendingSources += 1
+          source.onended = () => {
+            pendingSources -= 1
+            if (streamEnded && pendingSources === 0) {
+              finish(controller)
+            }
+          }
+          source.buffer = buffer
+          source.connect(context.destination)
+          // 网络慢于播放时从当前时间续上，不补播过去的时间
+          nextTime = Math.max(nextTime, context.currentTime + (started ? 0 : START_DELAY))
+          source.start(nextTime)
+          nextTime += buffer.duration
+          started = true
+          if (useReadAloud.getState().status === 'loading') {
+            useReadAloud.setState({ status: 'playing' })
+          }
+        }
+        streamEnded = true
+        if (pendingSources === 0) {
+          finish(controller)
+        }
+      } finally {
+        controller.signal.removeEventListener('abort', cancelReader)
+        await reader.cancel().catch(() => {})
+        reader.releaseLock()
       }
     } catch (error) {
       if (!controller.signal.aborted) {

@@ -90,8 +90,10 @@ export type AssistantMessage = MessageBranch & {
   blocks: ReplyBlock[]
   stopReason?: StopReason
   stopDetails?: StopDetails
-  /** 最近一次请求的用量，续写后更新 */
+  /** 本条回复历次请求的累计用量；逐次明细见 usageHistory。 */
   usage?: MessageUsage
+  /** 每次请求分别保存用量与时间，续写不覆盖已产生的费用。 */
+  usageHistory?: { createdAt: number; usage: MessageUsage }[]
   error?: {
     /** upload：发送前补传附件失败，请求没有发出 */
     kind: ApiErrorKind | 'upload'
@@ -121,7 +123,7 @@ export type Session = {
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */
   rootMessageId?: string | null
-  /** 对话接续：请求时置于上下文最前，不在界面展示；历史导出 ZIP 不包含该字段。 */
+  /** 对话接续：请求时置于上下文最前，不在界面展示；完整本机备份保留该字段。 */
   inherited?: InheritedContext | null
   /** 创建会话时的人设快照：prompt 覆盖默认 system 提示词；null 表示默认助手身份。 */
   persona?: { name: string; prompt: string } | null

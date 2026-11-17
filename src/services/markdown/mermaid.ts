@@ -38,6 +38,20 @@ export const renderMermaid = (
       securityLevel: 'strict',
       startOnLoad: false,
       suppressErrorRendering: true,
+      // 图表来自模型或导入记录，不允许它覆盖页面样式或安全配置。
+      secure: [
+        'secure',
+        'securityLevel',
+        'startOnLoad',
+        'maxTextSize',
+        'maxEdges',
+        'suppressErrorRendering',
+        'theme',
+        'themeCSS',
+        'themeVariables',
+        'fontFamily',
+        'altFontFamily',
+      ],
     })
 
     const { svg } = await mermaid.render(`standalone-mermaid-${nextId++}`, sanitizeMermaid(code))

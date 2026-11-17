@@ -1,15 +1,22 @@
 {
   "name": "freeseek",
-  "version": "2.0.6",
+  "version": "2.1.0",
   "description": "FreeSeek 畅聊：自带 DeepSeek API Key 的安卓聊天客户端，无次数与额度限制。基于官方开源 chat-demo (MIT)。",
   "license": "MIT",
   "private": true,
+  "pnpm": {
+    "overrides": {
+      "katex@<0.18.2": "0.18.2"
+    }
+  },
   "type": "module",
   "scripts": {
     "dev": "rspack serve -c rspack.config.ts",
     "build": "rspack build -c rspack.config.ts",
     "type": "tsc -p tsconfig.json",
     "lint": "oxlint src rspack.config.ts",
+    "test": "node scripts/e2e-check.mjs",
+    "test:smoke": "node scripts/smoke.ts",
     "format": "oxfmt --write .",
     "stats": "node scripts/stats-dashboard.mjs",
     "stats:collect": "node scripts/collect-stats.mjs"
@@ -27,12 +34,12 @@
     "clsx": "2.1.1",
     "fflate": "0.8.3",
     "idb": "8.0.3",
-    "katex": "0.16.22",
+    "katex": "0.18.2",
     "mdast-util-find-and-replace": "3.0.2",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm": "3.1.0",
     "mdast-util-math": "3.0.0",
-    "mermaid": "11.10.1",
+    "mermaid": "11.16.1",
     "micromark-extension-gfm": "3.0.0",
     "micromark-extension-llm-math": "3.1.0",
     "prismjs": "1.30.0",
@@ -49,6 +56,7 @@
     "@types/node": "~20.9.2",
     "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
+    "playwright": "1.65.1",
     "typescript": "7.0.2"
   },
   "repository": {

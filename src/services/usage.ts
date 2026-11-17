@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { MessageUsage } from './api/types.js'
 import { loadAllSessions } from './chat/db.js'
+import type { AssistantMessage } from './chat/types.js'
+import { usageEntries } from './chat/usage.js'
 
 /**
  * 本地用量与费用统计：遍历会话中每条回复记录的 usage，按天聚合，
@@ -39,9 +41,9 @@ const isPricing = (value: unknown): value is FlashPricing => {
     return false
   }
   const pricing = value as Record<string, unknown>
-  return (
-    Object.keys(DEFAULT_PRICING) as (keyof FlashPricing)[]
-  ).every((key) => typeof pricing[key] === 'number' && Number.isFinite(pricing[key]))
+  return (Object.keys(DEFAULT_PRICING) as (keyof FlashPricing)[]).every(
+    (key) => typeof pricing[key] === 'number' && Number.isFinite(pricing[key])
+  )
 }
 
 const loadPricing = (): FlashPricing => {
@@ -179,8 +181,7 @@ export const computeMessageUsage = (
     searches,
     tokens: input + cacheRead + cacheWrite + output,
     costCny:
-      (cacheRead * rate.hit + (input + cacheWrite) * rate.miss + output * rate.out) /
-        1_000_000 +
+      (cacheRead * rate.hit + (input + cacheWrite) * rate.miss + output * rate.out) / 1_000_000 +
       (searches * pricing.searchPer1k) / 1000,
   }
 }
@@ -198,13 +199,15 @@ export const collectUsage = async (): Promise<UsageStats> => {
       if (message.role !== 'assistant' || !message.usage) {
         continue
       }
-      const key = dayKey(message.createdAt)
-      const day = days.get(key) ?? emptyTotals()
-      const peak = isPeakBeijing(message.createdAt)
-      addUsage(day, message.usage, peak, pricing)
-      days.set(key, day)
-      addUsage(total, message.usage, peak, pricing)
-      addUsage(sessionTotals, message.usage, peak, pricing)
+      for (const entry of usageEntries(message)) {
+        const key = dayKey(entry.createdAt)
+        const day = days.get(key) ?? emptyTotals()
+        const peak = isPeakBeijing(entry.createdAt)
+        addUsage(day, entry.usage, peak, pricing)
+        days.set(key, day)
+        addUsage(total, entry.usage, peak, pricing)
+        addUsage(sessionTotals, entry.usage, peak, pricing)
+      }
     }
     if (sessionTotals.requests > 0) {
       sessions.push({ ...sessionTotals, id: session.id, title: session.title || '' })
@@ -217,7 +220,9 @@ export const collectUsage = async (): Promise<UsageStats> => {
     total,
     sessions: sessions.sort(
       (a, b) =>
-        b.cacheReadTokens + b.cacheMissTokens + b.outputTokens -
+        b.cacheReadTokens +
+        b.cacheMissTokens +
+        b.outputTokens -
         (a.cacheReadTokens + a.cacheMissTokens + a.outputTokens)
     ),
   }
@@ -237,3 +242,26 @@ export const recentDays = (stats: UsageStats, count: number): DayUsage[] => {
 }
 
 export const todayKey = (): string => dayKey(Date.now())
+
+/** 单条回复汇总历次续写，分别按各次请求的时段计费。 */
+export const computeReplyUsage = (
+  message: AssistantMessage,
+  pricing: FlashPricing = usePricing.getState().pricing
+): MessageUsageDetail => {
+  const total: MessageUsageDetail = {
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    searches: 0,
+    tokens: 0,
+    costCny: 0,
+  }
+  for (const entry of usageEntries(message)) {
+    const detail = computeMessageUsage(entry.usage, entry.createdAt, pricing)
+    for (const key of Object.keys(total) as (keyof MessageUsageDetail)[]) {
+      total[key] += detail[key]
+    }
+  }
+  return total
+}

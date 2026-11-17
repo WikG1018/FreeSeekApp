@@ -70,15 +70,38 @@ const readErrorResponse = async (
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort(init.signal?.reason)
+  if (init.signal?.aborted) {
+    forwardAbort()
+  } else {
+    init.signal?.addEventListener('abort', forwardAbort, { once: true })
+  }
+  const timeoutMs =
+    (globalThis as { __FS_REQUEST_HEADERS_MS__?: number }).__FS_REQUEST_HEADERS_MS__ ?? 120_000
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   let response: Response
   try {
-    response = await fetch(url, init)
+    response = await fetch(url, { ...init, signal: controller.signal })
   } catch (error) {
+    init.signal?.removeEventListener('abort', forwardAbort)
     if (init.signal?.aborted) {
       throw error
     }
+    if (timedOut) {
+      throw new ApiError('network', 'Response headers timeout', undefined, {
+        key: 'streamIdleTimeout',
+      })
+    }
     throw new ApiError('network', error instanceof Error ? error.message : String(error))
+  } finally {
+    clearTimeout(timer)
   }
+  // 成功响应保留信号关联，上传/语音读取响应体期间仍可取消；一次性信号随请求回收。
   if (!response.ok) {
     throw await readErrorResponse(response)
   }

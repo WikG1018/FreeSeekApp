@@ -27,7 +27,7 @@ export const en = {
   personaManage: 'Manage personas',
   personaManagerTitle: 'Personas & prompts',
   personaManagerHint:
-    'New chats start with the default persona\'s prompt. Existing chats keep the persona they were created with.',
+    "New chats start with the default persona's prompt. Existing chats keep the persona they were created with.",
   personaBuiltinBadge: 'Built-in',
   personaDefaultBadge: 'Default',
   personaAdd: 'New persona',
@@ -55,7 +55,8 @@ export const en = {
   siderSearchPlaceholder: 'Search chats by title…',
   welcomeSetApiKey: 'Add your API key to start',
   settingsApiTutorialTitle: 'How to get an API key (about 3 minutes)',
-  settingsApiStep1: 'Sign up at the DeepSeek platform and complete identity verification (opens in-app)',
+  settingsApiStep1:
+    'Sign up at the DeepSeek platform and complete identity verification (opens in-app)',
   settingsApiStep2: 'Top up a few yuan on the platform Top-up page — that lasts a long while',
   settingsApiStep3: 'Create a key on the API Keys page and copy it (shown only once)',
   settingsApiStep4: 'Come back, paste the key into the “API Key” field below and save it',
@@ -82,7 +83,8 @@ export const en = {
   updateInstallNow: 'Install update',
   updateOpenPage: 'Open release page',
   updateInstallPermission: 'Allow "install unknown apps" for FreeSeek, then tap install again',
-  settingsApiTutorialHint: 'All three open the official pages in the in-app browser; sign in with your DeepSeek account. This app never sees your password.',
+  settingsApiTutorialHint:
+    'All three open the official pages in the in-app browser; sign in with your DeepSeek account. This app never sees your password.',
   donateTitle: 'Buy the developer a coffee',
   donateIntro: 'If FreeSeek helps you, a small tip keeps it going ☕',
   donateScanHint: 'Tap the button: it saves the code and opens the payment page',
@@ -106,10 +108,10 @@ export const en = {
   settingsAboutApp: 'About FreeSeek',
   settingsPrivacyTitle: 'Data & privacy',
   settingsPrivacyText:
-    'Chats and attachments live only in this device\'s IndexedDB; your API key stays in localStorage. Message content is sent only to the DeepSeek API, never to any third-party server. Export a backup from Data management now and then.',
+    "Chats and attachments live only in this device's IndexedDB; your API key stays in localStorage. Message content is sent only to the DeepSeek API, never to any third-party server. Export a backup from Data management now and then.",
   settingsUpstreamTitle: 'Upstream',
   settingsUpstreamText:
-    'Built on DeepSeek\'s open-source chat-demo (MIT License). Its copyright and license notice are retained.',
+    "Built on DeepSeek's open-source chat-demo (MIT License). Its copyright and license notice are retained.",
   settingsLicenseTextTitle: 'MIT License',
   settingsVoiceHint: 'Pick the voice used when reading replies aloud.',
   settingsSessionsCount: '{count} chats',
@@ -122,7 +124,8 @@ export const en = {
   fontLarge: 'Large',
   fontExtraLarge: 'Extra large',
   settingsFontPreview: 'Preview: Hello, how can I help you?',
-  settingsFontAttribution: 'Interface typeface: MiSans by Xiaomi, used under the MiSans font license.',
+  settingsFontAttribution:
+    'Interface typeface: MiSans by Xiaomi, used under the MiSans font license.',
   settingsApiKeyShow: 'Show',
   settingsApiKeyHide: 'Hide',
   settingsApiKeyClear: 'Clear API key',
@@ -230,7 +233,7 @@ export const en = {
   groupTitleToolOpen: 'Browsing the web',
   messageThinking: 'Thinking',
   backupInvalidJson: 'The file is not valid JSON.',
-  backupUnrecognized: 'File not recognized. Please choose a DeepSeek chat history ZIP.',
+  backupUnrecognized: 'File not recognized. Choose a FreeSeek backup or DeepSeek chat history ZIP.',
   backupNewerVersion: 'This file uses a newer version. Please update the app before importing.',
   backupInvalidVersion: 'The file version is invalid and cannot be imported.',
   backupIncomplete: 'The file is incomplete and cannot be imported.',
@@ -250,7 +253,8 @@ export const en = {
   apiKeyVerifying: 'Verifying...',
   confirm: 'Confirm',
   streamIdleTimeout: 'No data received for a long time; check your network and retry',
-  apiImageUnsupported: 'An image in this conversation was rejected (usually from an older or imported message): remove it from that message to continue',
+  apiImageUnsupported:
+    'An image in this conversation was rejected (usually from an older or imported message): remove it from that message to continue',
   apiImageTooLarge: 'The image is too large for the API — compress or crop it first',
   apiKeyInvalid: 'Invalid API Key. Please check it and try again.',
   apiKeyVerificationFailed: 'Verification failed: {message}',
@@ -261,7 +265,8 @@ export const en = {
   onboardingStep2Title: 'Paste it into “API service”',
   onboardingStep2Body: 'The key stays on this device; requests go straight to the official API',
   onboardingStep3Title: 'Start chatting',
-  onboardingStep3Body: 'Switch personas, thinking and web search; usage and cost are always visible',
+  onboardingStep3Body:
+    'Switch personas, thinking and web search; usage and cost are always visible',
   onboardingBindKey: 'Bind API key',
   onboardingSkip: 'Look around first',
   onboardingFootnote: 'You can browse without a key, but sending messages needs one.',
@@ -270,7 +275,8 @@ export const en = {
   officialExportStep2: 'Choose “Export all conversations” to get a .zip backup',
   officialExportStep3: 'Move that file to this phone (or use a local backup)',
   officialExportStep4: 'Come back here, tap “Import history”, pick the zip file',
-  officialExportHint: 'Importing replaces all local chats — export a backup first if you need them.',
+  officialExportHint:
+    'Importing replaces all local chats — export a backup first if you need them.',
   historyImport: 'Import chat history',
   historyImportConfirm: 'Import',
   historyImportChecking: 'Checking the backup…',
@@ -287,7 +293,8 @@ export const en = {
     'You have {count} conversations. Importing replaces all of them with the backup; deleted chats and attachments cannot be recovered.',
   historyImportContinue: 'I understand, continue',
   historyImportFinalTitle: 'Confirm once more',
-  historyImportFinalBody: 'This permanently deletes your current {count} conversations and replaces them with the backup. Continue?',
+  historyImportFinalBody:
+    'This permanently deletes your current {count} conversations and replaces them with the backup. Continue?',
   historyImportBack: 'Back',
   historyImportFinalConfirm: 'Overwrite and import',
   historyImportDoneTitle: 'Import finished',

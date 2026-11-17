@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: actions/setup-java@v4
@@ -30,6 +30,15 @@ jobs:
 
       - name: Build web assets
         run: pnpm build
+
+      - name: Check types and lint
+        run: pnpm type && pnpm lint
+
+      - name: Install test browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Regression tests
+        run: pnpm test:smoke && pnpm test
 
       - name: Sync Capacitor
         run: npx cap sync android

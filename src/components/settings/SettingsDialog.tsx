@@ -45,16 +45,14 @@ import { useTranslate, type TranslationKey, type TranslationMessage } from '../.
 import { Button } from '../base/Button.js'
 import { hasOpenModal, closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
+import { useDialogFocus } from '../base/useDialogFocus.js'
+import { saveBackup } from '../../services/saveBackup.js'
 import { useApiKeyEditor } from './ApiKeyField.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
 import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
-import {
-  checkForUpdate,
-  downloadUpdate,
-  useUpdate,
-} from '../../services/update.js'
+import { checkForUpdate, downloadUpdate, useUpdate } from '../../services/update.js'
 import { runInstall, UpdateDialog, useUpdateStatusText } from '../update/Update.js'
 import {
   closeSettings,
@@ -96,6 +94,8 @@ export const SettingsDialog = () => {
 }
 
 const SettingsRoot = () => {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useDialogFocus(dialogRef, () => !hasOpenModal())
   const t = useTranslate()
   const closing = useSettingsDialog((state) => state.closing)
   const [stack, setStack] = useState<SettingsPageId[]>(() => {
@@ -156,6 +156,8 @@ const SettingsRoot = () => {
       <div
         className={clsx(styles.page, closing && styles.pageClosing)}
         role="dialog"
+        ref={dialogRef}
+        tabIndex={-1}
         aria-modal="true"
         aria-label={t(PAGE_TITLES[page])}
         onAnimationEnd={(event) => {
@@ -247,10 +249,8 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   }, [])
   const themeLabel =
     theme === 'light' ? t('themeLight') : theme === 'dark' ? t('themeDark') : t('themeSystem')
-  const localeLabel =
-    locale === 'zh-CN' ? t('settingsLocaleZhCN') : t('settingsLocaleEnUS')
-  const voiceLabel =
-    ttsVoice === 'stella' ? t('settingsTtsVoiceStella') : t('settingsTtsVoiceTide')
+  const localeLabel = locale === 'zh-CN' ? t('settingsLocaleZhCN') : t('settingsLocaleEnUS')
+  const voiceLabel = ttsVoice === 'stella' ? t('settingsTtsVoiceStella') : t('settingsTtsVoiceTide')
   return (
     <>
       <Section title={t('settingsSectionAccount')}>
@@ -299,9 +299,7 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         <Row
           icon={<IconDataOutline16 />}
           label={t('settingsDataManage')}
-          value={
-            sessionCount > 0 ? t('settingsSessionsCount', { count: sessionCount }) : undefined
-          }
+          value={sessionCount > 0 ? t('settingsSessionsCount', { count: sessionCount }) : undefined}
           onClick={() => push('data')}
         />
       </Section>
@@ -330,9 +328,7 @@ const AccountPage = ({ editor }: { editor: ReturnType<typeof useApiKeyEditor> })
         <div className={styles.accountBlock}>
           <div className={styles.accountStatus}>
             <span className={styles.accountStatusLabel}>{t('settingsApiKey')}</span>
-            <span
-              className={clsx(styles.accountStatusValue, apiKey && styles.accountStatusOk)}
-            >
+            <span className={clsx(styles.accountStatusValue, apiKey && styles.accountStatusOk)}>
               {apiKey && !editing ? t('settingsApiKeyConfigured') : t('settingsApiKeyMissing')}
             </span>
           </div>
@@ -740,7 +736,12 @@ const Row = ({
   )
   if (href) {
     return (
-      <a className={clsx(styles.row, styles.rowInteractive)} href={href} target="_blank" rel="noreferrer">
+      <a
+        className={clsx(styles.row, styles.rowInteractive)}
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+      >
         {content}
       </a>
     )
@@ -1020,9 +1021,7 @@ const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHis
         </>
       }
     >
-      <div className={styles.importDone}>
-        {t('historyImportDoneBody', { count })}
-      </div>
+      <div className={styles.importDone}>{t('historyImportDoneBody', { count })}</div>
     </Modal>
   )
 }
@@ -1040,9 +1039,7 @@ const errorStatus = (key: TranslationKey, error: unknown): Status => ({
 })
 
 const statusText = (t: ReturnType<typeof useTranslate>, status: Status): string =>
-  status
-    ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
-    : ''
+  status ? t(status.key, status.reason ? { message: t(status.reason) } : status.params) : ''
 
 /** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
@@ -1160,12 +1157,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     setStatus(null)
     try {
       const { name, blob } = await exportHistory()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = name
-      link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      await saveBackup(name, blob)
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {

@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { computeMessageUsage } from '../../services/usage.js'
+import { computeReplyUsage, usePricing } from '../../services/usage.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
 import styles from './MessageUsage.module.css'
@@ -21,11 +21,12 @@ const formatCost = (value: number) =>
  */
 export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
   const t = useTranslate()
+  const pricing = usePricing((state) => state.pricing)
   const [expanded, setExpanded] = useState(false)
   if (!message.usage) {
     return null
   }
-  const detail = computeMessageUsage(message.usage, message.createdAt)
+  const detail = computeReplyUsage(message, pricing)
   const input = detail.input + detail.cacheRead + detail.cacheWrite
   const total = input + detail.output
   const cost = formatCost(detail.costCny)

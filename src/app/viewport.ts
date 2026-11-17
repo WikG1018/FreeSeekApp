@@ -43,7 +43,7 @@ export const usePreventPageScroll = (enabled: boolean) => {
 }
 
 /** 移动端页面跟随视觉视口，键盘弹出后顶栏和输入框仍留在可见区域。 */
-export const useMobileViewport = (enabled: boolean) => {
+export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
   const frameRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -70,9 +70,9 @@ export const useMobileViewport = (enabled: boolean) => {
       }
       frame.style.setProperty(
         '--app-viewport-height',
-        `${viewport?.height ?? window.innerHeight}px`
+        `${(viewport?.height ?? window.innerHeight) / layoutScale}px`
       )
-      frame.style.setProperty('--app-viewport-top', `${viewport?.offsetTop ?? 0}px`)
+      frame.style.setProperty('--app-viewport-top', `${(viewport?.offsetTop ?? 0) / layoutScale}px`)
     }
     const scheduleFrame = () => {
       cancelAnimationFrame(animationFrame)
@@ -105,7 +105,7 @@ export const useMobileViewport = (enabled: boolean) => {
       document.removeEventListener('focusout', scheduleFrame)
       reset()
     }
-  }, [enabled])
+  }, [enabled, layoutScale])
 
   return frameRef
 }

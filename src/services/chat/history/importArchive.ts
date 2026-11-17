@@ -5,6 +5,12 @@ import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
 import { toLocalSession } from './toLocal.js'
 import {
+  isNativeManifest,
+  readNativeManifest,
+  importNativeEntries,
+  type NativeBackupSettings,
+} from './nativeArchive.js'
+import {
   ArchiveError,
   countArchiveEntries,
   isZipFile,
@@ -64,7 +70,12 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
       if (entry.path !== MANIFEST_PATH) {
         fail('backupUnrecognized')
       }
-      checkManifest(await readJson(entry))
+      const data = await readJson(entry)
+      if (isNativeManifest(data)) {
+        readNativeManifest(data)
+      } else {
+        checkManifest(data)
+      }
       return
     }
   } catch (error) {
@@ -82,7 +93,7 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
 export const importArchive = async (
   file: File,
   onProgress?: (processed: number, total: number) => void
-): Promise<void> => {
+): Promise<NativeBackupSettings | undefined> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
   }
@@ -110,14 +121,19 @@ export const importArchive = async (
   onProgress?.(processed, total)
 
   try {
-    for await (const entry of readArchive(file)) {
+    const entries = readArchive(file)
+    for await (const entry of entries) {
       const { path } = entry
       const sessionId = parseSessionPath(path)
       if (!manifest) {
         if (path !== MANIFEST_PATH) {
           fail('backupUnrecognized')
         }
-        checkManifest(await readJson(entry))
+        const data = await readJson(entry)
+        if (isNativeManifest(data)) {
+          return await importNativeEntries(entries, readNativeManifest(data), total, onProgress)
+        }
+        checkManifest(data)
         manifest = true
       } else if (path === USER_PATH && !index && imported.size === 0) {
         // 账号信息（已脱敏）不导入；文件可能缺失。
@@ -166,4 +182,5 @@ export const importArchive = async (
     fail('backupIncomplete')
   }
   await db.updateStagingFileTypes(stored)
+  return undefined
 }

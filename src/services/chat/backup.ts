@@ -1,7 +1,8 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
-import { replaceHistory, useChatStore } from './store.js'
+import { replaceHistory, useChatStore, loadBackupFile, flushChatUpdates } from './store.js'
 import type { Session } from './types.js'
+import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
 
 export { BackupError } from './history/errors.js'
 
@@ -14,12 +15,13 @@ const enqueueBackup = <T>(run: () => Promise<T>): Promise<T> => {
   return task
 }
 
-const backupFileName = (date: Date) => `deepseek_data-${formatDate(date)}.zip`
+const backupFileName = (date: Date) => `freeseek-backup-${formatDate(date)}.zip`
 
-/** 导出为历史会话导出格式的 ZIP，可再次导入。 */
+/** 导出完整 FreeSeek 会话备份，可再次导入。 */
 export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup(async () => {
     // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
+    flushChatUpdates()
     const { sessions, sessionCache } = useChatStore.getState()
     async function* readSessions(): AsyncGenerator<Session> {
       for (const summary of sessions) {
@@ -35,7 +37,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     }
     const { exportArchive } = await import('./history/exportArchive.js')
     const now = new Date()
-    const blob = await exportArchive(readSessions())
+    const blob = await exportArchive(readSessions(), loadBackupFile)
     return { name: backupFileName(now), blob }
   })
 
@@ -50,7 +52,12 @@ export const importHistory = (
   enqueueBackup(async () => {
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     await checkArchiveFormat(file)
-    return replaceHistory(() => importArchive(file, onProgress))
+    let settings: NativeBackupSettings | undefined
+    const count = await replaceHistory(async () => {
+      settings = await importArchive(file, onProgress)
+    })
+    restoreNativeSettings(settings)
+    return count
   })
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */

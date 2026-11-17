@@ -21,7 +21,7 @@ DeepSeek's official app throttles heavy users: daily quotas, long conversations 
 - **Personas** — built-in writer / translator / coder / copywriter / brainstorm presets, plus your own
 - **Usage & cost** — per-reply tokens and cost, per-conversation totals, 14-day chart, session ranking at official peak/off-peak rates
 - **Thinking & web search**, attachments, speech input and read-aloud
-- **Offline-first** — history and files live in IndexedDB; nothing leaves the device except API calls
+- **Local history** — chats and files live in IndexedDB, with no cloud conversation sync
 - **In-app updates** — checks GitHub Releases, falls back to mirrors in mainland China, pre-downloads the APK and installs from the sidebar
 
 ## Install
@@ -36,12 +36,17 @@ Download the latest `freeseek-v*-release.apk` from [Releases](https://github.com
 
 To bring history over from the official app: official app → Settings → Data management → Export all conversations, then import the `.zip` here.
 
+FreeSeek 2.1.0 backups preserve message branches, all available attachment originals, inherited context, personas, usage and custom pricing. Android uses the system file picker to save the ZIP. Restore new backups with 2.1.0 or later; older and official exports remain importable. API keys are excluded.
+
 ## Build
 
-Requires Node 22.12+, pnpm 10, JDK 21 and Android SDK 36.
+Requires Node 24+, pnpm 10, JDK 21 and Android SDK 36.
 
 ```sh
 pnpm install
+pnpm exec playwright install chromium
+pnpm type && pnpm lint
+pnpm test:smoke && pnpm test
 pnpm build
 npx cap sync android
 cd android && ./gradlew assembleDebug
@@ -51,7 +56,9 @@ Release builds read signing config from `android/keystore.properties` (gitignore
 
 ## Privacy
 
-History and attachments are stored locally; requests go only to `api.deepseek.com`. No analytics, no crash reporting, no accounts. Exported ZIPs never contain your API key.
+History and attachments are stored locally; chat requests go to `api.deepseek.com`. Update checks contact GitHub and fallback mirrors, and source icons may contact their websites. No analytics, crash reporting or accounts. Exported ZIPs never contain your API key.
+
+Before installation, updates are checked for the expected length, upstream SHA-256 when available, a valid APK signature, the installed app's signing certificate, package name and a higher version.
 
 ## License
 

@@ -21,18 +21,16 @@ const FETCH_TIMEOUT = 8000
 type NativeUpdate = {
   /** 原生代发 GET：镜像站普遍不带 CORS 头，WebView 的 fetch 会被拦 */
   get: (o: { url: string; timeoutMs?: number }) => Promise<{ status: number; body: string }>
-  hasFile: (o: { fileName: string }) => Promise<{ exists: boolean; path: string; size: number }>
-  download: (o: { url: string; fileName: string }) => Promise<{
+  hasFile: (
+    o: PackageCheck & { fileName: string }
+  ) => Promise<{ exists: boolean; path: string; size: number }>
+  download: (o: PackageCheck & { url: string; fileName: string }) => Promise<{
     path: string
     size: number
     cached?: boolean
   }>
   cancel: () => Promise<void>
-  install: (o: { path: string }) => Promise<{ installed: boolean; reason?: string }>
-  enqueueSystemDownload: (o: { url: string; fileName: string }) => Promise<{
-    enqueued: boolean
-    reason?: string
-  }>
+  install: (o: PackageCheck & { path: string }) => Promise<{ installed: boolean; reason?: string }>
   addListener: (
     event: 'progress',
     cb: (payload: { received: number; total: number }) => void
@@ -40,6 +38,7 @@ type NativeUpdate = {
 }
 
 const UpdateNative = registerPlugin<NativeUpdate>('Update')
+type PackageCheck = { expectedSize: number; sha256: string | null; version: string }
 
 export type ReleaseInfo = {
   version: string
@@ -47,7 +46,7 @@ export type ReleaseInfo = {
   notes: string
   publishedAt: string
   pageUrl: string
-  apk: { name: string; size: number; url: string } | null
+  apk: { name: string; size: number; url: string; sha256: string | null } | null
 }
 
 export type UpdateStatus =
@@ -109,8 +108,34 @@ type Cache = { at: number; release: ReleaseInfo | null }
 const readCache = (): Cache => {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null')
-    if (typeof parsed === 'object' && parsed !== null && 'at' in parsed) {
-      return parsed as Cache
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'at' in parsed &&
+      typeof parsed.at === 'number' &&
+      Number.isFinite(parsed.at) &&
+      'release' in parsed
+    ) {
+      const cached = parsed.release as ReleaseInfo | null
+      if (!cached) {
+        return { at: parsed.at, release: null }
+      }
+      const release = toRelease({
+        tag_name: cached.tag,
+        body: typeof cached.notes === 'string' ? cached.notes : '',
+        published_at: typeof cached.publishedAt === 'string' ? cached.publishedAt : '',
+        assets: cached.apk
+          ? [
+              {
+                name: cached.apk.name,
+                size: cached.apk.size,
+                browser_download_url: cached.apk.url,
+                ...(cached.apk.sha256 ? { digest: `sha256:${cached.apk.sha256}` } : {}),
+              },
+            ]
+          : [],
+      })
+      return { at: parsed.at, release }
     }
   } catch {
     // 忽略缓存损坏
@@ -126,7 +151,7 @@ const writeCache = (release: ReleaseInfo | null) => {
   }
 }
 
-type GithubAsset = { name: string; size: number; browser_download_url: string }
+type GithubAsset = { name: string; size: number; browser_download_url: string; digest?: string }
 type GithubRelease = {
   tag_name: string
   name?: string
@@ -136,18 +161,46 @@ type GithubRelease = {
   assets?: GithubAsset[]
 }
 
-const toRelease = (data: GithubRelease): ReleaseInfo => {
+export const toRelease = (data: GithubRelease): ReleaseInfo => {
   const tag = data.tag_name ?? ''
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+    throw new Error('Invalid release tag')
+  }
   const assets = data.assets ?? []
-  const apk =
-    assets.find((asset) => asset.name.toLowerCase().endsWith('.apk')) ?? null
+  const apk = assets.find((asset) => asset.name === `freeseek-${tag}-release.apk`) ?? null
+  if (apk) {
+    const url = new URL(apk.browser_download_url)
+    if (
+      url.origin !== 'https://github.com' ||
+      url.pathname !== `/${REPO}/releases/download/${tag}/${apk.name}` ||
+      url.search ||
+      url.hash ||
+      !Number.isSafeInteger(apk.size) ||
+      apk.size <= 0 ||
+      apk.size > 512 * 1024 * 1024
+    ) {
+      throw new Error('Invalid release asset')
+    }
+    if (apk.digest != null && !/^sha256:[a-f0-9]{64}$/i.test(apk.digest)) {
+      throw new Error('Invalid release digest')
+    }
+  }
   return {
     version: tag.replace(/^v/i, ''),
     tag,
     notes: (data.body ?? '').trim(),
     publishedAt: data.published_at ?? '',
-    pageUrl: data.html_url ?? `https://github.com/${REPO}/releases/latest`,
-    apk: apk ? { name: apk.name, size: apk.size, url: apk.browser_download_url } : null,
+    pageUrl: `https://github.com/${REPO}/releases/tag/${tag}`,
+    apk: apk
+      ? {
+          name: apk.name,
+          size: apk.size,
+          url: apk.browser_download_url,
+          sha256: /^sha256:[a-f0-9]{64}$/i.test(apk.digest ?? '')
+            ? (apk.digest ?? '').slice(7).toLowerCase()
+            : null,
+        }
+      : null,
   }
 }
 
@@ -259,7 +312,7 @@ export const downloadUpdate = async (): Promise<boolean> => {
     return false
   }
 
-  useUpdate.setState({ status: 'downloading', percent: 0, error: '' })
+  useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
   const listener = await UpdateNative.addListener('progress', ({ received, total }) => {
     useUpdate.setState({
       percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
@@ -268,7 +321,8 @@ export const downloadUpdate = async (): Promise<boolean> => {
 
   const fileName = fileNameFor(release)
   try {
-    const cached = await UpdateNative.hasFile({ fileName })
+    const check = { expectedSize: apk.size, sha256: apk.sha256 ?? null, version: release.version }
+    const cached = await UpdateNative.hasFile({ fileName, ...check })
     if (cached.exists) {
       useUpdate.setState({ status: 'ready', percent: 100, filePath: cached.path })
       return true
@@ -276,19 +330,15 @@ export const downloadUpdate = async (): Promise<boolean> => {
     const mirrors = MIRRORS.map((m) => mirrored(m, apk.url))
     for (const url of mirrors) {
       try {
-        const result = await UpdateNative.download({ url, fileName })
+        const result = await UpdateNative.download({ url, fileName, ...check })
         useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
         return true
       } catch {
         // 换下一个源
       }
     }
-    // 原生下载全部失败：交给系统下载器
-    await UpdateNative.enqueueSystemDownload({
-      url: mirrored(MIRRORS[1] ?? '', apk.url),
-      fileName,
-    })
-    useUpdate.setState({ status: 'available', error: 'system-download' })
+    // 不让系统下载器绕过包名、证书与摘要验证；保留手动重试入口。
+    useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
     return false
   } catch (error) {
     useUpdate.setState({ status: 'error', error: String(error) })
@@ -311,7 +361,15 @@ export const installUpdate = async (): Promise<{ installed: boolean; reason?: st
     return { installed: false, reason: 'no-file' }
   }
   try {
-    return await UpdateNative.install({ path: filePath })
+    if (!release?.apk) {
+      return { installed: false, reason: 'no-release' }
+    }
+    return await UpdateNative.install({
+      path: filePath,
+      expectedSize: release.apk.size,
+      sha256: release.apk.sha256 ?? null,
+      version: release.version,
+    })
   } catch (error) {
     return { installed: false, reason: String(error) }
   }
@@ -357,7 +415,10 @@ export const initUpdateChecker = (): void => {
 
   // 回到前台补查（WebView 切后台会暂停定时器，所以用可见性事件兜底）
   const onVisible = () => {
-    if (document.visibilityState === 'visible' && Date.now() - lastAutoCheck > FOREGROUND_INTERVAL) {
+    if (
+      document.visibilityState === 'visible' &&
+      Date.now() - lastAutoCheck > FOREGROUND_INTERVAL
+    ) {
       run('foreground')
     }
   }
