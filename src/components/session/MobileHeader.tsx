@@ -24,6 +24,7 @@ export const MobileHeader = ({
         <IconButton
           size="m"
           tone="primary"
+              hitArea
           icon={<IconMenuOutline20 />}
           aria-label={t('expandSiderbarButton')}
           onClick={openMobileSider}
@@ -38,6 +39,7 @@ export const MobileHeader = ({
             <IconButton
               size="m"
               tone="primary"
+              hitArea
               icon={<IconNewChatOutline20 />}
               aria-label={t('newChat')}
               onClick={newChat}

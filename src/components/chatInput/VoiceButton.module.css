@@ -179,3 +179,19 @@
     height: 32px;
   }
 }
+
+
+/* 视觉尺寸保持 32，可点范围补到 44 */
+.button {
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}

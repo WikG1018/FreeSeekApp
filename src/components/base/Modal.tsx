@@ -70,12 +70,70 @@ export const Modal = ({
     window.setTimeout(() => onCloseRef.current(), EXIT_MS)
   }
 
+  /** 打开前的焦点，关闭后还回去；键盘与读屏用户不会丢掉位置 */
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // 焦点移进弹窗：优先第一个可交互元素，否则弹窗本身
+    const focusFirst = () => {
+      const root = contentRef.current
+      if (!root) {
+        return
+      }
+      const target = root.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      ;(target ?? root).focus({ preventScroll: true })
+    }
+    focusFirst()
+    return () => {
+      const previous = previousFocusRef.current
+      previousFocusRef.current = null
+      // 等卸载完成再还焦点，避免元素已被移除
+      window.setTimeout(() => previous?.focus?.({ preventScroll: true }), 0)
+    }
+  }, [])
+
   useEffect(() => {
     const entry = { close: () => requestCloseRef.current() }
     openModals.push(entry)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openModals.at(-1) === entry) {
+      if (openModals.at(-1) !== entry) {
+        return
+      }
+      if (event.key === 'Escape') {
         requestCloseRef.current()
+        return
+      }
+      // Tab 焦点陷阱：只在最上层弹窗内循环
+      if (event.key === 'Tab') {
+        const root = contentRef.current
+        if (!root) {
+          return
+        }
+        const focusables = [
+          ...root.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          ),
+        ].filter((el) => el.offsetParent !== null || el === document.activeElement)
+        if (focusables.length === 0) {
+          event.preventDefault()
+          root.focus({ preventScroll: true })
+          return
+        }
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (event.shiftKey && (active === first || !root.contains(active))) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && (active === last || !root.contains(active))) {
+          event.preventDefault()
+          first.focus()
+        }
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -106,6 +164,8 @@ export const Modal = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        ref={contentRef}
+        tabIndex={-1}
       >
         <div className={styles.header}>
           <div id={titleId} className={styles.title}>
@@ -114,6 +174,7 @@ export const Modal = ({
           {closable ? (
             <IconButton
               className={styles.close}
+              hitArea
               tone="primary"
               icon={<IconCloseOutline16 />}
               aria-label={t('close')}

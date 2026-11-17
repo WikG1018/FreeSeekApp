@@ -77,6 +77,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         <div className={styles.appName}>{t('appName')}</div>
         <IconButton
           size="m"
+              hitArea
           icon={<IconPanelLeftOutline16 />}
           tooltip={t('collapseSiderbarButton')}
           tooltipPlacement="bottom"
@@ -147,16 +148,17 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           <div className={styles.userRow}>
             <span className={styles.userAvatar}>🐳</span>
             <span className={styles.userName}>FreeSeek</span>
-            <span className={styles.userMeta}>{t('settingsLocalMode')}</span>
             <div className={styles.userActions}>
               <IconButton
                 size="xl"
+              hitArea
                 icon={<IconDataOutline16 />}
                 aria-label={t('usageTitle')}
                 onClick={() => setUsageOpen(true)}
               />
               <IconButton
                 size="xl"
+              hitArea
                 icon={<IconSettingsOutline16 />}
                 aria-label={t('settings')}
                 onClick={() => openSettings()}

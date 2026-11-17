@@ -334,6 +334,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           <IconButton
             size={isMobile ? 's' : 'm'}
             tone="primary"
+            hitArea
             icon={attachOpen ? <IconCloseOutline16 /> : <IconAddOutline16 />}
             tooltip={attachOpen ? t('close') : t('attachPanelLabel')}
             aria-expanded={attachOpen}

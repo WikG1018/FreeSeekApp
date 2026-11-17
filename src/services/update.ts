@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { App as CapacitorApp } from '@capacitor/app'
 import { openExternal } from '../utils/openExternal.js'
 
 /**
@@ -322,12 +323,53 @@ export const openReleasePage = async (): Promise<void> => {
   await openExternal(release?.pageUrl ?? `https://github.com/${REPO}/releases/latest`)
 }
 
+/** 自动检查节流：防止快速重启/切前后台时反复请求 */
+const AUTO_CHECK_THROTTLE = 60_000
+/** 回到前台时，距上次检查超过这个时间才补查 */
+const FOREGROUND_INTERVAL = 30 * 60_000
+/** 常驻运行时每 6 小时检查一次 */
+const PERIODIC_INTERVAL = 6 * 3600_000
+
+let lastAutoCheck = 0
+
 /**
- * 启动后的自动检查：延迟几秒避开首屏渲染高峰，
- * 有更新时自动开始预下载（侧边栏会出现更新入口）。
+ * 自动检查更新：
+ * 1. 每次启动都查（不再被 6 小时缓存挡住），首屏渲染后 2.5 秒开始
+ * 2. 回到前台超过 30 分钟补查一次
+ * 3. 常驻运行时每 6 小时查一次
+ * 查到新版本会自动开始下载安装包，侧边栏随即出现入口。
  */
 export const initUpdateChecker = (): void => {
-  window.setTimeout(() => {
-    void checkForUpdate()
-  }, 4000)
+  const run = (reason: string) => {
+    const now = Date.now()
+    if (now - lastAutoCheck < AUTO_CHECK_THROTTLE) {
+      return
+    }
+    lastAutoCheck = now
+    void checkForUpdate({ force: true }).catch(() => {
+      // 网络异常时保持静默，用户手动点「检查更新」会看到失败提示
+    })
+    void reason
+  }
+
+  // 启动检查：避开首屏渲染高峰
+  window.setTimeout(() => run('startup'), 2500)
+
+  // 回到前台补查（WebView 切后台会暂停定时器，所以用可见性事件兜底）
+  const onVisible = () => {
+    if (document.visibilityState === 'visible' && Date.now() - lastAutoCheck > FOREGROUND_INTERVAL) {
+      run('foreground')
+    }
+  }
+  document.addEventListener('visibilitychange', onVisible)
+  if (Capacitor.isNativePlatform()) {
+    void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive && Date.now() - lastAutoCheck > FOREGROUND_INTERVAL) {
+        run('resume')
+      }
+    })
+  }
+
+  // 常驻检查
+  window.setInterval(() => run('periodic'), PERIODIC_INTERVAL)
 }

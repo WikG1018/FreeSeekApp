@@ -504,3 +504,22 @@
     }
   }
 }
+
+
+/* 手机版工具行按钮视觉尺寸保持紧凑，可点区域补到 44px。
+   只上下扩展、左右不扩，避免相邻开关互相盖住。 */
+.toggle,
+.sendButton {
+  position: relative;
+}
+
+.toggle::after,
+.sendButton::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 44px;
+  transform: translateY(-50%);
+}

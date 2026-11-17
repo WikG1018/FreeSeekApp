@@ -1,6 +1,7 @@
 /* 人设选择器：收起时只有一行触发按钮，展开是选项栏 */
 
 .trigger {
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   gap: 8px;

@@ -14,6 +14,7 @@ export const IconButton = ({
   tooltip,
   tooltipPlacement,
   className,
+  hitArea,
   ...props
 }: {
   icon: ReactNode
@@ -21,11 +22,13 @@ export const IconButton = ({
   tone?: 'tertiary' | 'primary'
   tooltip?: string
   tooltipPlacement?: TooltipPlacement
+  /** 视觉尺寸不变，把可点区域撑到 44px（小图标按钮放在窄栏里时用） */
+  hitArea?: boolean
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title'>) => {
   const button = (
     <button
       type="button"
-      className={clsx(styles.button, styles[size], styles[tone], className)}
+      className={clsx(styles.button, styles[size], styles[tone], hitArea && styles.hitArea, className)}
       aria-label={tooltip}
       {...props}
     >
