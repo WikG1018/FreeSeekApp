@@ -20,6 +20,8 @@ type Settings = {
   siderCollapsed: boolean
   /** 正文与控件缩放；允许 0.85–1.25 之间任意微调 */
   fontScale: number
+  /** 对话内显示 Token 用量与估算费用。 */
+  showUsage: boolean
 }
 
 const KEYS = {
@@ -32,6 +34,7 @@ const KEYS = {
   search: 'freeseek:search',
   siderCollapsed: 'freeseek:sider-collapsed',
   fontScale: 'freeseek:font-scale',
+  showUsage: 'freeseek:show-usage',
 } as const
 
 const read = (key: string) => {
@@ -112,6 +115,7 @@ export const useSettings = create<Settings>(() => ({
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
+  showUsage: read(KEYS.showUsage) !== 'false',
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
@@ -166,4 +170,10 @@ export const setFontScale = (fontScale: number) => {
 export const setSiderCollapsed = (siderCollapsed: boolean) => {
   write(KEYS.siderCollapsed, String(siderCollapsed))
   useSettings.setState({ siderCollapsed })
+}
+
+export const setShowUsage = (showUsage: boolean) => {
+  write(KEYS.showUsage, String(showUsage))
+  useSettings.setState({ showUsage })
+  logEvent('ui', 'usage-display.changed', { enabled: showUsage })
 }

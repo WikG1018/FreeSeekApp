@@ -106,6 +106,7 @@ export const en = {
   personaDefaultHint: 'Replies with the official default identity',
   settingsApiService: 'API service',
   settingsDataManage: 'Data management',
+  settingsShowUsage: 'Show tokens and cost in chats',
   settingsAboutApp: 'About FreeSeek',
   settingsPrivacyTitle: 'Data & privacy',
   settingsPrivacyText:

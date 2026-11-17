@@ -86,13 +86,6 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         />
       ) : null}
-      {!streaming &&
-        message.contextWarnings?.map((warning, index) => (
-          <div key={index} className={styles.contextWarning} role="note">
-            <IconWarningOutline16 />
-            <span>{t(warning.key, warning.params)}</span>
-          </div>
-        ))}
       {waiting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (

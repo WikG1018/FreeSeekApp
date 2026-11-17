@@ -105,6 +105,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       locale: settings.locale,
       theme: settings.themePreference,
       fontScale: settings.fontScale,
+      showUsage: settings.showUsage,
       thinking: settings.thinking,
       search: settings.search,
       voice: settings.ttsVoice,

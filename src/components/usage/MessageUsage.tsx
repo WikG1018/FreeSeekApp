@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { computeReplyUsage, usePricing } from '../../services/usage.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
+import { useSettings } from '../../services/settings.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
 import styles from './MessageUsage.module.css'
 
@@ -23,7 +24,8 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
   const t = useTranslate()
   const pricing = usePricing((state) => state.pricing)
   const [expanded, setExpanded] = useState(false)
-  if (!message.usage) {
+  const showUsage = useSettings((state) => state.showUsage)
+  if (!showUsage || !message.usage) {
     return null
   }
   const detail = computeReplyUsage(message, pricing)

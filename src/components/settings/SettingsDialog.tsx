@@ -38,6 +38,7 @@ import {
   setLocale,
   setThemePreference,
   setTtsVoice,
+  setShowUsage,
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
@@ -209,7 +210,7 @@ const SettingsRoot = () => {
   )
 }
 
-/** 一级目录：只放导航行，不放输入框与操作按钮 */
+/** 设置首页：导航与对话显示偏好。 */
 const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
   const apiKey = useSettings((state) => state.apiKey)
@@ -217,6 +218,7 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
   const locale = useSettings((state) => state.locale)
   const ttsVoice = useSettings((state) => state.ttsVoice)
   const fontScale = useSettings((state) => state.fontScale)
+  const showUsage = useSettings((state) => state.showUsage)
   const sessionCount = useChatStore((state) => state.sessions.length)
   const fontLabel =
     fontScale < 0.95
@@ -290,6 +292,18 @@ const HomePage = ({ push }: { push: (page: SettingsPageId) => void }) => {
         />
       </Section>
       <Section title={t('settingsSectionUsage')}>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showUsage}
+          className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
+          onClick={() => setShowUsage(!showUsage)}
+        >
+          <span className={styles.rowLabel}>{t('settingsShowUsage')}</span>
+          <span className={styles.toggleTrack} aria-hidden="true">
+            <span className={styles.toggleThumb} />
+          </span>
+        </button>
         <Row
           icon={<IconDataOutline16 />}
           label={t('usageTitle')}

@@ -5,6 +5,70 @@ import { unzipSync, strFromU8 } from 'fflate'
 
 export const runStabilityCases = async ({ run, behavior, uploads, maxActive, root }) => {
   await run(
+    'chat usage display switch persists while costs remain recorded and attachment notes stay hidden',
+    async (page) => {
+      await page.setViewportSize({ width: 1100, height: 850 })
+      await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const session = f.session({
+          title: '显示偏好验收',
+          messages: [
+            f.user('u', '演示问题'),
+            f.assistant('a', '演示回答', {
+              usage: {
+                input_tokens: 100,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 50,
+              },
+              contextWarnings: [
+                { key: 'contextAttachmentsSkipped', params: { count: 1, files: '测试附件.docx' } },
+              ],
+            }),
+          ],
+        })
+        await a.seed([session])
+        localStorage.setItem('freeseek:active-session', session.id)
+      })
+      await page.getByText('演示回答', { exact: true }).waitFor()
+      assert.equal(await page.getByText(/本轮未读取/).count(), 0)
+      assert.equal(await page.getByText(/150 tok/).count(), 2)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+      const control = page.getByRole('switch', { name: '对话中显示 Token 与费用', exact: true })
+      assert.equal(await control.getAttribute('aria-checked'), 'true')
+      await control.click()
+      assert.equal(await control.getAttribute('aria-checked'), 'false')
+      assert.equal(await page.evaluate(() => localStorage.getItem('freeseek:show-usage')), 'false')
+      await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      await page.getByRole('dialog', { name: '设置', exact: true }).waitFor({ state: 'hidden' })
+      assert.equal(await page.getByText(/150 tok/).count(), 0)
+      await page.reload()
+      await page.getByText('演示回答', { exact: true }).waitFor()
+      assert.equal(await page.getByText(/150 tok/).count(), 0)
+      assert.equal(await page.getByText(/本轮未读取/).count(), 0)
+      const recorded = await page.evaluate(async () => {
+        const stats = await window.__audit.usage.collectUsage()
+        return {
+          requests: stats.total.requests,
+          input: stats.total.cacheMissTokens,
+          output: stats.total.outputTokens,
+        }
+      })
+      assert.deepEqual(recorded, { requests: 1, input: 100, output: 50 })
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+      const saved = page.getByRole('switch', { name: '对话中显示 Token 与费用', exact: true })
+      assert.equal(await saved.getAttribute('aria-checked'), 'false')
+      await saved.focus()
+      await page.keyboard.press('Space')
+      assert.equal(await saved.getAttribute('aria-checked'), 'true')
+      await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      await page.getByRole('dialog', { name: '设置', exact: true }).waitFor({ state: 'hidden' })
+      assert.equal(await page.getByText(/150 tok/).count(), 2)
+    }
+  )
+
+  await run(
     'switching an early answer into a long branch keeps its version selector visible',
     async (page) => {
       await page.evaluate(async () => {

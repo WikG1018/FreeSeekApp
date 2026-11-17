@@ -6,6 +6,7 @@ import { getVisibleMessages } from '../../services/chat/branches.js'
 import { newChat } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { computeMessageUsage, usePricing } from '../../services/usage.js'
+import { useSettings } from '../../services/settings.js'
 import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
@@ -45,6 +46,7 @@ export const SessionView = ({
 }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const showUsage = useSettings((state) => state.showUsage)
   const title = session.title || t('untitledChat')
   const tokens = useMemo(() => sessionTokens(session), [session])
   const pricing = usePricing((state) => state.pricing)
@@ -69,7 +71,7 @@ export const SessionView = ({
         <div className={clsx(styles.header, scrolled && styles.headerScrolled)}>
           <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
             <div className={styles.title}>{title}</div>
-            {tokens > 0 ? (
+            {showUsage && tokens > 0 ? (
               <span className={styles.usage} title={t('usageTokensTitle')}>
                 {formatTokens(tokens)} tok · {formatCost(cost)}
               </span>
@@ -85,11 +87,7 @@ export const SessionView = ({
           </button>
         </div>
       )}
-      <MessageList
-        session={session}
-        streaming={streaming}
-        onScrolledChange={onScrolledChange}
-      />
+      <MessageList session={session} streaming={streaming} onScrolledChange={onScrolledChange} />
       <div className={styles.dock}>
         <div className={styles.dockInner}>
           <ChatInput sessionId={session.id} />

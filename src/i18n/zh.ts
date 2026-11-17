@@ -101,6 +101,7 @@ export const zh = {
   personaDefaultHint: '使用官方默认身份回复',
   settingsApiService: 'API 服务',
   settingsDataManage: '数据管理',
+  settingsShowUsage: '对话中显示 Token 与费用',
   settingsAboutApp: '关于 FreeSeek',
   settingsPrivacyTitle: '数据与隐私',
   settingsPrivacyText:
