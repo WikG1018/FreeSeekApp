@@ -198,6 +198,7 @@ const SettingsRoot = () => {
         </div>
       </div>
       {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      {historyImport.result !== null ? <ImportDone historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
     </>
   )
@@ -861,29 +862,99 @@ const DeleteAllSetting = ({
 }
 
 /** 覆盖导入的二次确认 */
+/**
+ * 覆盖导入确认：分两步，第一步强调「会删掉现有聊天」，第二步再确认一次，
+ * 两次都显示当前对话数量，避免误操作把本地记录清空。
+ */
 const ImportConfirm = ({
   historyImport,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
+  const [stage, setStage] = useState<'warn' | 'final'>('warn')
+  const sessionCount = useChatStore((state) => state.sessions.length)
+  const fileName = historyImport.file?.name ?? ''
+
+  if (stage === 'warn') {
+    return (
+      <Modal
+        title={t('historyImportConfirmTitle')}
+        centered
+        onClose={historyImport.cancel}
+        footer={
+          <>
+            <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
+              {t('cancel')}
+            </Button>
+            <Button variant="danger" size="m" onClick={() => setStage('final')}>
+              {t('historyImportContinue')}
+            </Button>
+          </>
+        }
+      >
+        <div className={styles.importFile}>📦 {fileName}</div>
+        <div className={styles.importWarn}>
+          <div className={styles.importWarnTitle}>{t('historyImportWarnTitle')}</div>
+          <div className={styles.importWarnBody}>
+            {t('historyImportWarnBody', { count: sessionCount })}
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   return (
     <Modal
-      title={t('historyImportConfirmTitle')}
+      title={t('historyImportFinalTitle')}
       centered
       onClose={historyImport.cancel}
       footer={
         <>
-          <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
-            {t('cancel')}
+          <Button variant="outlined" size="m" autoFocus onClick={() => setStage('warn')}>
+            {t('historyImportBack')}
           </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
-            {t('historyImportConfirm')}
+          <Button variant="danger" size="m" onClick={() => void historyImport.confirm()}>
+            {t('historyImportFinalConfirm')}
           </Button>
         </>
       }
     >
-      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+      <div className={styles.importWarnFinal}>
+        {t('historyImportFinalBody', { count: sessionCount })}
+      </div>
+    </Modal>
+  )
+}
+
+/** 导入完成：提示并给「立即重启」，让界面切到新数据 */
+const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHistoryImport> }) => {
+  const t = useTranslate()
+  const count = historyImport.result ?? 0
+  return (
+    <Modal
+      title={t('historyImportDoneTitle')}
+      centered
+      onClose={historyImport.dismissResult}
+      footer={
+        <>
+          <Button variant="outlined" size="m" onClick={historyImport.dismissResult}>
+            {t('restartLater')}
+          </Button>
+          <Button
+            size="m"
+            onClick={() => {
+              window.location.reload()
+            }}
+          >
+            {t('restartNow')}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.importDone}>
+        {t('historyImportDoneBody', { count })}
+      </div>
     </Modal>
   )
 }
@@ -910,6 +981,8 @@ const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
+  /** 成功导入的会话数；非 null 时弹出「导入完成」对话框 */
+  const [result, setResult] = useState<number | null>(null)
   const importing = useRef(false)
 
   const confirm = async () => {
@@ -923,6 +996,7 @@ const useHistoryImport = () => {
     try {
       const count = await importHistory(file)
       setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
+      setResult(count)
     } catch {
       setStatus({ key: 'historyImportFailed', error: true })
     } finally {
@@ -931,7 +1005,16 @@ const useHistoryImport = () => {
     }
   }
 
-  return { file, busy, status, select: setFile, cancel: () => setFile(null), confirm }
+  return {
+    file,
+    busy,
+    status,
+    result,
+    select: setFile,
+    cancel: () => setFile(null),
+    dismissResult: () => setResult(null),
+    confirm,
+  }
 }
 
 /** 导入 = 覆盖：用选中文件替换本地全部会话与附件。 */

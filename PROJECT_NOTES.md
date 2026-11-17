@@ -187,6 +187,17 @@
 - 坑：FileProvider 必须加 `<external-files-path name="updates" path="updates/"/>`，否则安装器拿不到 URI；Android 8+ 还需 `canRequestPackageInstalls` 检查并跳「安装未知应用」授权页。
 - E2E：`update-check.mjs` 用 Playwright `route` 模拟 GitHub Release（v9.9.9），断言自动检查写缓存、侧边栏入口、关于页版本与更新说明弹窗；check.mjs 42 项全过。
 
+
+## v1.5.1 导入二次确认 + 原生更新请求（2026-11-17）
+
+用户反馈：导入后没有提示重启；导入会清空原记录的提示不够明显、缺少二次确认。
+
+- `ImportConfirm` 改成两段式（warn → final），两段都显示当前会话数；warning 用红色卡片强调「无法恢复」。
+- `useHistoryImport` 增加 `result`，成功后弹 `ImportDone`，提供「立即重启」（`location.reload()`），确保界面切到导入的数据。
+- 另外发现并修复：更新检查的镜像请求在 WebView 里被 CORS 拦（镜像不回 `Access-Control-Allow-Origin`）。现在 Android 走 `UpdatePlugin.get()`（HttpURLConnection），网页端仍用 fetch。
+- 应用名核对：`strings.xml` 自 v1.1.0 起就是 FreeSeek；用 aapt 逐个版本 dump 确认 v1.1.0–v1.5.0 全部 `application-label:'FreeSeek'`，只有 v1.0 是「畅聊」。用户看到中文名 => 旧版未替换或启动器标签缓存，卸载重装可解。
+- E2E：`import-check.mjs` 6/6（两步确认文案与数量、完成弹窗、重启后数据仍在）；其余 42+18+7+12 全绿。
+
 ## 已知取舍
 
 

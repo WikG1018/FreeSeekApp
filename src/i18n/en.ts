@@ -277,6 +277,19 @@ export const en = {
   historyImport: 'Import chat history',
   historyImportConfirm: 'Import',
   historyImportConfirmTitle: 'Import chat history?',
+  historyImportWarnTitle: 'Importing deletes your current chats',
+  historyImportWarnBody:
+    'You have {count} conversations. Importing replaces all of them with the backup; deleted chats and attachments cannot be recovered.',
+  historyImportContinue: 'I understand, continue',
+  historyImportFinalTitle: 'Confirm once more',
+  historyImportFinalBody: 'This permanently deletes your current {count} conversations and replaces them with the backup. Continue?',
+  historyImportBack: 'Back',
+  historyImportFinalConfirm: 'Overwrite and import',
+  historyImportDoneTitle: 'Import finished',
+  historyImportDoneBody:
+    '{count} conversations imported. Restart the app now so it loads the imported data completely.',
+  restartNow: 'Restart now',
+  restartLater: 'Later',
   historyImportConfirmDescription:
     'The uploaded chat history will replace all your current chats. Import anyway?',
   historyImportDescription:

@@ -18,6 +18,8 @@ const CACHE_TTL = 6 * 3600_000
 const FETCH_TIMEOUT = 8000
 
 type NativeUpdate = {
+  /** 原生代发 GET：镜像站普遍不带 CORS 头，WebView 的 fetch 会被拦 */
+  get: (o: { url: string; timeoutMs?: number }) => Promise<{ status: number; body: string }>
   hasFile: (o: { fileName: string }) => Promise<{ exists: boolean; path: string; size: number }>
   download: (o: { url: string; fileName: string }) => Promise<{
     path: string
@@ -162,15 +164,25 @@ const fetchWithTimeout = async (url: string, timeout = FETCH_TIMEOUT): Promise<R
   }
 }
 
+/** 读取一个 URL 的文本：原生走插件（不受 CORS 限制），网页端走 fetch */
+const readText = async (url: string): Promise<{ status: number; text: string }> => {
+  if (Capacitor.isNativePlatform()) {
+    const result = await UpdateNative.get({ url, timeoutMs: FETCH_TIMEOUT })
+    return { status: result.status, text: result.body }
+  }
+  const response = await fetchWithTimeout(url)
+  return { status: response.status, text: await response.text() }
+}
+
 /** 依次尝试直连与镜像，返回第一个可用结果；全部失败返回 null */
 const fetchRelease = async (): Promise<{ release: ReleaseInfo; mirror: string } | null> => {
   for (const mirror of MIRRORS) {
     try {
-      const response = await fetchWithTimeout(`${mirror}${RELEASE_API}`)
-      if (!response.ok) {
+      const { status, text } = await readText(`${mirror}${RELEASE_API}`)
+      if (status !== 200) {
         continue
       }
-      const data = (await response.json()) as GithubRelease
+      const data = JSON.parse(text) as GithubRelease
       if (!data?.tag_name) {
         continue
       }

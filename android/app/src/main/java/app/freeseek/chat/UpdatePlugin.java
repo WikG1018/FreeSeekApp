@@ -48,6 +48,55 @@ public class UpdatePlugin extends Plugin {
         return new File(updateDir(), fileName.endsWith(".apk") ? fileName : fileName + ".apk");
     }
 
+    /**
+     * 代发 GET 请求：WebView 里的 fetch 受 CORS 限制，国内镜像大多不带 CORS 头，
+     * 由原生发请求可以绕开这个限制（只用于读取 Release 元数据）。
+     */
+    @PluginMethod
+    public void get(PluginCall call) {
+        String url = call.getString("url", "");
+        int timeout = call.getInt("timeoutMs", 8000);
+        if (url.isEmpty()) {
+            call.reject("empty url");
+            return;
+        }
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(timeout);
+                connection.setReadTimeout(timeout);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "FreeSeek-Updater");
+                int status = connection.getResponseCode();
+                java.io.InputStream stream = status >= 400
+                    ? connection.getErrorStream()
+                    : connection.getInputStream();
+                StringBuilder text = new StringBuilder();
+                if (stream != null) {
+                    try (java.io.InputStream in = stream) {
+                        byte[] buffer = new byte[16 * 1024];
+                        int read;
+                        while ((read = in.read(buffer)) != -1 && text.length() < 2_000_000) {
+                            text.append(new String(buffer, 0, read, "UTF-8"));
+                        }
+                    }
+                }
+                JSObject result = new JSObject();
+                result.put("status", status);
+                result.put("body", text.toString());
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject(error.getMessage() == null ? "request failed" : error.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }).start();
+    }
+
     @PluginMethod
     public void hasFile(PluginCall call) {
         String name = call.getString("fileName", "");
