@@ -74,6 +74,7 @@ const sparkline = (values, width = 640, height = 140) => {
     .join(' ')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="下载量趋势">
   <rect width="${width}" height="${height}" fill="#f6f8fc" rx="12"/>
+  ${values.length === 1 ? `<circle cx="${width / 2}" cy="${(height - 12 - (values[0] / Math.max(values[0], 1)) * (height - 24)).toFixed(1)}" r="4" fill="#2563eb"/>` : ''}
   <polyline fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${points}"/>
   <polyline fill="url(#g)" stroke="none" points="0,${height} ${points} ${width},${height}"/>
   <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563eb" stop-opacity="0.22"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/></linearGradient></defs>
@@ -116,8 +117,8 @@ const main = async () => {
     const views = await api(`/repos/${REPO}/traffic/views`)
     const clones = await api(`/repos/${REPO}/traffic/clones`)
     traffic = { views: views.count, viewers: views.uniques, clones: clones.count, cloners: clones.uniques }
-  } catch {
-    // 权限不足时跳过，不影响下载统计
+  } catch (error) {
+    console.warn(`traffic 跳过（${error.message}），不影响下载统计`)
   }
   if (traffic) {
     const trafficFile = join(OUT_DIR, 'traffic.csv')
