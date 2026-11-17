@@ -22,6 +22,29 @@ const swipe = async (page, start, end, cancel = false) => {
 
 export const runNavigationCases = async ({ run }) => {
   await run(
+    'drawer commits the physical release point when Android coalesces the last move',
+    async (page) => {
+      await page.evaluate(() => {
+        const target = document.querySelector('main')
+        const send = (name, x) => {
+          const point = new Touch({ identifier: 4, target, clientX: x, clientY: 270 })
+          target.dispatchEvent(
+            new TouchEvent(name, {
+              bubbles: true,
+              cancelable: true,
+              touches: name === 'touchend' ? [] : [point],
+              changedTouches: [point],
+            })
+          )
+        }
+        send('touchstart', 85)
+        send('touchmove', 100)
+        send('touchend', 280)
+      })
+      await page.getByRole('dialog', { name: '历史对话', exact: true }).waitFor()
+    }
+  )
+  await run(
     'large sidebar lists render in batches while search includes the complete history',
     async (page) => {
       await page.evaluate(() => {

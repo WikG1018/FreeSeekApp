@@ -151,3 +151,10 @@ body.change-theme *::after {
     scroll-behavior: auto !important;
   }
 }
+
+/* 跟手期间胶囊保持原有实底；避免每一帧重复模糊整个滚动层。 */
+[data-sider-dragging] [data-testid='chat-header'] > *,
+[data-sider-dragging] [data-testid='chat-composer'] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

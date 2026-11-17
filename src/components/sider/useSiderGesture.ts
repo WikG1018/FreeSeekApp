@@ -26,6 +26,18 @@ export const useSiderGesture = (frameRef: RefObject<HTMLDivElement>, enabled: bo
         }
       | undefined
     let suppressClickUntil = 0
+    const recordPosition = (x: number, now: number) => {
+      if (!gesture) {
+        return
+      }
+      if (x !== gesture.lastX) {
+        gesture.velocity = (x - gesture.lastX) / Math.max(1, now - gesture.lastTime)
+        gesture.lastX = x
+        gesture.lastTime = now
+      }
+      const distance = x - gesture.x
+      gesture.progress = Math.max(0, Math.min(1, (gesture.open ? 1 : 0) + distance / gesture.width))
+    }
     const finish = (cancelled: boolean) => {
       const current = gesture
       gesture = undefined
@@ -147,13 +159,21 @@ export const useSiderGesture = (frameRef: RefObject<HTMLDivElement>, enabled: bo
         useMobileSider.setState({ dragging: true })
       }
       event.preventDefault()
-      gesture.velocity = (touch.clientX - gesture.lastX) / Math.max(1, now - gesture.lastTime)
-      gesture.lastX = touch.clientX
-      gesture.lastTime = now
-      gesture.progress = Math.max(0, Math.min(1, (gesture.open ? 1 : 0) + dx / gesture.width))
+      recordPosition(touch.clientX, now)
       frame.style.setProperty('--sider-progress', String(gesture.progress))
     }
-    const end = () => finish(false)
+    const end = (event: TouchEvent) => {
+      if (gesture?.dragging) {
+        // 渲染繁忙时最后一次 move 可能被合并，松手位置仍在 changedTouches 中。
+        const finalTouch = Array.from(event.changedTouches).find(
+          (touch) => touch.identifier === gesture?.id
+        )
+        if (finalTouch) {
+          recordPosition(finalTouch.clientX, performance.now())
+        }
+      }
+      finish(false)
+    }
     const cancel = () => finish(true)
     const click = (event: MouseEvent) => {
       if (performance.now() < suppressClickUntil) {
