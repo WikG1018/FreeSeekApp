@@ -312,6 +312,11 @@ export const en = {
   uploadUnsupportedFormat:
     'The selected files include unsupported formats. Please convert them and try again. Supported: PDF, DOC, XLSX, PPT, images, text, code, and more.',
   uploadFileStatusFailed: 'Upload failed',
+  uploadUnauthorized: 'Upload failed: API key is invalid or expired — reconfigure it',
+  uploadInsufficientBalance: 'Upload failed: insufficient balance — top up first',
+  uploadTooLarge: 'Upload failed: file exceeds the API limit',
+  uploadRateLimited: 'Upload failed: too many requests — try again shortly',
+  uploadNetworkError: 'Upload failed: network error — check your connection',
   uploadRetry: '{message}. Click to retry',
   chatInputPlaceholderChat: 'Enter a message',
   deactivatedThinkTooltip: 'Think before responding to solve reasoning problems',

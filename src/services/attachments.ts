@@ -66,8 +66,22 @@ export const describeUploadError = (error: unknown): TranslationMessage => {
   if (error instanceof UnsupportedImageError) {
     return { key: 'uploadImageUnsupported' }
   }
-  if (classifyApiError(error) === 'serverBusy') {
-    return { key: 'uploadServerBusy' }
+  // 逐类给出可操作的原因；一律「上传失败」会让用户以为是文件问题，实际可能是 Key 或网络
+  switch (classifyApiError(error)) {
+    case 'unauthorized':
+      return { key: 'uploadUnauthorized' }
+    case 'insufficientBalance':
+      return { key: 'uploadInsufficientBalance' }
+    case 'tooLarge':
+      return { key: 'uploadTooLarge' }
+    case 'rateLimited':
+      return { key: 'uploadRateLimited' }
+    case 'serverBusy':
+      return { key: 'uploadServerBusy' }
+    case 'network':
+      return { key: 'uploadNetworkError' }
+    default:
+      break
   }
   if (getUploadErrorInfo(error)?.code === 'parseFailed') {
     return { key: 'uploadParseFailed' }

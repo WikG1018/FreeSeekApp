@@ -305,6 +305,11 @@ export const zh = {
   uploadUnsupportedFormat:
     '上传的文件包含暂未支持的文件格式，请转换文件格式后重试。支持 PDF、DOC、XLSX、PPT、图片、文本、代码等。',
   uploadFileStatusFailed: '上传失败',
+  uploadUnauthorized: '上传失败：API Key 无效或已过期，请重新配置',
+  uploadInsufficientBalance: '上传失败：账户余额不足，请先充值',
+  uploadTooLarge: '上传失败：文件超过接口上限',
+  uploadRateLimited: '上传失败：请求过于频繁，稍后再试',
+  uploadNetworkError: '上传失败：网络异常，请检查网络后重试',
   uploadRetry: '{message}，点击重试',
   chatInputPlaceholderChat: '发消息或按住说话',
   deactivatedThinkTooltip: '先思考后回答，解决推理问题',
