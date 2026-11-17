@@ -127,19 +127,19 @@ public class DonatePlugin extends Plugin {
     }
 
     /**
-     * 尝试拉起支付 App。
-     * 优先用包名直接启动（稳定），失败再用 scheme；都失败返回 opened=false。
+     * 拉起支付 App：给了 scheme 就优先用 scheme（能直达收款页），
+     * scheme 打不开再退化为按包名启动首页。
      */
     @PluginMethod
     public void openApp(PluginCall call) {
         String target = call.getString("target", "alipay");
         boolean alipay = !"wechat".equals(target);
         String pkg = alipay ? ALIPAY_PACKAGE : WECHAT_PACKAGE;
-        String scheme = call.getString("scheme", alipay ? "alipays://" : "weixin://");
+        String scheme = call.getString("scheme", "");
 
-        boolean opened = launchPackage(pkg);
-        if (!opened && scheme != null && !scheme.isEmpty()) {
-            opened = launchUrl(scheme);
+        boolean opened = scheme != null && !scheme.isEmpty() && launchUrl(scheme);
+        if (!opened) {
+            opened = launchPackage(pkg);
         }
         JSObject result = new JSObject();
         result.put("opened", opened);

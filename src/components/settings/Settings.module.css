@@ -568,13 +568,15 @@
 
 .tutorialActions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
   margin-top: 12px;
 }
 
 .tutorialButton {
   height: 42px;
+  padding: 0 6px;
+  font-size: 12px;
   border: none;
   border-radius: 12px;
   background: var(--fs-brand);

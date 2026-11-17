@@ -1,0 +1,321 @@
+import { create } from 'zustand'
+import { Capacitor, registerPlugin } from '@capacitor/core'
+import { openExternal } from '../utils/openExternal.js'
+
+/**
+ * 应用内更新：查 GitHub Release → 自动预下载 APK → 一键安装。
+ *
+ * - 多源探测：GitHub API 直连 + 国内常用的 GitHub 反代前缀，谁先返回用谁
+ * - 结果缓存 6 小时，避免每次启动都请求
+ * - 下载优先走原生流式下载（有进度、可断点式续用已下好的包），失败退回系统下载器
+ */
+const REPO = 'WikG1018/freeseek'
+const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
+/** 国内网络常见的 GitHub 反代；顺序即优先级 */
+const MIRRORS = ['', 'https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']
+const CACHE_KEY = 'freeseek:update-cache'
+const CACHE_TTL = 6 * 3600_000
+const FETCH_TIMEOUT = 8000
+
+type NativeUpdate = {
+  hasFile: (o: { fileName: string }) => Promise<{ exists: boolean; path: string; size: number }>
+  download: (o: { url: string; fileName: string }) => Promise<{
+    path: string
+    size: number
+    cached?: boolean
+  }>
+  cancel: () => Promise<void>
+  install: (o: { path: string }) => Promise<{ installed: boolean; reason?: string }>
+  enqueueSystemDownload: (o: { url: string; fileName: string }) => Promise<{
+    enqueued: boolean
+    reason?: string
+  }>
+  addListener: (
+    event: 'progress',
+    cb: (payload: { received: number; total: number }) => void
+  ) => Promise<{ remove: () => void }>
+}
+
+const UpdateNative = registerPlugin<NativeUpdate>('Update')
+
+export type ReleaseInfo = {
+  version: string
+  tag: string
+  notes: string
+  publishedAt: string
+  pageUrl: string
+  apk: { name: string; size: number; url: string } | null
+}
+
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'latest'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'error'
+
+type UpdateState = {
+  status: UpdateStatus
+  release: ReleaseInfo | null
+  /** 下载进度 0–100；未知总大小时为 -1 */
+  percent: number
+  filePath: string
+  error: string
+  lastCheckedAt: number
+}
+
+export const useUpdate = create<UpdateState>(() => ({
+  status: 'idle',
+  release: null,
+  percent: 0,
+  filePath: '',
+  error: '',
+  lastCheckedAt: 0,
+}))
+
+const appVersion = (): string =>
+  document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? '0.0.0'
+
+export const currentVersion = appVersion
+
+const parseVersion = (value: string): number[] =>
+  value
+    .replace(/^v/i, '')
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10) || 0)
+
+/** 严格 semver 比较：latest > current 才提示更新 */
+export const isNewer = (latest: string, current: string): boolean => {
+  const a = parseVersion(latest)
+  const b = parseVersion(current)
+  const length = Math.max(a.length, b.length)
+  for (let i = 0; i < length; i += 1) {
+    const left = a[i] ?? 0
+    const right = b[i] ?? 0
+    if (left !== right) {
+      return left > right
+    }
+  }
+  return false
+}
+
+type Cache = { at: number; release: ReleaseInfo | null }
+
+const readCache = (): Cache => {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null')
+    if (typeof parsed === 'object' && parsed !== null && 'at' in parsed) {
+      return parsed as Cache
+    }
+  } catch {
+    // 忽略缓存损坏
+  }
+  return { at: 0, release: null }
+}
+
+const writeCache = (release: ReleaseInfo | null) => {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), release }))
+  } catch {
+    // 存储不可用时只在内存生效
+  }
+}
+
+type GithubAsset = { name: string; size: number; browser_download_url: string }
+type GithubRelease = {
+  tag_name: string
+  name?: string
+  body?: string
+  published_at?: string
+  html_url?: string
+  assets?: GithubAsset[]
+}
+
+const toRelease = (data: GithubRelease): ReleaseInfo => {
+  const tag = data.tag_name ?? ''
+  const assets = data.assets ?? []
+  const apk =
+    assets.find((asset) => asset.name.toLowerCase().endsWith('.apk')) ?? null
+  return {
+    version: tag.replace(/^v/i, ''),
+    tag,
+    notes: (data.body ?? '').trim(),
+    publishedAt: data.published_at ?? '',
+    pageUrl: data.html_url ?? `https://github.com/${REPO}/releases/latest`,
+    apk: apk ? { name: apk.name, size: apk.size, url: apk.browser_download_url } : null,
+  }
+}
+
+const fetchWithTimeout = async (url: string, timeout = FETCH_TIMEOUT): Promise<Response> => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeout)
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/vnd.github+json' },
+      cache: 'no-store',
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 依次尝试直连与镜像，返回第一个可用结果；全部失败返回 null */
+const fetchRelease = async (): Promise<{ release: ReleaseInfo; mirror: string } | null> => {
+  for (const mirror of MIRRORS) {
+    try {
+      const response = await fetchWithTimeout(`${mirror}${RELEASE_API}`)
+      if (!response.ok) {
+        continue
+      }
+      const data = (await response.json()) as GithubRelease
+      if (!data?.tag_name) {
+        continue
+      }
+      return { release: toRelease(data), mirror }
+    } catch {
+      // 换下一个源
+    }
+  }
+  return null
+}
+
+/** 把资源地址映射到某个镜像前缀下 */
+const mirrored = (mirror: string, url: string) => (mirror ? `${mirror}${url}` : url)
+
+const fileNameFor = (release: ReleaseInfo) => `freeseek-${release.version}.apk`
+
+/** 检查更新；返回是否有新版本 */
+export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> => {
+  const state = useUpdate.getState()
+  if (state.status === 'checking' || state.status === 'downloading') {
+    return false
+  }
+  const cache = readCache()
+  const version = currentVersion()
+  if (!force && cache.release && Date.now() - cache.at < CACHE_TTL) {
+    const newer = isNewer(cache.release.version, version)
+    useUpdate.setState({
+      release: cache.release,
+      status: newer ? 'available' : 'latest',
+      lastCheckedAt: cache.at,
+    })
+    return newer
+  }
+
+  useUpdate.setState({ status: 'checking', error: '' })
+  try {
+    const found = await fetchRelease()
+    if (!found) {
+      useUpdate.setState({ status: 'error', error: 'network' })
+      return false
+    }
+    writeCache(found.release)
+    const newer = isNewer(found.release.version, version)
+    useUpdate.setState({
+      release: found.release,
+      status: newer ? 'available' : 'latest',
+      lastCheckedAt: Date.now(),
+      error: '',
+    })
+    if (newer) {
+      void downloadUpdate()
+    }
+    return newer
+  } catch {
+    useUpdate.setState({ status: 'error', error: 'network' })
+    return false
+  }
+}
+
+/** 下载更新包：原生流式下载（带进度），失败退回系统下载器 */
+export const downloadUpdate = async (): Promise<boolean> => {
+  const { release, status } = useUpdate.getState()
+  const apk = release?.apk
+  if (!apk) {
+    return false
+  }
+  if (status === 'downloading' || status === 'ready') {
+    return status === 'ready'
+  }
+  if (!Capacitor.isNativePlatform()) {
+    // 网页端不做预下载，直接给出发布页
+    useUpdate.setState({ status: 'available' })
+    return false
+  }
+
+  useUpdate.setState({ status: 'downloading', percent: 0, error: '' })
+  const listener = await UpdateNative.addListener('progress', ({ received, total }) => {
+    useUpdate.setState({
+      percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
+    })
+  }).catch(() => null)
+
+  const fileName = fileNameFor(release)
+  try {
+    const cached = await UpdateNative.hasFile({ fileName })
+    if (cached.exists) {
+      useUpdate.setState({ status: 'ready', percent: 100, filePath: cached.path })
+      return true
+    }
+    const mirrors = MIRRORS.map((m) => mirrored(m, apk.url))
+    for (const url of mirrors) {
+      try {
+        const result = await UpdateNative.download({ url, fileName })
+        useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
+        return true
+      } catch {
+        // 换下一个源
+      }
+    }
+    // 原生下载全部失败：交给系统下载器
+    await UpdateNative.enqueueSystemDownload({
+      url: mirrored(MIRRORS[1] ?? '', apk.url),
+      fileName,
+    })
+    useUpdate.setState({ status: 'available', error: 'system-download' })
+    return false
+  } catch (error) {
+    useUpdate.setState({ status: 'error', error: String(error) })
+    return false
+  } finally {
+    void listener?.remove()
+  }
+}
+
+/** 安装已下载的包；返回是否成功拉起安装器 */
+export const installUpdate = async (): Promise<{ installed: boolean; reason?: string }> => {
+  const { filePath, release } = useUpdate.getState()
+  if (!Capacitor.isNativePlatform()) {
+    if (release) {
+      await openExternal(release.pageUrl)
+    }
+    return { installed: false, reason: 'web' }
+  }
+  if (!filePath) {
+    return { installed: false, reason: 'no-file' }
+  }
+  try {
+    return await UpdateNative.install({ path: filePath })
+  } catch (error) {
+    return { installed: false, reason: String(error) }
+  }
+}
+
+/** 打开发布页（查看更新说明 / 手动下载） */
+export const openReleasePage = async (): Promise<void> => {
+  const { release } = useUpdate.getState()
+  await openExternal(release?.pageUrl ?? `https://github.com/${REPO}/releases/latest`)
+}
+
+/**
+ * 启动后的自动检查：延迟几秒避开首屏渲染高峰，
+ * 有更新时自动开始预下载（侧边栏会出现更新入口）。
+ */
+export const initUpdateChecker = (): void => {
+  window.setTimeout(() => {
+    void checkForUpdate()
+  }, 4000)
+}

@@ -15,6 +15,7 @@ import {
   IconEyeOutline16,
   IconFollowsystemOutline16,
   IconGlobeLanguageOutline14,
+  IconRefreshOutline16,
   IconInfoOutline16,
   IconLightOutline16,
   IconPlayMediaOutline16,
@@ -49,6 +50,12 @@ import { PricingForm } from '../usage/PricingForm.js'
 import { collectUsage, todayKey } from '../../services/usage.js'
 import { openExternal } from '../../utils/openExternal.js'
 import {
+  checkForUpdate,
+  downloadUpdate,
+  useUpdate,
+} from '../../services/update.js'
+import { runInstall, UpdateDialog, useUpdateStatusText } from '../update/Update.js'
+import {
   closeSettings,
   finishCloseSettings,
   useSettingsDialog,
@@ -62,6 +69,7 @@ const APP_VERSION =
 
 /** DeepSeek 开放平台：充值与创建 API Key（应用内浏览器打开，需登录官方账号） */
 const TOPUP_URL = 'https://platform.deepseek.com/top_up'
+const BALANCE_URL = 'https://platform.deepseek.com/usage'
 const API_KEYS_URL = 'https://platform.deepseek.com/api_keys'
 
 const PAGE_TITLES: Record<SettingsPageId, TranslationKey> = {
@@ -591,6 +599,13 @@ const ApiTutorial = () => {
         >
           {t('settingsApiOpenTopup')}
         </button>
+        <button
+          type="button"
+          className={styles.tutorialButton}
+          onClick={() => void openExternal(BALANCE_URL)}
+        >
+          {t('settingsApiOpenBalance')}
+        </button>
       </div>
       <div className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</div>
     </div>
@@ -601,6 +616,10 @@ const ApiTutorial = () => {
 const AboutPage = () => {
   const t = useTranslate()
   const [licenseOpen, setLicenseOpen] = useState(false)
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const updateStatus = useUpdate((state) => state.status)
+  const updateRelease = useUpdate((state) => state.release)
+  const updateStatusText = useUpdateStatusText()
   return (
     <>
       <div className={styles.brandBlock}>
@@ -610,6 +629,41 @@ const AboutPage = () => {
           {t('settingsVersion')} {APP_VERSION}
         </div>
       </div>
+      <Section title={t('updateSectionTitle')}>
+        <Row label={t('updateCurrentVersion')} value={`v${APP_VERSION}`} />
+        <button
+          type="button"
+          className={styles.row}
+          onClick={() => {
+            if (updateStatus === 'ready') {
+              void runInstall()
+            } else if (updateStatus === 'available') {
+              void downloadUpdate()
+            } else {
+              void checkForUpdate({ force: true })
+            }
+          }}
+        >
+          <span className={styles.rowLabel}>{t('updateCheck')}</span>
+          <span className={styles.rowValue}>{updateStatusText}</span>
+          <span className={styles.rowChevron}>
+            <IconRefreshOutline16 />
+          </span>
+        </button>
+        {updateRelease &&
+        (updateStatus === 'available' ||
+          updateStatus === 'downloading' ||
+          updateStatus === 'ready') ? (
+          <button type="button" className={styles.row} onClick={() => setUpdateOpen(true)}>
+            <span className={styles.rowLabel}>{t('updateNotes')}</span>
+            <span className={styles.rowValue}>v{updateRelease.version}</span>
+            <span className={styles.rowChevron}>
+              <IconChevronRightOutline14 />
+            </span>
+          </button>
+        ) : null}
+      </Section>
+
       <Section title={t('settingsPrivacyTitle')}>
         <p className={styles.paragraph}>{t('settingsPrivacyText')}</p>
       </Section>
@@ -622,6 +676,7 @@ const AboutPage = () => {
       <Section title={t('settingsLicense')}>
         <Row label={t('settingsLicenseTextTitle')} onClick={() => setLicenseOpen(true)} />
       </Section>
+      {updateOpen ? <UpdateDialog onClose={() => setUpdateOpen(false)} /> : null}
       {licenseOpen ? (
         <Modal
           title={t('settingsLicenseTextTitle')}

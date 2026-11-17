@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(FontScalePlugin.class);
         registerPlugin(MicPermissionPlugin.class);
         registerPlugin(DonatePlugin.class);
+        registerPlugin(UpdatePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

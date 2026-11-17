@@ -19,6 +19,7 @@ import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { DonateDialog } from '../donate/DonateDialog.js'
+import { SidebarUpdate } from '../update/Update.js'
 import { UsagePanel } from '../usage/UsagePanel.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
@@ -127,6 +128,8 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </div>
       </div>
       <div className={styles.bottom}>
+        {/* 有更新时自动出现：下载中显示进度，下好一键安装 */}
+        <SidebarUpdate />
         {/* 打赏开发者：放在底部按钮上方，爱心持续跳动偶尔撒娇求打赏 */}
         <button
           type="button"

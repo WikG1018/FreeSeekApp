@@ -176,6 +176,17 @@
    - 为什么不能「带金额直达转账页」：个人收款码不是商户订单，没有官方深链；商户号才有的 `alipay.trade.wap.pay` 已在 v1.3 被移除。
 3. **人设收起**：新增 `PersonaPicker`（一行触发 + Modal 选项栏，移动端自动成 Sheet），Welcome 删除平铺 chips 与相关 CSS；e2e 同步（motion-check 先开选择器再点管理人设；ui-audit 改为断言选择器存在）。
 
+
+## v1.5.0 真实收款码 + 应用内更新（2026-11-17）
+
+- **二维码裁切**：用户给的宣传图带绿色/蓝色外框和文字。用「暗像素行投影 + 合并头像空隙 + 以宽度定正方形」裁出二维码，再用 OpenCV `QRCodeDetector` 解码验证：
+  - 微信 `wxp://f2f0z87084tDt0A_ZaDHLTX5W1J5Fb3y-8W8DCT4jaqn2HE`
+  - 支付宝 `https://qr.alipay.com/fkx10702mjvxw5lrmexj364`
+  解码出的就是收款页深链——比「只存图让用户自己扫」体验好得多。**教训：裁 QR 必须保留静区（约 20px）否则部分机型扫不出。**
+- **更新**：`services/update.ts`（多源 + 缓存 + 语义化版本比较 + 预下载）+ 原生 `UpdatePlugin`（流式下载到 `getExternalFilesDir/updates`、FileProvider 安装、进度事件、系统下载器兜底）+ 侧边栏入口 + 关于页区块。镜像前缀按顺序回退，全部失败才报错。
+- 坑：FileProvider 必须加 `<external-files-path name="updates" path="updates/"/>`，否则安装器拿不到 URI；Android 8+ 还需 `canRequestPackageInstalls` 检查并跳「安装未知应用」授权页。
+- E2E：`update-check.mjs` 用 Playwright `route` 模拟 GitHub Release（v9.9.9），断言自动检查写缓存、侧边栏入口、关于页版本与更新说明弹窗；check.mjs 42 项全过。
+
 ## 已知取舍
 
 

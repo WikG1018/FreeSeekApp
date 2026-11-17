@@ -1,0 +1,106 @@
+/* 侧边栏更新入口 */
+.sidebar,
+.sidebarReady {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
+
+  &:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
+}
+
+[data-ds-dark-theme] .sidebar,
+[data-ds-dark-theme] .sidebarReady {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.sidebarReady {
+  border-color: var(--fs-brand);
+  background: var(--fs-brand-soft);
+  color: var(--fs-brand);
+  font-weight: 500;
+}
+
+.sidebarIcon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.sidebarText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 下载进度条：贴在按钮底部 */
+.sidebarBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(37, 99, 235, 0.15);
+}
+
+.sidebarBarFill {
+  display: block;
+  height: 100%;
+  background: var(--fs-brand);
+  transition: width 0.25s linear;
+}
+
+/* 更新说明弹窗 */
+.notes {
+  margin: 0;
+  max-height: min(50vh, 380px);
+  overflow: auto;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.progress {
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 2px;
+  background: rgba(37, 99, 235, 0.15);
+  overflow: hidden;
+}
+
+.progressFill {
+  display: block;
+  height: 100%;
+  background: var(--fs-brand);
+  transition: width 0.25s linear;
+}
