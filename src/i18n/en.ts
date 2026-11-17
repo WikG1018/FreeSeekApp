@@ -369,6 +369,9 @@ export const en = {
   uploadServerBusy: 'Server busy',
   uploadImageUnsupported: 'This image cannot be converted (HEIC or corrupted) — try another one',
   uploadImageTooLarge: 'This image has too many pixels. Resize it before uploading.',
+  uploadImageDecodeTimeout: 'Image processing timed out. Retry or resize the image.',
+  backupJsonTooLarge:
+    'A chat or index in this backup is too large to read safely. Existing chats are preserved. Split the backup and retry.',
   uploadParseFailed: 'Parsing failed',
   uploadFileCountLimit: 'Uploaded file limit reached ({limit} files). ',
   uploadStorageLimit: 'Uploaded file storage limit reached ({limit} GB). ',

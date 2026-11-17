@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 public class BackupPlugin extends Plugin {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Map<String, Save> saves = new HashMap<>();
+    private final java.util.concurrent.atomic.AtomicBoolean choosing = new java.util.concurrent.atomic.AtomicBoolean();
     private static final class Save {
         final Uri uri; final OutputStream stream; final long expected;
         long written = 0;
@@ -36,17 +37,21 @@ public class BackupPlugin extends Plugin {
         JSObject meta = new JSObject(); meta.put("bytes", call.getDouble("size", 0.0));
         DiagnosticsLog.record(getContext(), "backup", "save.started", meta);
         String name = call.getString("fileName", "freeseek-backup.zip");
-        if (!name.matches("[A-Za-z0-9_.-]+\\.zip") || call.getDouble("size", -1.0) < 0) {
+        double expected = call.getDouble("size", -1.0);
+        if (!name.matches("[A-Za-z0-9_.-]+\\.zip") || !Double.isFinite(expected) || expected < 0 || expected > 0xffffffffL || expected != Math.floor(expected)) {
             call.reject("invalid backup"); return;
         }
+        if (!choosing.compareAndSet(false, true)) { call.reject("save picker already open"); return; }
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/zip");
         intent.putExtra(Intent.EXTRA_TITLE, name);
-        startActivityForResult(call, intent, "created");
+        try { startActivityForResult(call, intent, "created"); }
+        catch (Exception error) { choosing.set(false); call.reject("cannot open save picker", error); }
     }
     @ActivityCallback
     private void created(PluginCall call, ActivityResult result) {
+        choosing.set(false);
         if (call == null) { return; }
         Uri uri = result.getData() == null ? null : result.getData().getData();
         if (result.getResultCode() != Activity.RESULT_OK || uri == null) {
@@ -60,7 +65,10 @@ public class BackupPlugin extends Plugin {
                 String id = UUID.randomUUID().toString();
                 saves.put(id, new Save(uri, stream, call.getDouble("size", 0.0).longValue()));
                 JSObject response = new JSObject(); response.put("id", id); call.resolve(response);
-            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.create-failed", error); call.reject("cannot create backup", error); }
+            } catch (Exception error) {
+                try { DocumentsContract.deleteDocument(getContext().getContentResolver(), uri); } catch (Exception ignored) {}
+                DiagnosticsLog.error(getContext(), "backup", "save.create-failed", error); call.reject("cannot create backup", error);
+            }
         });
     }
     @PluginMethod
@@ -74,7 +82,7 @@ public class BackupPlugin extends Plugin {
                 byte[] bytes = Base64.decode(data, Base64.DEFAULT);
                 if (save.written + bytes.length > save.expected) { throw new IllegalStateException("backup size mismatch"); }
                 save.stream.write(bytes); save.written += bytes.length; call.resolve();
-            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.write-failed", error); call.reject("cannot write backup", error); }
+            } catch (Exception error) { discard(call.getString("id", "")); DiagnosticsLog.error(getContext(), "backup", "save.write-failed", error); call.reject("cannot write backup", error); }
         });
     }
     @PluginMethod
@@ -87,7 +95,7 @@ public class BackupPlugin extends Plugin {
                 save.stream.flush(); save.stream.close(); saves.remove(id);
                 JSObject meta = new JSObject(); meta.put("bytes", save.written);
                 DiagnosticsLog.record(getContext(), "backup", "save.completed", meta); call.resolve();
-            } catch (Exception error) { DiagnosticsLog.error(getContext(), "backup", "save.finish-failed", error); call.reject("cannot finish backup", error); }
+            } catch (Exception error) { discard(id); DiagnosticsLog.error(getContext(), "backup", "save.finish-failed", error); call.reject("cannot finish backup", error); }
         });
     }
     @PluginMethod

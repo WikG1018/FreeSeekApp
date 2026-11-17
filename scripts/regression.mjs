@@ -7,6 +7,7 @@ import { chromium } from 'playwright'
 import { createServer } from 'node:http'
 import { runStabilityCases } from './test/stability-cases.mjs'
 import { runCompatibilityCases } from './test/compatibility-cases.mjs'
+import { runAndroidStabilityCases } from './test/android-stability-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -148,6 +149,12 @@ try {
   browser = await chromium.launch({ headless: true })
   await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
   await runCompatibilityCases(run)
+  await runAndroidStabilityCases({
+    run,
+    behavior: (value) => {
+      uploadBehavior = { ...uploadBehavior, ...value }
+    },
+  })
   await runStabilityCases({
     run,
     root,

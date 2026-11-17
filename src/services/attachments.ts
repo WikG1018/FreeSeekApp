@@ -5,8 +5,14 @@ import { classifyApiError, getUploadErrorInfo, isRetryableUploadError } from './
 import type { UploadProgress } from './api/multipart.js'
 import { diagnosticError, logEvent } from './diagnostics/log.js'
 import type { FilePurpose } from './api/types.js'
-import { ImageDimensionsError, UnsupportedImageError, normalizeImageFile } from './image.js'
+import {
+  ImageDecodeTimeoutError,
+  ImageDimensionsError,
+  UnsupportedImageError,
+  normalizeImageFile,
+} from './image.js'
 import { ACCEPT_FILE_EXTS } from './uploadExts.js'
+import { abortReason } from '../utils/abort.js'
 
 /** 允许上传的扩展名，按扩展名白名单过滤，清单见 uploadExts.ts */
 export const ACCEPTED_EXTS = ACCEPT_FILE_EXTS
@@ -65,6 +71,9 @@ export const validateFiles = (files: File[], currentCount: number): TranslationM
  * 服务端原文多为英文且较长，不直接展示。
  */
 export const describeUploadError = (error: unknown): TranslationMessage => {
+  if (error instanceof ImageDecodeTimeoutError) {
+    return { key: 'uploadImageDecodeTimeout' }
+  }
   if (error instanceof ImageDimensionsError) {
     return { key: 'uploadImageTooLarge' }
   }
@@ -152,9 +161,17 @@ const enqueueUpload = (
   onProgress?: (progress: UploadProgress) => void
 ) =>
   new Promise<string>((resolve, reject) => {
-    queue.push(async () => {
+    const abort = () => {
+      const index = queue.indexOf(job)
+      if (index >= 0) {
+        queue.splice(index, 1)
+      }
+      signal.removeEventListener('abort', abort)
+      reject(abortReason(signal))
+    }
+    const job = async () => {
       if (signal.aborted) {
-        reject(signal.reason)
+        abort()
         return
       }
       try {
@@ -167,8 +184,16 @@ const enqueueUpload = (
         )
       } catch (error) {
         reject(error)
+      } finally {
+        signal.removeEventListener('abort', abort)
       }
-    })
+    }
+    if (signal.aborted) {
+      abort()
+      return
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    queue.push(job)
     next()
   })
 
@@ -204,10 +229,11 @@ export const uploadAttachment = (
   isImage: boolean
 ): Promise<string> => {
   const current = pending.get(id)
-  if (current) {
+  if (current && !current.controller.signal.aborted) {
     return current.promise
   }
   const controller = new AbortController()
+  const ownsTask = () => pending.get(id)?.controller === controller
   const started = performance.now()
   logEvent('upload', 'queued', {
     fileId: id,
@@ -233,7 +259,7 @@ export const uploadAttachment = (
     }
     lastProgressAt = performance.now()
     processing = nextProcessing
-    if (!controller.signal.aborted) {
+    if (!controller.signal.aborted && ownsTask()) {
       setTask(id, {
         status: 'uploading',
         processing,
@@ -245,8 +271,8 @@ export const uploadAttachment = (
     }
   })
     .then((serverId) => {
-      if (controller.signal.aborted) {
-        throw controller.signal.reason
+      if (controller.signal.aborted || !ownsTask()) {
+        throw abortReason(controller.signal)
       }
       setTask(id, { status: 'done', serverId })
       logEvent('upload', 'completed', {
@@ -267,8 +293,10 @@ export const uploadAttachment = (
         controller.signal.aborted ? 'info' : 'error'
       )
       if (controller.signal.aborted) {
-        setTask(id, null)
-      } else {
+        if (ownsTask()) {
+          setTask(id, null)
+        }
+      } else if (ownsTask()) {
         setTask(id, {
           status: 'error',
           error: describeUploadError(error),
@@ -283,7 +311,11 @@ export const uploadAttachment = (
       }
       throw error
     })
-    .finally(() => pending.delete(id))
+    .finally(() => {
+      if (ownsTask()) {
+        pending.delete(id)
+      }
+    })
   pending.set(id, { promise, controller })
   return promise
 }

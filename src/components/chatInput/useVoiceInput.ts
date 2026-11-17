@@ -178,6 +178,15 @@ export const useVoiceInput = (onText: (text: string) => void) => {
   }, [status])
 
   useEffect(() => cancelOperation, [cancelOperation])
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        cancel()
+      }
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    return () => document.removeEventListener('visibilitychange', onHidden)
+  }, [cancel])
 
   /** 当前录音的频谱分析节点，未录音时为 null */
   const getAnalyser = useCallback(() => recordingRef.current?.analyser ?? null, [])

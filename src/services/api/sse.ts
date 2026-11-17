@@ -6,6 +6,8 @@
  * 注释行（如服务端保活的 `: keep-alive`）直接忽略；`retry` 只对 EventSource 重连有意义，这里不处理。
  */
 
+import { abortReason } from '../../utils/abort.js'
+
 export type ServerSentEvent = {
   /** `event` 字段，缺省为 `message` */
   event: string
@@ -142,6 +144,9 @@ export async function* readServerSentEvents(
     }
   }
   try {
+    if (signal?.aborted) {
+      throw abortReason(signal)
+    }
     for (;;) {
       clearIdle()
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
@@ -151,15 +156,19 @@ export async function* readServerSentEvents(
           reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
           reject(new StreamIdleTimeoutError())
         }, idleTimeoutMs)
-        reader
-          .read()
-          .then(({ done, value }) => resolve({ done, value }), reject)
+        reader.read().then(({ done, value }) => resolve({ done, value }), reject)
       })
       if (chunk.done) {
+        if (signal?.aborted) {
+          throw abortReason(signal)
+        }
         finished = true
         yield* decoder.push(textDecoder.decode())
         yield* decoder.end()
         return
+      }
+      if (signal?.aborted) {
+        throw abortReason(signal)
       }
       yield* decoder.push(textDecoder.decode(chunk.value, { stream: true }))
     }

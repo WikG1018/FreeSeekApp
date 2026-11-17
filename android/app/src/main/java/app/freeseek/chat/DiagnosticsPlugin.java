@@ -55,7 +55,7 @@ public class DiagnosticsPlugin extends Plugin {
                 env.put("microphoneGranted", context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED);
                 if (Build.VERSION.SDK_INT >= 26) {
                     env.put("installPackagesAllowed", context.getPackageManager().canRequestPackageInstalls());
-                    PackageInfo webview = WebView.getCurrentWebViewPackage();
+                    PackageInfo webview = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(context);
                     if (webview != null) { env.put("webviewVersion", webview.versionName); env.put("webviewPackage", webview.packageName); }
                 }
                 ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
@@ -64,6 +64,8 @@ public class DiagnosticsPlugin extends Plugin {
                 env.put("systemTotalMemoryBytes", memory.totalMem); env.put("systemAvailableMemoryBytes", memory.availMem);
                 env.put("systemLowMemory", memory.lowMemory); env.put("processPssKB", process.getTotalPss());
                 env.put("javaHeapMaxBytes", Runtime.getRuntime().maxMemory());
+                env.put("lowRamDevice", manager.isLowRamDevice());
+                env.put("pageSizeBytes", android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE));
                 File files = context.getFilesDir();
                 env.put("storageFreeBytes", files.getUsableSpace()); env.put("storageTotalBytes", files.getTotalSpace());
                 ConnectivityManager connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -83,6 +85,8 @@ public class DiagnosticsPlugin extends Plugin {
                         JSObject entry = new JSObject();
                         entry.put("timestamp", exit.getTimestamp()); entry.put("reason", exit.getReason());
                         entry.put("status", exit.getStatus()); entry.put("pssKB", exit.getPss()); entry.put("rssKB", exit.getRss());
+                        String description = exit.getDescription();
+                        entry.put("memoryLimiter", description != null && description.contains("MemoryLimiter:AnonSwap"));
                         exits.put(entry);
                     }
                     env.put("recentProcessExits", exits);

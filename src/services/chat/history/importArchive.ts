@@ -1,4 +1,5 @@
 import * as db from '../db.js'
+import { readJsonEntry as readJson } from './readJson.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
 import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
@@ -46,15 +47,6 @@ const imageType = (bytes: Uint8Array): string => {
     return 'image/avif'
   }
   return ''
-}
-
-const readJson = async (entry: ArchiveEntry): Promise<unknown> => {
-  const text = await (await readEntry(entry)).text()
-  try {
-    return JSON.parse(text)
-  } catch {
-    return fail('backupInvalidJson')
-  }
 }
 
 /**

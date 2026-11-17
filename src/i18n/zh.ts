@@ -356,6 +356,8 @@ export const zh = {
   uploadServerBusy: '服务器繁忙',
   uploadImageUnsupported: '这张图片无法转换（可能是 HEIC 或文件损坏），换一张再试',
   uploadImageTooLarge: '图片像素过大，请先缩小图片再上传',
+  uploadImageDecodeTimeout: '图片处理超时，请重试或缩小图片后上传',
+  backupJsonTooLarge: '备份中的单条会话或索引过大，无法安全读取。原记录已保留，请拆分备份后重试。',
   uploadParseFailed: '解析失败',
   uploadFileCountLimit: '已上传文件数达到上限（{limit} 个），可 ',
   uploadStorageLimit: '已上传文件占用空间达到上限（{limit}GB），可 ',

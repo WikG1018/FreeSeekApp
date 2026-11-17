@@ -647,9 +647,11 @@ const AboutPage = () => {
       return
     }
     setDiagnosticsBusy(true)
+    let bundleReady = false
     try {
       const { createDiagnosticBundle } = await import('../../services/diagnostics/export.js')
       const pack = await createDiagnosticBundle()
+      bundleReady = true
       const saved = await saveBackup(pack.name, pack.blob)
       logEvent('diagnostics', saved ? 'export.saved' : 'export.cancelled', {
         bytes: pack.blob.size,
@@ -659,7 +661,7 @@ const AboutPage = () => {
       }
     } catch (error) {
       logEvent('diagnostics', 'export.failed', diagnosticError(error), 'error')
-      if (Capacitor.getPlatform() === 'android') {
+      if (Capacitor.getPlatform() === 'android' && !bundleReady) {
         showToast({ key: 'diagnosticsFallback' })
         try {
           if (await saveNativeDiagnostics(error)) {

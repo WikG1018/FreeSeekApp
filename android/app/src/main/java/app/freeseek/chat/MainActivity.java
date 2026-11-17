@@ -39,6 +39,7 @@ public class MainActivity extends BridgeActivity {
                 super.onReceivedHttpError(view, request, response);
             }
             @Override
+            @androidx.annotation.RequiresApi(26)
             public boolean onRenderProcessGone(android.webkit.WebView view, android.webkit.RenderProcessGoneDetail detail) {
                 JSObject info = new JSObject(); info.put("crashed", detail.didCrash());
                 info.put("priority", detail.rendererPriorityAtExit());

@@ -24,6 +24,7 @@ import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } fro
 import * as db from './db.js'
 import { allSessionMessages, mapSessionMessages } from './sessionData.js'
 import { sumMessageUsage, usageEntries } from './usage.js'
+import { abortReason } from '../../utils/abort.js'
 import {
   clearAllDrafts,
   clearDraft,
@@ -995,96 +996,102 @@ const prepareFiles = async (
   const apiKey = useSettings.getState().apiKey ?? ''
   const serverIds = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
+  let onAbort: () => void = () => {}
   const aborted = new Promise<never>((_, reject) => {
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    onAbort = () => reject(abortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
   })
-  const uploads = Promise.allSettled(
-    request.question.files.map(async (file) => {
-      if (omitted.has(file.id)) {
-        return
-      }
-      const serverId = await ensureServerId(apiKey, file)
-      if (serverId) {
-        serverIds.set(file.id, serverId)
-      } else {
-        omitted.set(file.id, file)
+  try {
+    const uploads = Promise.allSettled(
+      request.question.files.map(async (file) => {
+        if (omitted.has(file.id)) {
+          return
+        }
+        const serverId = await ensureServerId(apiKey, file)
+        if (serverId) {
+          serverIds.set(file.id, serverId)
+        } else {
+          omitted.set(file.id, file)
+        }
+      })
+    )
+    void uploads.then(() => {
+      if (epoch === historyEpoch) {
+        saveServerIds(sessionId, serverIds)
       }
     })
-  )
-  void uploads.then(() => {
-    if (epoch === historyEpoch) {
-      saveServerIds(sessionId, serverIds)
+    const results = await Promise.race([uploads, aborted])
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed) {
+      throw failed.reason
     }
-  })
-  const results = await Promise.race([uploads, aborted])
-  const failed = results.find((result) => result.status === 'rejected')
-  if (failed) {
-    throw failed.reason
-  }
 
-  const pending = new Map<string, FileAttachment>()
-  const context = [
-    ...getContextRounds(request.inherited?.messages ?? []),
-    ...getContextRounds(request.history),
-  ]
-  for (const [user] of context.toReversed()) {
-    for (const file of user.files) {
-      if (
-        !file.serverId &&
-        !serverIds.has(file.id) &&
-        !pending.has(file.id) &&
-        !omitted.has(file.id)
-      ) {
-        pending.set(file.id, file)
+    const pending = new Map<string, FileAttachment>()
+    const context = [
+      ...getContextRounds(request.inherited?.messages ?? []),
+      ...getContextRounds(request.history),
+    ]
+    for (const [user] of context.toReversed()) {
+      for (const file of user.files) {
+        if (
+          !file.serverId &&
+          !serverIds.has(file.id) &&
+          !pending.has(file.id) &&
+          !omitted.has(file.id)
+        ) {
+          pending.set(file.id, file)
+        }
       }
     }
-  }
-  for (const file of pending.values()) {
-    signal.throwIfAborted()
-    try {
-      const serverId = await Promise.race([ensureServerId(apiKey, file), aborted])
-      if (serverId) {
-        serverIds.set(file.id, serverId)
-        saveServerIds(sessionId, new Map([[file.id, serverId]]))
-      } else {
-        omitted.set(file.id, file)
-      }
-    } catch (error) {
+    for (const file of pending.values()) {
       signal.throwIfAborted()
-      if (
-        error instanceof UnsupportedImageError ||
-        getUploadErrorInfo(error)?.code === 'parseFailed'
-      ) {
-        omitted.set(file.id, file)
-        logEvent(
-          'chat',
-          'attachment.omitted',
-          { fileId: file.id, reason: 'invalid-file', ...diagnosticError(error) },
-          'warn'
-        )
-      } else {
-        // 鉴权、余额、限流与网络故障必须可恢复，不能悄悄把附件从上下文里省掉。
-        throw error
+      try {
+        const serverId = await Promise.race([ensureServerId(apiKey, file), aborted])
+        if (serverId) {
+          serverIds.set(file.id, serverId)
+          saveServerIds(sessionId, new Map([[file.id, serverId]]))
+        } else {
+          omitted.set(file.id, file)
+        }
+      } catch (error) {
+        signal.throwIfAborted()
+        if (
+          error instanceof UnsupportedImageError ||
+          getUploadErrorInfo(error)?.code === 'parseFailed'
+        ) {
+          omitted.set(file.id, file)
+          logEvent(
+            'chat',
+            'attachment.omitted',
+            { fileId: file.id, reason: 'invalid-file', ...diagnosticError(error) },
+            'warn'
+          )
+        } else {
+          // 鉴权、余额、限流与网络故障必须可恢复，不能悄悄把附件从上下文里省掉。
+          throw error
+        }
       }
     }
-  }
 
-  // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
-  const session = getSession(sessionId)
-  const byId = new Map(session?.messages.map((message) => [message.id, message]))
-  const filter = <T extends Message>(message: T): T =>
-    message.role === 'user'
-      ? { ...message, files: message.files.filter((file) => !omitted.has(file.id)) }
-      : message
-  const resolve = <T extends Message>(message: T): T =>
-    filter((byId.get(message.id) as T | undefined) ?? message)
-  const inherited = session?.inherited ?? request.inherited
-  return {
-    history: request.history.map(resolve),
-    question: resolve(request.question),
-    prefix: request.prefix,
-    inherited: inherited ? { ...inherited, messages: inherited.messages.map(filter) } : undefined,
-    persona: request.persona,
+    // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
+    const session = getSession(sessionId)
+    const byId = new Map(session?.messages.map((message) => [message.id, message]))
+    const filter = <T extends Message>(message: T): T =>
+      message.role === 'user'
+        ? { ...message, files: message.files.filter((file) => !omitted.has(file.id)) }
+        : message
+    const resolve = <T extends Message>(message: T): T =>
+      filter((byId.get(message.id) as T | undefined) ?? message)
+    const inherited = session?.inherited ?? request.inherited
+    return {
+      history: request.history.map(resolve),
+      question: resolve(request.question),
+      prefix: request.prefix,
+      inherited: inherited ? { ...inherited, messages: inherited.messages.map(filter) } : undefined,
+      persona: request.persona,
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
   }
 }
 

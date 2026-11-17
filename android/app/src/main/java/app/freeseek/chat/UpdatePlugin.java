@@ -33,6 +33,8 @@ public class UpdatePlugin extends Plugin {
     private static final String REPO = "WikG1018/FreeSeekApp";
     private static final String[] MIRRORS = {"https://gh-proxy.com/", "https://ghfast.top/", "https://ghproxy.net/"};
     private volatile boolean cancelled = false;
+    private final java.util.concurrent.atomic.AtomicBoolean downloading = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile HttpURLConnection activeDownload;
     private static final java.util.concurrent.ScheduledExecutorService DEADLINES =
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
@@ -182,6 +184,7 @@ public class UpdatePlugin extends Plugin {
 
     @PluginMethod
     public void download(PluginCall call) {
+        if (!downloading.compareAndSet(false, true)) { call.reject("download already in progress"); return; }
         DiagnosticsLog.record(getContext(), "update", "download.started", new JSObject());
         cancelled = false;
         new Thread(() -> {
@@ -200,6 +203,8 @@ public class UpdatePlugin extends Plugin {
                 }
                 temp = new File(target.getAbsolutePath() + ".part");
                 connection = connect(url, 60000);
+                activeDownload = connection;
+                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
                 connection.setConnectTimeout(15000);
                 final HttpURLConnection active = connection;
                 deadline = DEADLINES.schedule(active::disconnect, 20, java.util.concurrent.TimeUnit.MINUTES);
@@ -222,7 +227,9 @@ public class UpdatePlugin extends Plugin {
                     }
                     out.getFD().sync();
                 }
+                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
                 verify(temp, call);
+                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
                 JSObject verified = new JSObject(); verified.put("bytes", temp.length());
                 verified.put("source", url.getHost()); DiagnosticsLog.record(getContext(), "update", "package.verified", verified);
                 if (!temp.renameTo(target)) { throw new IllegalStateException("cannot publish verified package"); }
@@ -232,12 +239,20 @@ public class UpdatePlugin extends Plugin {
                 DiagnosticsLog.error(getContext(), "update", "download.failed", error);
                 if (temp != null) { temp.delete(); }
                 call.reject("package download or verification failed", error);
-            } finally { if (deadline != null) { deadline.cancel(false); } if (connection != null) { connection.disconnect(); } }
+            } finally {
+                if (deadline != null) { deadline.cancel(false); } if (connection != null) { connection.disconnect(); }
+                activeDownload = null; downloading.set(false);
+            }
         }).start();
     }
 
     @PluginMethod
-    public void cancel(PluginCall call) { cancelled = true; call.resolve(); }
+    public void cancel(PluginCall call) {
+        cancelled = true;
+        HttpURLConnection active = activeDownload;
+        if (active != null) { new Thread(active::disconnect).start(); }
+        call.resolve();
+    }
 
     @PluginMethod
     public void install(PluginCall call) {

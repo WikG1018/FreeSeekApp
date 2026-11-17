@@ -1,5 +1,6 @@
 import '../../src/compatibility.js'
 import { createId } from '../../src/utils/id.js'
+import { readJsonEntry } from '../../src/services/chat/history/readJson.js'
 import { writeArchive } from '../../src/services/chat/history/zipWriter.js'
 import { toIndexEntry } from '../../src/services/chat/history/toArchive.js'
 import * as personas from '../../src/services/personas.js'
@@ -146,6 +147,7 @@ Object.assign(window, {
     diagnosticBundle,
     image,
     speech,
+    readJsonEntry,
   },
 })
 await (window as Window & { __seedReady?: Promise<void> }).__seedReady

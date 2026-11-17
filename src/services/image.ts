@@ -1,4 +1,48 @@
 import { logEvent } from './diagnostics/log.js'
+import { abortReason } from '../utils/abort.js'
+
+export const imagePolicy = { decodeTimeoutMs: 30_000 }
+export class ImageDecodeTimeoutError extends Error {
+  constructor() {
+    super('Image decode timeout')
+    this.name = 'ImageDecodeTimeoutError'
+  }
+}
+const boundedDecode = <T>(
+  task: Promise<T>,
+  signal: AbortSignal | undefined,
+  discard: (value: T) => void
+): Promise<T> =>
+  new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+    }
+    const fail = (error: unknown) => {
+      if (!settled) {
+        settled = true
+        cleanup()
+        reject(error)
+      }
+    }
+    const abort = () => fail(abortReason(signal))
+    const timer = setTimeout(() => fail(new ImageDecodeTimeoutError()), imagePolicy.decodeTimeoutMs)
+    task.then((value) => {
+      if (settled) {
+        discard(value)
+      } else {
+        settled = true
+        cleanup()
+        resolve(value)
+      }
+    }, fail)
+    if (signal?.aborted) {
+      abort()
+    } else {
+      signal?.addEventListener('abort', abort, { once: true })
+    }
+  })
 /**
  * 图片格式规范化。
  *
@@ -71,18 +115,36 @@ const replaceExt = (name: string, ext: string) => {
 }
 
 /** 用 <img> 解码：SVG 这类 createImageBitmap 不支持的格式靠它兜底 */
-const decodeWithImg = (blob: Blob): Promise<HTMLImageElement> =>
+const decodeWithImg = (blob: Blob, signal?: AbortSignal): Promise<HTMLImageElement> =>
   new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob)
     const image = new Image()
-    image.onload = () => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+      image.onload = null
+      image.onerror = null
       URL.revokeObjectURL(url)
+    }
+    const fail = (error: unknown) => {
+      cleanup()
+      image.src = ''
+      reject(error)
+    }
+    const abort = () => fail(abortReason(signal))
+    const timer = setTimeout(() => fail(new ImageDecodeTimeoutError()), imagePolicy.decodeTimeoutMs)
+    image.onload = () => {
+      cleanup()
       resolve(image)
     }
     image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('decode failed'))
+      fail(new UnsupportedImageError())
     }
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
     image.src = url
   })
 
@@ -174,30 +236,46 @@ const normalize = async (file: File, signal?: AbortSignal): Promise<File> => {
   const bytes = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer())
   const actual = sniffImageMime(bytes),
     dimensions = readDimensions(bytes)
-  if (dimensions && dimensions.width * dimensions.height > 100_000_000 && actual !== 'image/jpeg') {
+  if (dimensions && dimensions.width * dimensions.height > 100_000_000) {
     throw new ImageDimensionsError()
   }
   const scale = dimensions ? Math.min(1, 4096 / Math.max(dimensions.width, dimensions.height)) : 1
   let source: ImageBitmap | HTMLImageElement, width: number, height: number
   try {
-    source = await createImageBitmap(
-      file,
-      dimensions && scale < 1
-        ? {
-            resizeWidth: Math.max(1, Math.round(dimensions.width * scale)),
-            resizeHeight: Math.max(1, Math.round(dimensions.height * scale)),
-            resizeQuality: 'high',
-          }
-        : {}
+    source = await boundedDecode(
+      createImageBitmap(
+        file,
+        dimensions && scale < 1
+          ? {
+              resizeWidth: Math.max(1, Math.round(dimensions.width * scale)),
+              resizeHeight: Math.max(1, Math.round(dimensions.height * scale)),
+              resizeQuality: 'high',
+            }
+          : {}
+      ),
+      signal,
+      (bitmap) => bitmap.close()
     )
     width = source.width
     height = source.height
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) {
+      throw abortReason(signal)
+    }
+    if (error instanceof ImageDecodeTimeoutError) {
+      throw error
+    }
     try {
-      source = await decodeWithImg(file)
+      source = await decodeWithImg(file, signal)
       width = source.naturalWidth || 1024
       height = source.naturalHeight || 1024
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) {
+        throw abortReason(signal)
+      }
+      if (error instanceof ImageDecodeTimeoutError) {
+        throw error
+      }
       throw new UnsupportedImageError()
     }
   }

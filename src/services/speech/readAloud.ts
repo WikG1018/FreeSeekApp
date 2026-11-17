@@ -5,6 +5,7 @@ import { classifyApiError } from '../api/errors.js'
 import { synthesize, TTS_SAMPLE_RATE } from '../api/speech.js'
 import { useSettings } from '../settings.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
+import { abortableDelay } from '../../utils/abort.js'
 
 /**
  * 朗读：同一时间只读一条回复。
@@ -23,6 +24,8 @@ export const useReadAloud = create<ReadAloudState>(() => ({ messageId: null, sta
 
 /** 首帧前多缓冲一点，减少网络抖动造成的断续 */
 const START_DELAY = 0.1
+/** 播放队列最多领先 5 秒；不将长篇合成音频全部展开进内存。 */
+const BUFFER_AHEAD_SECONDS = 5
 
 let current: { controller: AbortController; context: AudioContext } | null = null
 
@@ -30,7 +33,7 @@ const finish = (controller: AbortController) => {
   if (current?.controller !== controller) {
     return
   }
-  void current.context.close()
+  void current.context.close().catch(() => {})
   current = null
   useReadAloud.setState({ messageId: null, status: 'idle' })
   logEvent('speech', 'playback.finished', { cancelled: controller.signal.aborted })
@@ -90,7 +93,14 @@ export const toggleReadAloud = (
     return
   }
   const controller = new AbortController()
-  const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
+  let context: AudioContext
+  try {
+    context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
+  } catch (error) {
+    logEvent('speech', 'playback.init-failed', diagnosticError(error), 'error')
+    onError(error)
+    return
+  }
   current = { controller, context }
   useReadAloud.setState({ messageId, status: 'loading' })
   logEvent('speech', 'playback.requested')
@@ -104,12 +114,18 @@ export const toggleReadAloud = (
     let streamEnded = false
     let rest = new Uint8Array(0)
     try {
+      if (context.state === 'suspended') {
+        await context.resume()
+      }
       const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
       const reader = stream.getReader()
       const cancelReader = () => {
         void reader.cancel().catch(() => {})
       }
       controller.signal.addEventListener('abort', cancelReader, { once: true })
+      if (controller.signal.aborted) {
+        cancelReader()
+      }
       let watchdog: ReturnType<typeof setTimeout> | undefined
       const resetWatchdog = () => {
         clearTimeout(watchdog)
@@ -127,7 +143,7 @@ export const toggleReadAloud = (
           if (controller.signal.aborted) {
             break
           }
-          resetWatchdog()
+          clearTimeout(watchdog)
           if (done) {
             break
           }
@@ -137,29 +153,43 @@ export const toggleReadAloud = (
           const samples = toFloat32(bytes)
           rest = bytes.slice(samples.length * 2)
           if (samples.length === 0) {
+            resetWatchdog()
             continue
           }
-          const buffer = context.createBuffer(1, samples.length, TTS_SAMPLE_RATE)
-          buffer.copyToChannel(samples, 0)
-          const source = context.createBufferSource()
-          pendingSources += 1
-          source.onended = () => {
-            pendingSources -= 1
-            if (streamEnded && pendingSources === 0) {
-              finish(controller)
+          for (let offset = 0; offset < samples.length; offset += TTS_SAMPLE_RATE) {
+            while (nextTime - context.currentTime > BUFFER_AHEAD_SECONDS) {
+              if (context.state === 'suspended') {
+                throw new ApiError('network', 'Audio playback suspended')
+              }
+              await abortableDelay(100, controller.signal)
+            }
+            controller.signal.throwIfAborted()
+            const segment = samples.subarray(offset, offset + TTS_SAMPLE_RATE)
+            const buffer = context.createBuffer(1, segment.length, TTS_SAMPLE_RATE)
+            buffer.copyToChannel(segment, 0)
+            const source = context.createBufferSource()
+            pendingSources += 1
+            source.onended = () => {
+              source.disconnect()
+              source.buffer = null
+              pendingSources -= 1
+              if (streamEnded && pendingSources === 0) {
+                finish(controller)
+              }
+            }
+            source.buffer = buffer
+            source.connect(context.destination)
+            // 网络慢于播放时从当前时间续上，不补播过去的时间
+            nextTime = Math.max(nextTime, context.currentTime + (started ? 0 : START_DELAY))
+            source.start(nextTime)
+            nextTime += buffer.duration
+            started = true
+            if (useReadAloud.getState().status === 'loading') {
+              useReadAloud.setState({ status: 'playing' })
+              logEvent('speech', 'playback.started')
             }
           }
-          source.buffer = buffer
-          source.connect(context.destination)
-          // 网络慢于播放时从当前时间续上，不补播过去的时间
-          nextTime = Math.max(nextTime, context.currentTime + (started ? 0 : START_DELAY))
-          source.start(nextTime)
-          nextTime += buffer.duration
-          started = true
-          if (useReadAloud.getState().status === 'loading') {
-            useReadAloud.setState({ status: 'playing' })
-            logEvent('speech', 'playback.started')
-          }
+          resetWatchdog()
         }
         streamEnded = true
         if (pendingSources === 0) {

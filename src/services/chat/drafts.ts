@@ -10,6 +10,7 @@ import {
   type UploadTask,
 } from '../attachments.js'
 import type { FileAttachment } from './types.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 
 export type DraftAttachment = {
   /** 本地标识，也是 IndexedDB 原件与上传任务的 key */
@@ -23,10 +24,59 @@ type Draft = { text: string; attachments: DraftAttachment[] }
 
 export const EMPTY_DRAFT: Draft = { text: '', attachments: [] }
 
-/** 草稿只保存在本次页面的内存中，独立于会话详情缓存；null 是新对话的草稿。 */
+const DRAFT_TEXT_KEY = 'freeseek:draft-texts'
+const restoreDraftTexts = () => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(DRAFT_TEXT_KEY) ?? '[]')
+    if (!Array.isArray(value)) {
+      return new Map<string | null, Draft>()
+    }
+    return new Map<string | null, Draft>(
+      value
+        .filter(
+          (entry) =>
+            Array.isArray(entry) &&
+            entry.length === 2 &&
+            (entry[0] === null || typeof entry[0] === 'string') &&
+            typeof entry[1] === 'string'
+        )
+        .map(([id, text]) => [id, { text, attachments: [] }])
+    )
+  } catch {
+    return new Map<string | null, Draft>()
+  }
+}
+/** 文字草稿恢复到原会话；附件仍由页面内存与上传任务持有。 */
 export const useDrafts = create<{ drafts: Map<string | null, Draft> }>(() => ({
-  drafts: new Map(),
+  drafts: restoreDraftTexts(),
 }))
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+export const flushDraftTexts = () => {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  try {
+    const entries = [...useDrafts.getState().drafts]
+      .filter(([, draft]) => draft.text)
+      .map(([id, draft]) => [id, draft.text])
+    if (entries.length) {
+      localStorage.setItem(DRAFT_TEXT_KEY, JSON.stringify(entries))
+    } else {
+      localStorage.removeItem(DRAFT_TEXT_KEY)
+    }
+  } catch (error) {
+    logEvent('storage', 'drafts.save-failed', diagnosticError(error), 'warn')
+  }
+}
+useDrafts.subscribe(() => {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(flushDraftTexts, 300)
+})
+window.addEventListener('pagehide', flushDraftTexts)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    flushDraftTexts()
+  }
+})
 
 export const getDraft = (sessionId: string | null): Draft =>
   useDrafts.getState().drafts.get(sessionId) ?? EMPTY_DRAFT
@@ -145,12 +195,14 @@ export const removeDraftAttachment = (sessionId: string | null, attachmentId: st
 export const clearSentDraft = (sessionId: string | null) => {
   getDraft(sessionId).attachments.forEach((attachment) => releaseAttachment(attachment, false))
   updateDraft(sessionId, () => EMPTY_DRAFT)
+  flushDraftTexts()
 }
 
 /** 删除会话或替换历史成功后，释放尚未发送的草稿及上传任务。 */
 export const clearDraft = (sessionId: string | null) => {
   getDraft(sessionId).attachments.forEach((attachment) => releaseAttachment(attachment, true))
   updateDraft(sessionId, () => EMPTY_DRAFT)
+  flushDraftTexts()
 }
 
 export const clearAllDrafts = () => {
@@ -158,4 +210,5 @@ export const clearAllDrafts = () => {
     draft.attachments.forEach((attachment) => releaseAttachment(attachment, true))
   }
   useDrafts.setState({ drafts: new Map() })
+  flushDraftTexts()
 }
