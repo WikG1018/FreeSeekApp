@@ -249,7 +249,11 @@ const contextSummary = (value: unknown) => {
   ) {
     return invalid()
   }
-  return { text, coveredRounds, signature, updatedAt: number(raw.updatedAt) }
+  const historyEstimate = optional(raw.historyEstimate, (value) => {
+    const estimate = record(value)
+    return { before: number(estimate.before), after: number(estimate.after) }
+  })
+  return { text, coveredRounds, signature, updatedAt: number(raw.updatedAt), historyEstimate }
 }
 
 export const readNativeSession = (value: unknown): Session => {
@@ -302,6 +306,7 @@ export const readNativeSession = (value: unknown): Session => {
     updatedAt: number(item.updatedAt),
     messages,
     contextSummary: optional(item.contextSummary, contextSummary),
+    compressionPromptShown: optional(item.compressionPromptShown, boolean),
     compressionUsage: optional(item.compressionUsage, (value) =>
       list(value, (raw) => {
         const entry = record(raw),

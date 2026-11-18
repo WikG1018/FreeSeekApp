@@ -2,7 +2,54 @@ import assert from 'node:assert/strict'
 
 export const runCompressionCases = async (run) => {
   await run(
-    'compression asks before charging, sends unchanged on request and archives edited summaries',
+    '1M context usage counts inherited history and drops the portion covered by a summary',
+    async (page) => {
+      const id = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        a.settings.setApiKey('fixture')
+        const session = f.session({
+          title: 'Long inherited history',
+          inherited: {
+            fromId: 'source',
+            fromTitle: 'Source',
+            messages: [f.user('old-q', 'history '.repeat(315000)), f.assistant('old-a', 'Notes')],
+          },
+          messages: [f.user('new-q', 'Next'), f.assistant('new-a', 'Draft')],
+        })
+        await a.seed([session])
+        const fetch = window.fetch
+        window.fetch = (url, init) =>
+          String(url).endsWith('/messages')
+            ? Promise.resolve(a.response('Short summary'))
+            : fetch(url, init)
+        return session.id
+      })
+      const ring = page.getByTestId('context-usage')
+      await ring.click()
+      const panel = page.getByRole('dialog', { name: '上下文使用', exact: true })
+      const pre = panel.getByText(/^728\.\dk \/ 1M tokens$/)
+      await pre.waitFor()
+      assert.equal(await pre.getAttribute('title'), '1,048,576')
+      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 69%')
+      const result = await page.evaluate(async (id) => {
+        const a = window.__audit
+        const summary = await a.store.compressSession(id)
+        const session = a.store.useChatStore.getState().sessionCache[id]
+        return {
+          covered: summary.coveredRounds,
+          oldText: session.inherited.messages[0].content.length,
+          recentText: session.messages[0].content,
+        }
+      }, id)
+      await panel.getByText('8.4k / 1M tokens', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 1%')
+      assert.deepEqual(result, { covered: 1, oldText: 2520000, recentText: 'Next' })
+    }
+  )
+
+  await run(
+    'compression prompts once, estimates savings, and retains the result and consent across backup restore',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit,
@@ -78,12 +125,15 @@ export const runCompressionCases = async (run) => {
           asked = [first.error?.localMessage?.key, sent.length, chunks.length]
         a.store.retryContextReply('long', first.id, 'send')
         await a.waitIdle()
+        a.drafts.setDraftText('long', 'continue without compression')
+        a.store.sendMessage('long')
+        await a.waitIdle()
+        const sentAgain = state().messages.at(-1).status
+        await a.store.compressSession('long')
         a.drafts.setDraftText('long', 'second question')
         a.store.sendMessage('long')
         await a.waitIdle()
         const second = state().messages.at(-1)
-        a.store.retryContextReply('long', second.id, 'compress')
-        await a.waitIdle()
         const summarized = a.store.currentContextSummary(state())
         if (!summarized)
           throw Error('Missing summary: ' + JSON.stringify(state().messages.at(-1).error))
@@ -107,6 +157,10 @@ export const runCompressionCases = async (run) => {
         const stats = await a.usage.collectUsage()
         return {
           asked,
+          projection: first.error?.localMessage?.params,
+          sentAgain,
+          promptRestored: restored.compressionPromptShown,
+          estimate: restored.contextSummary.historyEstimate,
           oldIntact: restored.messages[0].content === old,
           oldSent: JSON.stringify(sent[0]).includes('🌊末尾'),
           edited,
@@ -117,15 +171,20 @@ export const runCompressionCases = async (run) => {
           inputs: chunks.join(''),
           summaries,
           models: [...new Set(modelIds)],
-          activePersona: sent[1]?.messages[0]?.content,
-          compactPayload: JSON.stringify(sent[1]),
-          restoredPayload: JSON.stringify(sent[2]),
+          activePersona: sent[2]?.messages[0]?.content,
+          compactPayload: JSON.stringify(sent[2]),
+          restoredPayload: JSON.stringify(sent[3]),
           charges: restored.compressionUsage.length,
           chunkCount: chunks.length,
           unpriced: stats.total.unpricedRequests,
         }
       })
       assert.deepEqual(result.asked, ['compressionSuggested', 0, 0])
+      assert.match(result.projection.before, /^6\.\dk$/)
+      assert.ok(result.projection.after)
+      assert.equal(result.sentAgain, 'done')
+      assert.equal(result.promptRestored, true)
+      assert.ok(result.estimate.before > result.estimate.after)
       assert.ok(result.oldIntact && result.oldSent && result.edited && result.compactReply)
       assert.equal(result.editedNote, 'User edited facts')
       assert.equal(result.originalFile, 'FILE')
@@ -321,7 +380,7 @@ export const runCompressionCases = async (run) => {
       await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
       assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), ['summary'])
       await page.evaluate(() => window.__finishContextSummary(false))
-      await page.getByText(/未能生成完整摘要/).waitFor()
+      await page.getByText(/模型的响应提前结束，未收到完整摘要/).waitFor()
       assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), [
         'summary',
         'summary-interrupted',
@@ -376,6 +435,305 @@ export const runCompressionCases = async (run) => {
   )
 
   await run(
+    'compression adapts to rejected and truncated segments, then explains a refusal without sending the pending turn',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        a.settings.setApiKey('fixture')
+        const id = 'compress-checked'
+        const older = f.user('old-user', 'early-notes '.repeat(26000))
+        const session = f.session({
+          id,
+          title: 'Segmented compression',
+          inherited: {
+            fromId: 'source',
+            fromTitle: 'Earlier history',
+            messages: [older, f.assistant('old-answer', 'Long history')],
+          },
+          messages: [
+            f.user('recent', 'Recent question'),
+            f.assistant('recent-answer', 'Recent answer'),
+          ],
+        })
+        await a.seed([session])
+        const fetch = window.fetch
+        let truncated = false,
+          mode = 'compress',
+          answerCalls = 0
+        const segments = []
+        const outputBudgets = []
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const body = JSON.parse(init.body)
+          if (!body.max_tokens) {
+            answerCalls++
+            return new Response(
+              JSON.stringify({ error: { message: 'Maximum context length exceeded' } }),
+              {
+                status: 400,
+              }
+            )
+          }
+          const { conversation_excerpt: excerpt } = JSON.parse(body.messages[0].content)
+          if (mode === 'refuse') return a.response('Declined', undefined, 'refusal')
+          segments.push(excerpt.length)
+          outputBudgets.push(body.max_tokens)
+          if (excerpt.length > 40000) {
+            return new Response(
+              JSON.stringify({ error: { message: 'Maximum context length exceeded' } }),
+              {
+                status: 400,
+              }
+            )
+          }
+          if (!truncated) {
+            truncated = true
+            return a.response('Partial summary', undefined, 'max_tokens')
+          }
+          return a.response('Completed summary')
+        }
+        const summary = await a.store.compressSession(id)
+        mode = 'refuse'
+        a.drafts.setDraftText(id, 'Pending question')
+        a.store.sendMessage(id)
+        await a.waitIdle()
+        const current = () => a.store.useChatStore.getState().sessionCache[id]
+        const failed = current().messages.at(-1)
+        a.store.retryContextReply(id, failed.id, 'compress')
+        await a.waitIdle()
+        const reply = current().messages.at(-1)
+        const { events } = await a.diagnostics.readDiagnosticLogs()
+        return {
+          summary: summary.text,
+          estimate: summary.historyEstimate,
+          adaptive: segments[0] > 40000 && segments.slice(-5).every((length) => length <= 32768),
+          budgetRaised: Math.max(...outputBudgets) > 2048,
+          explanation: reply.error?.localMessage?.key,
+          recover: reply.error?.localMessage?.params?.recoverContext,
+          preserved: current().contextSummary?.text === summary.text,
+          answerCalls,
+          failures: events
+            .filter((entry) => entry.event === 'compression.segment.failed')
+            .map((entry) => [entry.details.failureKey, entry.details.stopReason]),
+        }
+      })
+      assert.equal(result.summary, 'Completed summary')
+      assert.ok(
+        result.adaptive &&
+          result.budgetRaised &&
+          result.preserved &&
+          result.estimate.before > result.estimate.after
+      )
+      assert.equal(result.explanation, 'compressionFailedRefused')
+      assert.equal(result.recover, 1)
+      assert.equal(result.answerCalls, 1)
+      assert.ok(result.failures.some(([cause]) => cause === 'compressionFailedContext'))
+      assert.ok(
+        result.failures.some(
+          ([cause, stop]) => cause === 'compressionFailedOutput' && stop === 'max_tokens'
+        )
+      )
+      assert.ok(
+        result.failures.some(
+          ([cause, stop]) => cause === 'compressionFailedRefused' && stop === 'refusal'
+        )
+      )
+      await page.getByText(/模型拒绝生成这段聊天的摘要。原聊天记录已保留。/).waitFor()
+    }
+  )
+
+  await run(
+    'compression resumes completed segments after reload and sends the waiting question only after saving the summary',
+    async (page) => {
+      const before = await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        a.settings.setApiKey('fixture')
+        const file = {
+          id: 'waiting-file',
+          serverId: 'file-api-waiting',
+          name: 'waiting.docx',
+          size: 64,
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          isImage: false,
+        }
+        const messages = [
+          f.user('old', 'START_MARKER ' + '早期资料'.repeat(35000) + ' END_MARKER'),
+          f.assistant('old-answer', 'Earlier answer'),
+          f.user('waiting-question', 'WAITING_QUESTION_MARKER', { files: [file] }),
+          f.assistant('waiting-reply', '', {
+            status: 'error',
+            error: {
+              kind: 'http',
+              status: 400,
+              message: '',
+              localMessage: { key: 'replyContextTooLong' },
+            },
+          }),
+        ]
+        await a.seed([
+          f.session({ id: 'resume-compression', title: 'Resume compression', messages }),
+        ])
+        const fetch = window.fetch
+        const excerpts = []
+        let answerCalls = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const body = JSON.parse(init.body)
+          if (!body.max_tokens) {
+            answerCalls++
+            return a.response('Premature answer')
+          }
+          const { conversation_excerpt: excerpt, previous_summary: previous } = JSON.parse(
+            body.messages[0].content
+          )
+          excerpts.push({
+            size: excerpt.length,
+            starts: excerpt.includes('START_MARKER'),
+            previous,
+          })
+          if (excerpts.length === 1) return a.response('Verified first segment')
+          return new Response('data: {"error":{"message":"Generation start timed out"}}\n\n', {
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+        }
+        a.store.retryContextReply('resume-compression', 'waiting-reply', 'compress')
+        await a.waitIdle()
+        const stored = await a.db.loadSession('resume-compression')
+        return {
+          excerpts,
+          answerCalls,
+          checkpoint: stored.compressionCheckpoint,
+          error: stored.messages.at(-1).error?.localMessage?.key,
+          activeSummary: stored.contextSummary?.text ?? null,
+        }
+      })
+      assert.equal(before.answerCalls, 0)
+      assert.equal(before.error, 'compressionFailedNetwork')
+      assert.equal(before.activeSummary, null)
+      assert.equal(before.excerpts.length, 2)
+      assert.equal(before.excerpts[0].starts, true)
+      assert.equal(before.checkpoint.offset, before.excerpts[0].size)
+      assert.equal(before.checkpoint.text, 'Verified first segment')
+      assert.ok(before.excerpts.every(({ size }) => size <= 32768))
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      await page.evaluate(() => window.__audit.store.selectSession('resume-compression'))
+      await page.waitForFunction(() =>
+        Boolean(window.__audit.store.useChatStore.getState().sessionCache['resume-compression'])
+      )
+      const resumed = await page.evaluate(async () => {
+        const a = window.__audit
+        const fetch = window.fetch
+        const calls = []
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const body = JSON.parse(init.body)
+          if (body.max_tokens) {
+            const { conversation_excerpt: excerpt, previous_summary: previous } = JSON.parse(
+              body.messages[0].content
+            )
+            calls.push({ kind: 'summary', excerpt, previous })
+            return a.response('Completed history summary')
+          }
+          const session = a.store.useChatStore.getState().sessionCache['resume-compression']
+          calls.push({
+            kind: 'answer',
+            body: JSON.stringify(body.messages),
+            summaryAtSend: session.contextSummary?.text,
+            checkpointAtSend: Boolean(session.compressionCheckpoint),
+          })
+          return a.response('Answer after resume')
+        }
+        a.store.retryContextReply('resume-compression', 'waiting-reply', 'compress')
+        await a.waitIdle()
+        const session = await a.db.loadSession('resume-compression')
+        return {
+          calls,
+          status: session.messages.at(-1).status,
+          originalStart: session.messages[0].content.startsWith('START_MARKER'),
+          originalFile: session.messages[2].files[0].id,
+        }
+      })
+      assert.equal(resumed.status, 'done')
+      assert.ok(resumed.originalStart)
+      assert.equal(resumed.originalFile, 'waiting-file')
+      const summaries = resumed.calls.slice(0, -1)
+      assert.ok(summaries.length > 0 && summaries.every(({ kind }) => kind === 'summary'))
+      assert.equal(summaries[0].previous, 'Verified first segment')
+      const calledHistory = summaries.map(({ excerpt }) => excerpt).join('')
+      assert.doesNotMatch(calledHistory, /START_MARKER|WAITING_QUESTION_MARKER|waiting\.docx/)
+      assert.match(calledHistory, /END_MARKER/)
+      const answer = resumed.calls.at(-1)
+      assert.equal(answer.kind, 'answer')
+      assert.equal(answer.summaryAtSend, 'Completed history summary')
+      assert.equal(answer.checkpointAtSend, false)
+      assert.match(answer.body, /WAITING_QUESTION_MARKER/)
+      assert.match(answer.body, /file-api-waiting/)
+    }
+  )
+
+  await run(
+    'compression cancels a stalled summary even when the service keeps sending heartbeats',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        a.settings.setApiKey('fixture')
+        await a.seed([
+          f.session({
+            id: 'stalled-summary',
+            messages: [
+              f.user('old-question', 'Earlier history'),
+              f.assistant('old-reply', 'Earlier reply'),
+            ],
+          }),
+        ])
+        const schedule = window.setTimeout
+        const fetch = window.fetch
+        let cancelled = false
+        window.setTimeout = (callback, delay, ...args) =>
+          schedule(callback, delay === 180000 ? 60 : delay, ...args)
+        window.fetch = (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const heartbeat = new TextEncoder().encode(': keep-alive\n\n')
+          let interval
+          return Promise.resolve(
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(heartbeat)
+                  interval = setInterval(() => controller.enqueue(heartbeat), 5)
+                },
+                cancel() {
+                  cancelled = true
+                  clearInterval(interval)
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } }
+            )
+          )
+        }
+        try {
+          await a.store.compressSession('stalled-summary')
+          return null
+        } catch (error) {
+          return {
+            key: error.localMessage?.key,
+            cancelled,
+            settled: !a.store.useChatStore.getState().compressing['stalled-summary'],
+          }
+        } finally {
+          window.setTimeout = schedule
+          window.fetch = fetch
+        }
+      })
+      assert.deepEqual(result, { key: 'compressionFailedNetwork', cancelled: true, settled: true })
+    }
+  )
+
+  await run(
     'compression preserves the last good summary after refusal or cancellation and isolates history branches',
     async (page) => {
       const result = await page.evaluate(async () => {
@@ -402,6 +760,7 @@ export const runCompressionCases = async (run) => {
             return a.response('answer')
           }
           if (mode === 'refuse') return a.response('refused', undefined, 'refusal')
+          if (mode === 'bloat') return a.response('too long to save space '.repeat(100))
           if (mode === 'wait') {
             notify()
             return new Promise((_, reject) =>
@@ -430,6 +789,11 @@ export const runCompressionCases = async (run) => {
         await started
         a.store.stopReply('branches')
         const cancelled = await pending
+        mode = 'bloat'
+        const noSavings = await a.store.compressSession('branches').then(
+          () => null,
+          (error) => error.localMessage?.key
+        )
         const intact =
           a.store.currentContextSummary(current())?.text === first.text &&
           current().messages.length === 14
@@ -444,6 +808,7 @@ export const runCompressionCases = async (run) => {
         return {
           refused,
           cancelled,
+          noSavings,
           intact,
           inherited: inherited.contextSummary?.text,
           changed: !!changed,
@@ -454,6 +819,7 @@ export const runCompressionCases = async (run) => {
       assert.deepEqual(result, {
         refused: true,
         cancelled: true,
+        noSavings: 'compressionFailedNoSavings',
         intact: true,
         inherited: 'initial verified summary',
         changed: false,

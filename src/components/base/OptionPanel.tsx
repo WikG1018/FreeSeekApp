@@ -16,7 +16,7 @@ import styles from './OptionPanel.module.css'
 type Options = {
   side?: Side
   align?: Align
-  kind?: 'choices' | 'actions' | 'field'
+  kind?: 'choices' | 'actions' | 'field' | 'details'
   measureKey?: unknown
   editorRef?: RefObject<HTMLTextAreaElement>
   disabled?: boolean
@@ -48,9 +48,11 @@ export const useOptionPanel = (
   >(open, {
     side,
     align,
+    alignOffset: kind === 'details' ? 12 : 0,
     offset: 7,
     maxHeight: kind === 'actions' ? 226 : 354,
     matchAnchorWidth: kind === 'field',
+    pointToAnchor: kind === 'details',
     minSpace: 132,
     measureKey,
   })
@@ -130,6 +132,7 @@ export const useOptionPanel = (
             tabIndex={-1}
             className={styles.panel}
             data-kind={kind}
+            data-pointer={position?.['--fs-panel-anchor-x'] ? '' : undefined}
             data-testid="option-panel"
             onKeyDown={keyDown}
             onPointerDown={(event) => {

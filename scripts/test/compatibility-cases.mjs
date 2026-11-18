@@ -298,6 +298,60 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
+    'startup shows only the local brand mark until the app is ready',
+    async (page) => {
+      const startup = page.locator('#fs-startup')
+      await page.waitForFunction(() => {
+        const mark = document.getElementById('fs-startup-mark')
+        return (
+          mark.complete && mark.naturalWidth > 0 && typeof window.__finishStartup === 'function'
+        )
+      })
+      assert.equal(await startup.locator('img').isVisible(), true)
+      assert.equal((await startup.innerText()).trim(), '')
+      assert.equal(await startup.getByRole('button').count(), 0)
+      await page.evaluate(() => window.__finishStartup())
+      await page.waitForFunction(() => Boolean(document.querySelector('#root > .app-scaler')))
+      assert.equal(
+        await page.evaluate(() => window.__audit.store.useChatStore.getState().ready),
+        false
+      )
+      assert.equal(await startup.locator('img').isVisible(), true)
+      assert.equal((await startup.innerText()).trim(), '')
+      await page.evaluate(() => window.__finishStartupStorage())
+      await startup.waitFor({ state: 'hidden' })
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.__seedReady = new Promise((resolve) => {
+          window.__finishStartup = resolve
+        })
+        const storage = new Promise((resolve) => {
+          window.__finishStartupStorage = resolve
+        })
+        const open = IDBFactory.prototype.open
+        IDBFactory.prototype.open = function (name, ...args) {
+          const request = open.call(this, name, ...args)
+          if (name === 'freeseek') {
+            const addListener = request.addEventListener.bind(request)
+            request.addEventListener = (type, listener, options) => {
+              addListener(
+                type,
+                type === 'success'
+                  ? (event) => storage.then(() => listener.call(request, event))
+                  : listener,
+                options
+              )
+            }
+          }
+          return request
+        }
+      })
+    },
+    false
+  )
+
+  await run(
     'blocked application script shows recovery controls without loading the application',
     async (page) => {
       await page.getByRole('heading', { name: 'FreeSeek 未能启动', exact: true }).waitFor()

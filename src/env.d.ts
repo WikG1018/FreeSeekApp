@@ -25,6 +25,7 @@ declare module 'abortcontroller-polyfill/dist/polyfill-patch-fetch' {}
 
 interface Window {
   __FreeSeekStartup?: {
+    mounted: () => void
     ready: () => void
     fail: (phase: 'bootstrap' | 'render', error: unknown) => void
   }

@@ -102,7 +102,7 @@ export const exportNativeArchive = async (
     )
     readNativeSession(session)
     ids.push(session.id)
-    const sessionBlob = json(session)
+    const sessionBlob = json({ ...session, compressionCheckpoint: undefined })
     entries.push({ name: sessionPath(session.id), blob: sessionBlob })
     for (const message of allSessionMessages(session)) {
       if (message.role === 'user') {

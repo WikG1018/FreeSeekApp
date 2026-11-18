@@ -4,8 +4,12 @@ import { loadAllSessions } from './chat/db.js'
 import type { AssistantMessage } from './chat/types.js'
 import { usageEntries } from './chat/usage.js'
 
-/** 新接口按成功计费次数计价；旧归档缺少该字段时沿用历史统计。 */
-const billedTools = (usage: MessageUsage) => {
+// DeepSeek billed model-triggered tools from Nov 1 until Nov 18 at 12:00 Beijing time.
+const TOOL_BILLING_START = Date.UTC(2026, 9, 31, 16)
+const TOOL_BILLING_END = Date.UTC(2026, 10, 18, 4)
+
+/** 服务端返回成功次数；旧归档缺少该字段时沿用历史计数。 */
+const toolCalls = (usage: MessageUsage) => {
   const tools = usage.server_tool_use
   return (
     (tools?.tool_search ?? tools?.web_search_requests ?? 0) +
@@ -30,7 +34,7 @@ export type FlashPricing = {
   peakHit: number
   peakMiss: number
   peakOut: number
-  /** 联网搜索（元 / 千次） */
+  /** 历史对话联网工具单价（元 / 千次）。 */
   searchPer1k: number
 }
 
@@ -64,12 +68,18 @@ const UNPRICED: FlashPricing = {
   searchPer1k: 0,
 }
 type PricedModel = Pick<AssistantMessage, 'model' | 'responseModel' | 'connection'>
+const pricedModels = [
+  'deepseek-flash',
+  'deepseek-v4-flash',
+  'deepseek-v4-flash-vision-exp',
+  'deepseek-v4-pro',
+]
 export const hasKnownPricing = (
   message: PricedModel,
   model = message.responseModel ?? message.model
 ) =>
   (!message.connection || message.connection.providerId === 'deepseek') &&
-  (!model || ['deepseek-flash', 'deepseek-v4-pro'].includes(model))
+  (!model || pricedModels.includes(model))
 const messagePricing = (
   message: PricedModel,
   flash: FlashPricing,
@@ -153,31 +163,16 @@ const emptyTotals = (): UsageTotals => ({
   costCny: 0,
 })
 
-const addUsage = (
-  totals: UsageTotals,
-  usage: MessageUsage,
-  peak: boolean,
-  pricing: FlashPricing,
-  priced = true
-) => {
-  const read = usage.cache_read_input_tokens ?? 0
-  const miss = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
-  const output = usage.output_tokens ?? 0
-  const searches = billedTools(usage)
-  const rate = peak
-    ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }
-    : { hit: pricing.offPeakHit, miss: pricing.offPeakMiss, out: pricing.offPeakOut }
+const addUsage = (totals: UsageTotals, detail: MessageUsageDetail, priced: boolean) => {
   totals.requests += 1
   if (!priced) {
     totals.unpricedRequests += 1
   }
-  totals.cacheReadTokens += read
-  totals.cacheMissTokens += miss
-  totals.outputTokens += output
-  totals.webSearches += searches
-  totals.costCny +=
-    (read * rate.hit + miss * rate.miss + output * rate.out) / 1_000_000 +
-    (searches * pricing.searchPer1k) / 1000
+  totals.cacheReadTokens += detail.cacheRead
+  totals.cacheMissTokens += detail.input + detail.cacheWrite
+  totals.outputTokens += detail.output
+  totals.webSearches += detail.searches
+  totals.costCny += detail.costCny
 }
 
 const dayKey = (timestamp: number): string => {
@@ -217,7 +212,11 @@ export const computeMessageUsage = (
   const cacheRead = usage.cache_read_input_tokens ?? 0
   const cacheWrite = usage.cache_creation_input_tokens ?? 0
   const output = usage.output_tokens ?? 0
-  const searches = billedTools(usage)
+  const searches = toolCalls(usage)
+  const toolCost =
+    createdAt >= TOOL_BILLING_START && createdAt < TOOL_BILLING_END
+      ? (searches * pricing.searchPer1k) / 1000
+      : 0
   const peak = isPeakBeijing(createdAt)
   const rate = peak
     ? { hit: pricing.peakHit, miss: pricing.peakMiss, out: pricing.peakOut }
@@ -231,7 +230,7 @@ export const computeMessageUsage = (
     tokens: input + cacheRead + cacheWrite + output,
     costCny:
       (cacheRead * rate.hit + (input + cacheWrite) * rate.miss + output * rate.out) / 1_000_000 +
-      (searches * pricing.searchPer1k) / 1000,
+      toolCost,
   }
 }
 
@@ -251,12 +250,12 @@ export const collectUsage = async (): Promise<UsageStats> => {
       const effectivePricing = messagePricing(message, pricing, entry.model),
         priced = hasKnownPricing(message, entry.model)
       const key = dayKey(entry.createdAt),
-        day = days.get(key) ?? emptyTotals(),
-        peak = isPeakBeijing(entry.createdAt)
-      addUsage(day, entry.usage, peak, effectivePricing, priced)
+        day = days.get(key) ?? emptyTotals()
+      const detail = computeMessageUsage(entry.usage, entry.createdAt, effectivePricing)
+      addUsage(day, detail, priced)
       days.set(key, day)
-      addUsage(total, entry.usage, peak, effectivePricing, priced)
-      addUsage(sessionTotals, entry.usage, peak, effectivePricing, priced)
+      addUsage(total, detail, priced)
+      addUsage(sessionTotals, detail, priced)
     }
     for (const message of session.messages) {
       if (message.role === 'assistant' && message.usage) {

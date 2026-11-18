@@ -5,6 +5,7 @@ import { setSearch, setThinking, useSettings } from '../../services/settings.js'
 import { IconGlobeLanguageOutline14, IconThinkOutline14 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { showToast } from '../base/toastState.js'
+import { ContextUsage } from './ContextUsage.js'
 import { ModelPicker } from './ModelPicker.js'
 import styles from './ChatInput.module.css'
 
@@ -93,6 +94,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
           </Tooltip>
         ))}
       </div>
+      <ContextUsage sessionId={sessionId} editorRef={editorRef} disabled={disabled} />
       {!official && (
         <span id={hint} hidden>
           {t('providerOfficialToolsOnly')}

@@ -1,6 +1,7 @@
 package app.freeseek.chat;
 
 import android.os.Bundle;
+import androidx.core.splashscreen.SplashScreen;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
@@ -10,6 +11,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        SplashScreen.installSplashScreen(this);
         DiagnosticsLog.installCrashHandler(getApplicationContext());
         DiagnosticsLog.record(getApplicationContext(), "app", "activity.created", new com.getcapacitor.JSObject());
         registerPlugin(FontScalePlugin.class);

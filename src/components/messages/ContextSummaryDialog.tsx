@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { useTranslate, type TranslationKey } from '../../i18n/index.js'
-import { ApiError } from '../../services/api/client.js'
+import { useTranslate, type TranslationMessage } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import {
   applicableSummary,
+  compressionEstimateParams,
   contextRounds,
+  describeCompressionFailure,
   MAX_SUMMARY_CHARS,
 } from '../../services/chat/contextCompression.js'
 import {
@@ -39,9 +40,9 @@ function SummaryEditor({ session }: { session: Session }) {
   const [edit, setEdit] = useState<{ original: NonNullable<typeof summary>; text: string } | null>(
     null
   )
-  const [error, setError] = useState<TranslationKey | null>(null)
+  const [error, setError] = useState<TranslationMessage | null>(null)
   const busy = useChatStore((s) => Boolean(s.streaming[session.id]) || s.importingHistory)
-  const compressing = useChatStore((s) => Boolean(s.compressing[session.id]))
+  const compressing = useChatStore((s) => s.compressing[session.id])
   const text = edit && edit.original === summary ? edit.text : (summary?.text ?? '')
   const canCompress = rounds.length > (summary?.coveredRounds ?? 0)
   const editing = edit !== null && edit.original === summary
@@ -50,12 +51,11 @@ function SummaryEditor({ session }: { session: Session }) {
     try {
       await compressSession(session.id)
       setEdit(null)
-      showToast({ key: 'compressionSaved' })
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
         return
       }
-      setError(e instanceof ApiError && e.localMessage ? e.localMessage.key : 'compressionFailed')
+      setError(describeCompressionFailure(e))
     }
   }
   return (
@@ -117,6 +117,11 @@ function SummaryEditor({ session }: { session: Session }) {
       {summary && (
         <section className={styles.label}>
           <strong>{t('compressionCoverage', { count: summary.coveredRounds })}</strong>
+          {summary.historyEstimate && (
+            <small>
+              {t('compressionFinishedResult', compressionEstimateParams(summary.historyEstimate))}
+            </small>
+          )}
           {editing ? (
             <textarea
               aria-label={t('compressionSummary')}
@@ -133,9 +138,9 @@ function SummaryEditor({ session }: { session: Session }) {
       )}
       <div aria-live="polite" className={styles.status}>
         {compressing
-          ? t('compressionBusy')
+          ? t('compressionProgress', { percent: compressing.percent })
           : error
-            ? t(error)
+            ? t(error.key, error.params)
             : !summary && !canCompress
               ? t('compressionUnavailable')
               : null}

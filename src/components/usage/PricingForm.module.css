@@ -26,6 +26,15 @@
   background: var(--dsw-alias-bg-layer-3);
 }
 
+.policy {
+  margin: 0;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 /* 一行一项：名称 + 输入框 + 单位，触控高度 52 */
 .row {
   display: flex;

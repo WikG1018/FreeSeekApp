@@ -20,6 +20,7 @@ export type AnchoredPosition = {
   right?: number
   maxHeight?: number
   width?: number
+  '--fs-panel-anchor-x'?: string
 }
 
 export type AnchoredOptions = {
@@ -49,6 +50,8 @@ export type AnchoredOptions = {
    */
   measureKey?: unknown
   matchAnchorWidth?: boolean
+  /** 在上方且可与触发元素相邻时，提供箭头指向的横坐标。 */
+  pointToAnchor?: boolean
 }
 
 const safeViewport = () => {
@@ -112,6 +115,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     minSpace = 160,
     measureFirstChild = false,
     matchAnchorWidth = false,
+    pointToAnchor = false,
     measureKey,
   }: AnchoredOptions = {}
 ) => {
@@ -127,7 +131,8 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       previous.left === next.left &&
       previous.right === next.right &&
       previous.maxHeight === next.maxHeight &&
-      previous.width === next.width
+      previous.width === next.width &&
+      previous['--fs-panel-anchor-x'] === next['--fs-panel-anchor-x']
         ? previous
         : next
     )
@@ -188,11 +193,17 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       ? Math.min(rect.width, Math.max(0, bounds.right - bounds.left))
       : undefined
     const natural = resolved === 'top' ? rect.top - offset - height : rect.bottom + offset
+    const panelWidth = width ?? floating.offsetWidth
+    const left = alignLeft(rect, panelWidth, align, alignOffset, bounds)
     applyPosition({
       top: Math.max(bounds.top, Math.min(natural, bounds.bottom - height)),
-      left: alignLeft(rect, width ?? floating.offsetWidth, align, alignOffset, bounds),
+      left,
       width,
       maxHeight: limit,
+      '--fs-panel-anchor-x':
+        pointToAnchor && resolved === 'top' && !overlap
+          ? `${Math.max(16, Math.min(rect.left + rect.width / 2 - left, panelWidth - 16))}px`
+          : undefined,
     })
   }, [
     align,
@@ -203,6 +214,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     maxHeight,
     minSpace,
     offset,
+    pointToAnchor,
     side,
     matchAnchorWidth,
   ])
@@ -231,6 +243,10 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     observer.observe(floating)
     if (anchor) {
       observer.observe(anchor)
+      // The composer can move the anchor when its editor grows without resizing the button.
+      if (pointToAnchor && anchor.offsetParent) {
+        observer.observe(anchor.offsetParent)
+      }
     }
     window.addEventListener('scroll', update, { capture: true, passive: true })
     window.addEventListener('resize', update, { passive: true })
@@ -243,7 +259,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       window.visualViewport?.removeEventListener('resize', update)
       window.visualViewport?.removeEventListener('scroll', update)
     }
-  }, [floatingRef, getAnchor, open, update])
+  }, [floatingRef, getAnchor, open, pointToAnchor, update])
 
   useEffect(() => {
     if (!open) {

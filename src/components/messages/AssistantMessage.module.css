@@ -188,6 +188,12 @@
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
 }
+.compressionEstimate {
+  margin-top: 6px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .compressionPrompt .contextActions > button:first-child {
   color: white;
   background: var(--fs-brand);

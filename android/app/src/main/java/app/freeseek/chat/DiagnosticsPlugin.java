@@ -107,7 +107,7 @@ public class DiagnosticsPlugin extends Plugin {
     private JSObject startupReport(PluginCall call) {
         JSObject report = new JSObject();
         String phase = call.getString("phase", "bootstrap"), error = call.getString("errorName", "Error");
-        report.put("phase", Arrays.asList("bootstrap", "render", "resource", "timeout", "diagnostics").contains(phase) ? phase : "bootstrap");
+        report.put("phase", Arrays.asList("bootstrap", "render", "resource", "timeout", "storage", "diagnostics").contains(phase) ? phase : "bootstrap");
         report.put("errorName", Arrays.asList("Error", "SyntaxError", "TypeError", "ReferenceError", "RangeError", "ResourceError", "TimeoutError").contains(error) ? error : "Error");
         String script = call.getString("script", "");
         if (script.matches("[A-Za-z0-9_.-]{1,100}") && !script.toLowerCase(Locale.ROOT).contains("sk-")) { report.put("script", script); }

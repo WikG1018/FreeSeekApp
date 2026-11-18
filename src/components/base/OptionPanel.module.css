@@ -20,6 +20,25 @@
 .panel[data-kind='actions'] {
   width: 194px;
 }
+.panel[data-kind='details'] {
+  width: 312px;
+  max-width: calc(100vw - var(--fs-safe-left) - var(--fs-safe-right) - 32px);
+  padding: 0;
+  overflow: visible;
+}
+.panel[data-pointer]::after {
+  position: absolute;
+  bottom: -6px;
+  left: var(--fs-panel-anchor-x);
+  width: 10px;
+  height: 10px;
+  border-right: 1px solid var(--fs-line);
+  border-bottom: 1px solid var(--fs-line);
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+  pointer-events: none;
+  content: '';
+}
 /* In landscape the IME can leave room for only one row above the composer. */
 @media (orientation: landscape) and (max-height: 260px) {
   .panel[data-kind='actions'] {

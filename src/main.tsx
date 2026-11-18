@@ -8,7 +8,8 @@ import { ensureKatex } from './services/markdown/katex.js'
 import { initUpdateChecker } from './services/update.js'
 import { initDiagnostics } from './services/diagnostics/log.js'
 import { diagnosticError, logEvent } from './services/diagnostics/log.js'
-import { markStartupReady, reportRenderFailure } from './services/startup.js'
+import { markStartupMounted, markStartupReady, reportRenderFailure } from './services/startup.js'
+import { useChatStore } from './services/chat/store.js'
 import './app/theme.css'
 import './app/global.css'
 
@@ -36,7 +37,20 @@ class RenderBoundary extends Component<{ children: ReactNode }, { failed: boolea
   }
 }
 const Ready = () => {
-  useLayoutEffect(markStartupReady, [])
+  const settled = useChatStore(
+    ({ ready, initError, activeId, sessionCache, sessionLoadErrors }) =>
+      initError ||
+      (ready &&
+        (activeId === null ||
+          Object.hasOwn(sessionCache, activeId) ||
+          sessionLoadErrors[activeId] === true))
+  )
+  useLayoutEffect(markStartupMounted, [])
+  useLayoutEffect(() => {
+    if (settled) {
+      markStartupReady()
+    }
+  }, [settled])
   return null
 }
 createRoot(document.getElementById('root') as HTMLElement).render(

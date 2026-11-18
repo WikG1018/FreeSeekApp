@@ -6,6 +6,14 @@ import type { TranslationMessage } from '../../i18n/index.js'
  */
 export const describeKnownApiError = (message: string): TranslationMessage | undefined => {
   if (
+    /\brich_layout_recognition\b/i.test(message) &&
+    /\bcontains\s+images\b[\s\S]{0,48}\bnot\s+supported\s+by\s+(?:this|the(?: current)?)\s+model\b/i.test(
+      message
+    )
+  ) {
+    return { key: 'apiDocumentImagesUnsupported' }
+  }
+  if (
     /context.{0,60}(?:length|window|limit|exceed|too.{0,8}long)|maximum.{0,30}context|input.{0,25}tokens?.{0,40}(?:exceed|too.{0,8}long)|prompt is too long/i.test(
       message
     )

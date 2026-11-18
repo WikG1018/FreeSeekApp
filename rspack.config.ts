@@ -100,7 +100,10 @@ export const createConfig = ({
       __CURRENT_RELEASE_NOTES__: JSON.stringify(currentNotes),
     }),
     new rspack.CopyRspackPlugin({
-      patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
+      patterns: [
+        { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },
+        { from: path.resolve(root, 'src/assets/logo.png'), to: 'startup-mark.png', toType: 'file' },
+      ],
     }),
   ],
   performance: { hints: false },

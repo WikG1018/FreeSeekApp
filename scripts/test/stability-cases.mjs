@@ -577,6 +577,103 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
   )
 
   await run(
+    'document images rejected by the model are localized in current and saved replies',
+    async (page) => {
+      const error =
+        "messages.1.content.0: file-api-rich-layout-fixture was parsed with 'rich_layout_recognition' " +
+        'and contains images, which are not supported by this model (request_id: fixture-request)'
+      const result = await page.evaluate(async (message) => {
+        const a = window.__audit,
+          f = a.fixtures
+        a.settings.setApiKey('fake-key')
+        a.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-v4-pro' })
+        const file = {
+          id: 'layout-doc',
+          serverId: 'file-api-rich-layout-fixture',
+          name: 'report.pdf',
+          size: 4,
+          isImage: false,
+          mimeType: 'application/pdf',
+        }
+        const session = f.session({
+          title: 'Document discussion',
+          messages: [
+            f.user('first', 'Read the report', { files: [file] }),
+            f.assistant('answer', 'Report notes'),
+          ],
+        })
+        await a.seed([session], [{ id: file.id, blob: new Blob(['TEST']) }])
+        const fetch = window.fetch
+        window.__documentRequests = []
+        window.fetch = (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const body = JSON.parse(init.body)
+          window.__documentRequests.push(body)
+          return Promise.resolve(
+            body.model === 'deepseek-v4-pro'
+              ? new Response(JSON.stringify({ error: { message } }), { status: 400 })
+              : a.response('Flash read the attachment')
+          )
+        }
+        a.drafts.setDraftText(session.id, 'Continue with the next section')
+        a.store.sendMessage(session.id)
+        await a.waitIdle()
+        const saved = a.store.useChatStore.getState().sessionCache[session.id]
+        const reply = saved.messages.at(-1)
+        return {
+          reply: reply.id,
+          key: reply.error?.localMessage?.key,
+          calls: window.__documentRequests.length,
+          attachment: saved.messages[0].files[0].serverId,
+        }
+      }, error)
+      assert.equal(result.key, 'apiDocumentImagesUnsupported')
+      assert.equal(result.calls, 1)
+      assert.equal(result.attachment, 'file-api-rich-layout-fixture')
+      assert.equal(uploads().length, 0)
+      const reply = page.locator(`[data-message-id="${result.reply}"]`)
+      const localized = /本轮或历史附件中有文档包含图片.*DeepSeek Flash.*重新生成/
+      await reply.getByText(localized).waitFor()
+      assert.doesNotMatch(await reply.innerText(), /rich_layout_recognition|fixture-request/)
+      await page.evaluate(() =>
+        window.__audit.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' })
+      )
+      await reply.getByRole('button', { name: '重新生成', exact: true }).click()
+      await page.getByText('Flash read the attachment', { exact: true }).waitFor()
+      const requests = await page.evaluate(() => window.__documentRequests)
+      assert.deepEqual(
+        requests.map((request) => request.model),
+        ['deepseek-v4-pro', 'deepseek-flash']
+      )
+      assert.match(JSON.stringify(requests[1].messages), /file-api-rich-layout-fixture/)
+      assert.equal(uploads().length, 0)
+
+      await page.evaluate(async (message) => {
+        const a = window.__audit,
+          f = a.fixtures
+        await a.seed([
+          f.session({
+            title: 'Saved error',
+            messages: [
+              f.user('legacy-q', 'Read the saved report'),
+              f.assistant('legacy-a', '', {
+                status: 'error',
+                error: { kind: 'http', status: 400, message },
+              }),
+            ],
+          }),
+        ])
+      }, error)
+      const saved = page.locator('[data-message-id="legacy-a"]')
+      await saved.getByText(localized).waitFor()
+      await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+      await saved
+        .getByText(/A document in this chat contains images .*regenerate the reply/)
+        .waitFor()
+    }
+  )
+
+  await run(
     'diagnostic logs persist, remain bounded and redact secrets and conversation content',
     async (page) => {
       await page.evaluate(async () => {
@@ -677,10 +774,13 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
   )
 
   await run(
-    'usage bills successful search and fetch calls and retains old backup compatibility',
+    'chat web tool pricing follows both Beijing cutoffs while keeping per-reply and aggregate counts',
     async (page) => {
-      const result = await page.evaluate(() => {
+      const result = await page.evaluate(async () => {
         const a = window.__audit,
+          f = a.fixtures,
+          start = Date.UTC(2026, 9, 31, 16),
+          end = Date.UTC(2026, 10, 18, 4),
           usage = {
             input_tokens: 0,
             cache_creation_input_tokens: 0,
@@ -693,19 +793,49 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
               tool_image_search: 1,
             },
           }
-        const current = a.usage.computeMessageUsage(usage, Date.now())
+        const current = a.usage.computeMessageUsage(usage, end)
+        const cutoffCosts = [start - 1, start, end - 1, end, end + 1].map(
+          (at) => a.usage.computeMessageUsage(usage, at).costCny
+        )
         const sum = a.sumMessageUsage(usage, usage)
         const legacy = a.usage.computeMessageUsage(
           { ...usage, server_tool_use: { web_search_requests: 4 } },
-          Date.now()
+          end - 1
         )
+        const tokensAndTools = { ...usage, input_tokens: 1000 }
+        const message = f.assistant('priced', 'Answer', {
+          model: 'deepseek-flash',
+          usage: a.sumMessageUsage(tokensAndTools, tokensAndTools),
+          usageHistory: [
+            { createdAt: end - 1, usage: tokensAndTools, model: 'deepseek-v4-flash-vision-exp' },
+            { createdAt: end, usage: tokensAndTools, model: 'deepseek-flash' },
+          ],
+        })
+        await a.seed([f.session({ messages: [f.user('question', 'Search and read'), message] })])
+        const aggregate = (await a.usage.collectUsage()).total
         return {
           searches: current.searches,
-          summed: a.usage.computeMessageUsage(sum, Date.now()).searches,
-          legacy: legacy.searches,
+          summed: a.usage.computeMessageUsage(sum, end).searches,
+          legacy: [legacy.searches, legacy.costCny],
+          cutoffCosts,
+          replyCost: a.usage.computeReplyUsage(message).costCny,
+          aggregate: {
+            requests: aggregate.requests,
+            calls: aggregate.webSearches,
+            tokens: aggregate.cacheMissTokens,
+            cost: aggregate.costCny,
+            unpriced: aggregate.unpricedRequests,
+          },
         }
       })
-      assert.deepEqual(result, { searches: 6, summed: 12, legacy: 4 })
+      assert.deepEqual(result, {
+        searches: 6,
+        summed: 12,
+        legacy: [4, 0.02],
+        cutoffCosts: [0, 0.03, 0.03, 0, 0],
+        replyCost: 0.033,
+        aggregate: { requests: 2, calls: 12, tokens: 2000, cost: 0.033, unpriced: 0 },
+      })
     }
   )
 

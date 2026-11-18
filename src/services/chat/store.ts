@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { showToast } from '../../components/base/toastState.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import type { MessageParam } from '../api/types.js'
@@ -35,9 +36,13 @@ import {
 import { createLatestReminder } from './latestReminder.js'
 import {
   applicableSummary,
+  compressionEstimateParams,
   contextLength,
   contextRounds,
+  describeCompressionFailure,
+  estimateContextHistory,
   generateContextSummary,
+  isCompressionFailure,
   MAX_SUMMARY_CHARS,
   planCompression,
   type ContextRound,
@@ -142,7 +147,7 @@ type ChatState = {
   /** 对话接续：待带入下一个新会话的来源上下文快照；null 表示未启用 */
   inheritFrom: InheritedContext | null
   /** 正在生成回复的会话 */
-  compressing: Record<string, boolean>
+  compressing: Record<string, { percent: number }>
   streaming: Record<string, AbortController>
 }
 
@@ -349,6 +354,9 @@ export const bindChatPersistence = () => {
 }
 
 /** 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。 */
+export const replySystemPrompt = (prompt: string | undefined, official: boolean) =>
+  prompt?.trim() ? prompt : official ? SYSTEM_PROMPT : 'You are a helpful assistant.'
+
 const createReply = (persona?: { name: string; prompt: string } | null): AssistantMessage => {
   const { thinking, search } = useSettings.getState()
   const { selection } = useProviders.getState()
@@ -359,11 +367,7 @@ const createReply = (persona?: { name: string; prompt: string } | null): Assista
     createdAt: Date.now(),
     model: selection.model,
     connection: activeConnectionRef(),
-    systemPrompt: persona?.prompt.trim()
-      ? persona.prompt
-      : official
-        ? SYSTEM_PROMPT
-        : 'You are a helpful assistant.',
+    systemPrompt: replySystemPrompt(persona?.prompt, official),
     thinking: official && thinking,
     search: official && search,
     prefix: true,
@@ -994,16 +998,16 @@ export const currentContextSummary = (session: Session) =>
   )
 
 type CompressionMode = 'ask' | 'compress' | 'recover' | 'send'
-const markCompressing = (id: string, value: boolean) =>
+const markCompressing = (id: string, percent?: number) =>
   set((state) => {
-    const compressing = { ...state.compressing }
-    if (value) {
-      compressing[id] = true
+    if (state.compressing[id]?.percent === percent) {
+      return state
     }
     return {
-      compressing: value
-        ? compressing
-        : Object.fromEntries(Object.entries(compressing).filter(([key]) => key !== id)),
+      compressing:
+        percent === undefined
+          ? Object.fromEntries(Object.entries(state.compressing).filter(([key]) => key !== id))
+          : { ...state.compressing, [id]: { percent } },
     }
   })
 
@@ -1015,48 +1019,73 @@ const compressRounds = async (
   plan: SummaryPlan,
   signal: AbortSignal
 ) => {
-  markCompressing(id, true)
+  markCompressing(id, 0)
   logEvent('chat', 'compression.started', {
     sessionId: id,
     coveredRounds: plan.start,
     targetRounds: plan.end,
   })
   try {
-    const summary = await generateContextSummary(
-      connection,
-      rounds,
-      prior,
-      plan,
-      signal,
-      (charge) => {
+    const generated = await generateContextSummary(connection, rounds, prior, plan, signal, {
+      checkpoint: getSession(id)?.compressionCheckpoint,
+      progress: (percent) => markCompressing(id, percent),
+      record: (charge, checkpoint) => {
         if (get().importingHistory || deletingSessions.has(id)) {
           return
         }
         updateSession(id, (session) => ({
           ...session,
-          compressionUsage: [...(session.compressionUsage ?? []), charge],
+          ...(charge ? { compressionUsage: [...(session.compressionUsage ?? []), charge] } : {}),
+          ...(checkpoint ? { compressionCheckpoint: checkpoint } : {}),
         }))
         persist(id)
-      }
-    )
+      },
+    })
     signal.throwIfAborted()
-    updateSession(id, (session) => ({ ...session, contextSummary: summary }))
+    const historyEstimate = {
+      before: plan.historyEstimate?.before ?? estimateContextHistory(rounds, prior).tokens,
+      after: estimateContextHistory(rounds, generated).tokens,
+    }
+    if (historyEstimate.after >= historyEstimate.before) {
+      updateSession(id, (session) => ({ ...session, compressionCheckpoint: undefined }))
+      persist(id)
+      throw new ApiError('protocol', { key: 'compressionFailedNoSavings' })
+    }
+    const summary = { ...generated, historyEstimate }
+    updateSession(id, (session) => ({
+      ...session,
+      contextSummary: summary,
+      compressionCheckpoint: undefined,
+    }))
     persist(id)
     logEvent('chat', 'compression.completed', {
       sessionId: id,
       coveredRounds: summary.coveredRounds,
+      historyTokensBefore: historyEstimate.before,
+      historyTokensAfter: historyEstimate.after,
     })
+    if (get().activeId === id) {
+      showToast({
+        key: 'compressionFinishedResult',
+        params: compressionEstimateParams(historyEstimate),
+      })
+    }
     return summary
   } catch (error) {
     logEvent(
       'chat',
       'compression.failed',
-      { sessionId: id, ...diagnosticError(error), cancelled: signal.aborted },
+      {
+        sessionId: id,
+        ...diagnosticError(error),
+        failureKey: describeCompressionFailure(error).key,
+        cancelled: signal.aborted,
+      },
       signal.aborted ? 'info' : 'warn'
     )
     throw error
   } finally {
-    markCompressing(id, false)
+    markCompressing(id)
   }
 }
 
@@ -1107,6 +1136,7 @@ export const editContextSummary = (id: string, original: ContextSummary, text: s
   updateSession(id, (s) => ({
     ...s,
     contextSummary: { ...summary, text: text.trim(), updatedAt: Date.now() },
+    compressionCheckpoint: undefined,
   }))
   persist(id)
   return true
@@ -1121,16 +1151,15 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     index = path.findIndex((m) => m.id === replyId)
   const question = path[index - 1],
     previous = path[index]
+  const local = previous?.role === 'assistant' ? previous.error?.localMessage : undefined
   if (
     question?.role !== 'user' ||
     previous?.role !== 'assistant' ||
     previous.status !== 'error' ||
-    ![
-      'replyContextTooLong',
-      'compressionSuggested',
-      'compressionFailed',
-      'compressionUnavailable',
-    ].includes(previous.error?.localMessage?.key ?? '')
+    (!['replyContextTooLong', 'compressionSuggested', 'compressionUnavailable'].includes(
+      local?.key ?? ''
+    ) &&
+      !isCompressionFailure(local?.key))
   ) {
     return
   }
@@ -1141,7 +1170,6 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     stopReason: undefined,
     stopDetails: undefined,
   }
-  const local = previous.error?.localMessage
   const recover =
     mode === 'compress' &&
     (local?.key === 'replyContextTooLong' || local?.params?.recoverContext === 1)
@@ -1597,15 +1625,27 @@ const streamReply = async (
           if (mode === 'compress' && !canReduce) {
             throw new ApiError('protocol', { key: 'compressionUnavailable' })
           }
-          if (
-            canReduce &&
-            (recovering ||
-              mode === 'compress' ||
-              (mode === 'ask' && pressure?.near && !pressure.currentTooLarge))
-          ) {
-            if (mode === 'ask' && !useSettings.getState().autoCompress) {
-              throw new ApiError('protocol', { key: 'compressionSuggested' })
+          const nearLimit = mode === 'ask' && pressure?.near && !pressure.currentTooLarge
+          const autoCompress = nearLimit && useSettings.getState().autoCompress
+          if (canReduce && nearLimit && !autoCompress) {
+            const session = getSession(sessionId)
+            if (session && !session.compressionPromptShown) {
+              updateSession(sessionId, (item) => ({ ...item, compressionPromptShown: true }))
+              if (
+                !session.messages.some(
+                  (item) =>
+                    item.role === 'assistant' &&
+                    item.error?.localMessage?.key === 'compressionSuggested'
+                )
+              ) {
+                throw new ApiError('protocol', {
+                  key: 'compressionSuggested',
+                  params: plan.historyEstimate && compressionEstimateParams(plan.historyEstimate),
+                })
+              }
             }
+          }
+          if (canReduce && (recovering || mode === 'compress' || autoCompress)) {
             compressionAttempted = true
             try {
               summary = await compressRounds(
@@ -1617,22 +1657,17 @@ const streamReply = async (
                 controller.signal
               )
             } catch (error) {
-              if (
-                error instanceof ApiError &&
-                (error.status === 401 ||
-                  error.status === 402 ||
-                  error.localMessage?.key === 'compressionNoKey')
-              ) {
-                throw error
-              }
+              controller.signal.throwIfAborted()
+              const failure = describeCompressionFailure(error)
               throw new ApiError('protocol', {
-                key: 'compressionFailed',
+                ...failure,
                 params: recovering
                   ? {
+                      ...failure.params,
                       recoverContext: 1,
                       ...(reportedLimit ? { contextLimitTokens: reportedLimit } : {}),
                     }
-                  : undefined,
+                  : failure.params,
               })
             }
           }
@@ -1734,6 +1769,7 @@ const streamReply = async (
                 controller.signal
               )
         const blockIndexes = new Map<number, number>()
+        const usageStartedAt = Date.now()
         for await (const event of events) {
           if (event.type === 'message_start' && validModel(event.message.model)) {
             reply = { ...reply, responseModel: event.message.model }
@@ -1765,7 +1801,7 @@ const streamReply = async (
               usageHistory: [
                 ...usageHistory,
                 {
-                  createdAt: requestStartedAt,
+                  createdAt: usageStartedAt,
                   usage,
                   model: reply.responseModel ?? reply.model ?? undefined,
                 },

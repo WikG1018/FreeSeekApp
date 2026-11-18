@@ -42,6 +42,17 @@ export const en = {
   modelShowMore: 'Show more models',
   modelNoMatches: 'No matching models',
   composerTools: 'Chat tools',
+  contextUsageTitle: 'Context usage',
+  contextUsageLabel: 'Context usage, estimated at {percent}%',
+  contextUsageEstimated: 'Estimated usage',
+  contextUsageFraction: '{count} / {limit} tokens',
+  contextUsageCount: '{count} tokens',
+  contextUsageHistory: 'Chat history and persona',
+  contextUsageDraft: 'Draft and attachments',
+  contextUsageReserved: 'Reserved for reply',
+  contextUsageLimitUnknown: 'No context limit is configured for this model.',
+  contextUsageUpdating: 'The estimate updates when the reply finishes.',
+  contextUsageUnavailable: 'The configuration for this model is unavailable.',
   composerMessage: 'Message',
   providerSwitch: 'Switch model',
   providerShowSwitcher: 'Show model switcher in chat',
@@ -337,7 +348,9 @@ export const en = {
   usageEmpty: 'No usage yet. Stats appear after your first message.',
   usagePricingTitle: 'Pricing',
   usagePricingUnit: 'CNY / 1M',
-  usagePricingSearchSection: 'Web search',
+  usagePricingSearchSection: 'Web tools in chat',
+  usagePricingSearchPolicy:
+    'From Nov 18, 2026 at 12:00 Beijing time, search and page fetches in chat only incur model token charges. The rate below applies to historical calls from Nov 1 until that time.',
   usagePricingSearchUnit: 'CNY / 1k',
   usagePricingDefault: 'Official defaults',
   usagePricingCustom: 'Custom',
@@ -348,7 +361,7 @@ export const en = {
   usagePricingHit: 'Cache hit',
   usagePricingMiss: 'Cache miss',
   usagePricingOut: 'Output',
-  usagePricingSearch: 'Search (per 1k)',
+  usagePricingSearch: 'Historical Flash rate',
   usagePricingReset: 'Reset',
   usageSave: 'Save pricing',
   usageSaved: 'Saved',
@@ -438,6 +451,8 @@ export const en = {
   streamIdleTimeout: 'No data received for a long time; check your network and retry',
   apiImageUnsupported:
     'An image in this conversation was rejected (usually from an older or imported message): remove it from that message to continue',
+  apiDocumentImagesUnsupported:
+    'A document in this chat contains images that the current model cannot process. Switch to a model that supports images, such as DeepSeek Flash, then regenerate the reply.',
   apiImageTooLarge: 'The image is too large for the API — compress or crop it first',
   apiKeyInvalid: 'Invalid API Key. Please check it and try again.',
   apiKeyVerificationFailed: 'Verification failed: {message}',
@@ -492,7 +507,31 @@ export const en = {
   compressionUnavailable: 'There is no earlier history to compress in this conversation.',
   compressionFailed:
     'Could not complete the summary. Try compressing again or send without compressing.',
-  compressionBusy: 'Compressing earlier messages…',
+  compressionFailedKey:
+    'The model service rejected the API key during compression. Check the key and retry.',
+  compressionFailedBalance: 'The model balance is too low to compress this chat. Top up and retry.',
+  compressionFailedRateLimit:
+    'The model service rate-limited the compression request. Wait a moment and retry.',
+  compressionFailedNetwork:
+    'The connection was interrupted or timed out during compression. Check your network and retry.',
+  compressionFailedServer: 'The model service could not complete compression. Try again later.',
+  compressionFailedContext:
+    'The history still exceeds the model limit after splitting. Try a model with a larger context window.',
+  compressionFailedOutput:
+    'The summary reached the model output limit. Retry or use a model with a larger output budget.',
+  compressionFailedOutputParameter:
+    'The model rejected the output length for the summary. Check the model’s maximum output setting.',
+  compressionFailedRefused:
+    'The model declined to summarize this chat. Your original messages are saved.',
+  compressionFailedIncomplete:
+    'The response ended before the summary was complete. Try compressing again.',
+  compressionFailedEmpty: 'The model returned an empty summary. Try compressing again.',
+  compressionFailedNoSavings:
+    'The summary did not free any context. Your chat and its existing summary are saved.',
+  compressionProgress: 'Compressing chat history · {percent}%',
+  compressionEstimatedResult:
+    'Chat history is about {before} tokens. Estimated after compression: {after} tokens.',
+  compressionFinishedResult: 'Chat history compressed from about {before} to {after} tokens.',
   compressionHelp:
     'Use the current model to summarize older turns. Future replies use the summary and recent messages. This uses additional tokens. Your original messages and files stay on this device.',
   compressionSummary: 'Summary used in future replies',

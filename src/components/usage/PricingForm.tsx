@@ -1,11 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import {
-  DEFAULT_PRICING,
-  setPricing,
-  usePricing,
-  type FlashPricing,
-} from '../../services/usage.js'
+import { DEFAULT_PRICING, setPricing, usePricing, type FlashPricing } from '../../services/usage.js'
 import { showToast } from '../base/toastState.js'
 import styles from './PricingForm.module.css'
 
@@ -128,6 +123,7 @@ export const PricingForm = () => {
         />
       </Group>
       <Group title={t('usagePricingSearchSection')}>
+        <p className={styles.policy}>{t('usagePricingSearchPolicy')}</p>
         <PriceRow
           label={t('usagePricingSearch')}
           unit={t('usagePricingSearchUnit')}

@@ -129,6 +129,8 @@ export type ContextSummary = {
   coveredRounds: number
   signature: string
   updatedAt: number
+  /** Estimated tokens in the retained chat history immediately before and after this compression. */
+  historyEstimate?: { before: number; after: number }
 }
 
 export type CompressionCharge = {
@@ -138,9 +140,21 @@ export type CompressionCharge = {
   usage: MessageUsage
 }
 
+/** Local continuation state for a summary that has yet to replace the active context. */
+export type CompressionCheckpoint = {
+  scope: string
+  text: string
+  offset: number
+  segmentLimit: number
+  outputTokens: number
+  windowTokens: number
+}
+
 export type Session = {
   contextSummary?: ContextSummary
+  compressionPromptShown?: boolean
   compressionUsage?: CompressionCharge[]
+  compressionCheckpoint?: CompressionCheckpoint
   id: string
   title: string
   pinned?: boolean

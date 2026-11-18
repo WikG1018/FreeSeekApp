@@ -57,6 +57,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
   const panelEntry = useSearchPanel((state) => state.entry)
   const notice = streaming ? null : describeReply(message)
+  const compressionPrompt = message.error?.localMessage?.key === 'compressionSuggested'
+  const projection = compressionPrompt ? message.error?.localMessage?.params : undefined
   // 安全拒绝：已下发的思考与正文按协议丢弃，只显示模板答复。
   const refused = message.stopReason === 'refusal'
   const answer = refused ? null : view.answer
@@ -64,7 +66,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     .filter(Boolean)
     .join('\n\n')
   const copyText = responseText || notice?.text
-  const compressing = useChatStore((s) => streaming && Boolean(s.compressing[sessionId]))
+  const compressing = useChatStore((s) => (streaming ? s.compressing[sessionId] : undefined))
   const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
   const summaryEntry = `${message.id}-summary`
   return (
@@ -94,7 +96,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         />
       ) : null}
       {compressing ? (
-        <div role="status">{t('compressionBusy')}</div>
+        <div role="status">{t('compressionProgress', { percent: compressing.percent })}</div>
       ) : waiting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (
@@ -111,20 +113,16 @@ export const AssistantMessage = memo(function AssistantMessage({
           disableLink={false}
         />
       ) : notice ? (
-        <div
-          className={clsx(
-            styles.notice,
-            message.error?.localMessage?.key === 'compressionSuggested' && styles.compressionPrompt
-          )}
-        >
-          {message.error?.localMessage?.key === 'compressionSuggested' ? null : (
-            <IconWarningOutline16 />
-          )}
+        <div className={clsx(styles.notice, compressionPrompt && styles.compressionPrompt)}>
+          {compressionPrompt ? null : <IconWarningOutline16 />}
           <div>
-            {message.error?.localMessage?.key === 'compressionSuggested' && (
-              <strong>{t('compressionPromptTitle')}</strong>
-            )}
+            {compressionPrompt && <strong>{t('compressionPromptTitle')}</strong>}
             {notice.text}
+            {projection?.before !== undefined && projection.after !== undefined && (
+              <div className={styles.compressionEstimate}>
+                {t('compressionEstimatedResult', projection)}
+              </div>
+            )}
             {notice.action === 'apiKey' ? (
               <>
                 {' '}

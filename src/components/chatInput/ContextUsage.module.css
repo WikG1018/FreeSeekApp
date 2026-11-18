@@ -1,0 +1,200 @@
+.trigger,
+.detail {
+  --context-fill: var(--fs-accent-fill);
+  --context-ink: var(--fs-accent-text);
+  --context-near: #995610;
+}
+:global([data-ds-dark-theme]) .trigger,
+:global([data-ds-dark-theme]) .detail {
+  --context-fill: var(--fs-accent-text);
+  --context-near: #ffbd70;
+}
+.trigger[data-level='near'],
+.detail[data-level='near'] {
+  --context-fill: var(--context-near);
+  --context-ink: var(--context-near);
+}
+.trigger[data-level='full'],
+.detail[data-level='full'] {
+  --context-fill: var(--dsw-alias-state-error-primary);
+  --context-ink: var(--dsw-alias-state-error-primary);
+}
+.trigger {
+  display: grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.face {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--fs-line);
+  border-radius: 50%;
+  background: var(--fs-floating-surface);
+  transition:
+    border-color var(--fs-duration-fast) var(--fs-ease-out),
+    background-color var(--fs-duration-fast) var(--fs-ease-out);
+}
+.trigger[aria-expanded='true'] .face {
+  border-color: var(--fs-accent-line);
+  background: var(--fs-accent-wash);
+}
+@media (hover: hover) {
+  .trigger:hover:enabled .face {
+    border-color: var(--fs-accent-line);
+    background: var(--fs-accent-wash);
+  }
+}
+.trigger:focus,
+.close:focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+@supports selector(:focus-visible) {
+  .trigger:focus:not(:focus-visible),
+  .close:focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+.ring {
+  display: block;
+  width: 19px;
+  height: 19px;
+}
+.ringTrack {
+  stroke: var(--fs-accent-line);
+}
+.ringFill {
+  stroke: var(--context-fill);
+  transition: stroke-dashoffset var(--fs-duration-base) var(--fs-ease-out);
+}
+.detail {
+  min-height: 0;
+  padding: 14px 16px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 11px;
+}
+.headingText {
+  min-width: 0;
+}
+.heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.heading p {
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: -9px -11px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fs-secondary-text);
+  cursor: pointer;
+}
+.close svg {
+  width: 14px;
+  height: 14px;
+}
+@media (hover: hover) {
+  .close:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
+.meter {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.meter strong {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--context-ink);
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.bar {
+  height: 5px;
+  margin: 7px 0 11px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--fs-accent-wash);
+}
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--context-fill);
+}
+.status {
+  margin: 6px 0 10px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.breakdown {
+  margin: 0;
+  padding-top: 5px;
+  border-top: 1px solid var(--fs-line);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.breakdown div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 26px;
+  gap: 12px;
+}
+.breakdown dt {
+  min-width: 0;
+  color: var(--fs-secondary-text);
+}
+.breakdown dd {
+  flex: none;
+  margin: 0;
+  font-weight: 600;
+}

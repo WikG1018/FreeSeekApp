@@ -8,10 +8,12 @@
   </head>
   <body>
     <section id="fs-startup" role="status" aria-live="polite">
-      <div><h1 id="fs-startup-title">正在启动 FreeSeek</h1>
-        <p id="fs-startup-description">正在加载本机应用…</p>
+      <img id="fs-startup-mark" src="./startup-mark.png" alt="" width="160" height="160" />
+      <div id="fs-startup-failure" style="display:none">
+        <h1 id="fs-startup-title"></h1>
+        <p id="fs-startup-description"></p>
         <p id="fs-startup-version"></p>
-        <div id="fs-startup-actions" style="display:none">
+        <div id="fs-startup-actions">
           <button id="fs-startup-retry" type="button">重新启动</button>
           <button id="fs-startup-export" type="button">导出启动诊断</button>
         </div>
@@ -19,8 +21,9 @@
       </div>
     </section>
     <style>
-      #fs-startup{position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;background:#f8fafc;color:#111827;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:auto}
+      #fs-startup{position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;background:#fff;color:#111827;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:auto}
       #fs-startup>div{max-width:480px;width:100%;margin:auto}
+      #fs-startup-mark{display:block;box-sizing:border-box;max-width:100%;padding:10px;object-fit:contain;border-radius:50%}
       #fs-startup h1{margin:0 0 16px;font-size:24px;line-height:1.35;font-weight:650}
       #fs-startup p{margin:12px 0;overflow-wrap:break-word}
       #fs-startup-version{font-size:14px;color:#4b5563}
@@ -28,26 +31,42 @@
       #fs-startup-actions button:focus{outline:2px solid #111827;outline-offset:3px}
       #fs-startup-actions button:disabled{opacity:.6;cursor:wait}
       #fs-startup-feedback{font-size:14px;color:#4b5563}
+      @media (prefers-color-scheme:dark){
+        #fs-startup{background:#151517;color:#f3f5fa}
+        #fs-startup-mark{background:#fff}
+        #fs-startup-version,#fs-startup-feedback{color:#b5bbc6}
+        #fs-startup-actions button{background:#252e43;color:#adc4ff;border-color:#627fb8}
+        #fs-startup-actions button:focus{outline-color:#adc4ff}
+      }
     </style>
     <script>
       // 此守卫刻意使用 ES5，主包语法不兼容、加载失败或初始化异常时仍能显示和导出。
       (function(){
         var panel=document.getElementById('fs-startup'),state='starting',timer,report={phase:'bootstrap',errorName:'Error'};
-        var title=document.getElementById('fs-startup-title'),description=document.getElementById('fs-startup-description'),actions=document.getElementById('fs-startup-actions'),feedback=document.getElementById('fs-startup-feedback'),exportButton=document.getElementById('fs-startup-export');
+        var title=document.getElementById('fs-startup-title'),description=document.getElementById('fs-startup-description'),failure=document.getElementById('fs-startup-failure'),mark=document.getElementById('fs-startup-mark'),feedback=document.getElementById('fs-startup-feedback'),exportButton=document.getElementById('fs-startup-export');
         var zh=(navigator.language||'zh').toLowerCase().indexOf('zh')===0;
         try{var saved=localStorage.getItem('freeseek:locale');if(saved){zh=saved==='zh-CN';}}catch(ignore){}
         function label(chinese,english){return zh?chinese:english;}
-        title.textContent=label('正在启动 FreeSeek','Starting FreeSeek');description.textContent=label('正在加载本机应用…','Loading the app…');
         document.getElementById('fs-startup-retry').textContent=label('重新启动','Restart');exportButton.textContent=label('导出启动诊断','Export startup diagnostics');
         function fail(phase,error,resource,line,column){
           clearTimeout(timer);state='failed';report={phase:phase,errorName:error&&error.name||'Error',line:Number(line)||0,column:Number(column)||0};
           if(resource){var basename=String(resource).split('/').pop().split('?')[0];if(/^[\w.-]{1,100}$/.test(basename)){report.script=basename;}}
-          panel.style.display='flex';title.textContent=label('FreeSeek 未能启动','FreeSeek could not start');
-          description.textContent=label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
-          actions.style.display='block';var meta=document.querySelector('meta[name="application-version"]'),match=/Chrome\/([\d.]+)/.exec(navigator.userAgent);
+          panel.style.display='flex';mark.style.display='none';failure.style.display='block';title.textContent=label('FreeSeek 未能启动','FreeSeek could not start');
+          description.textContent=phase==='storage'
+            ? label('读取本地聊天记录超时。请重试，或导出启动诊断。','Loading local chats timed out. Restart or export startup diagnostics.')
+            : label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
+          var meta=document.querySelector('meta[name="application-version"]'),match=/Chrome\/([\d.]+)/.exec(navigator.userAgent);
           document.getElementById('fs-startup-version').textContent='FreeSeek '+(meta?meta.content:'—')+' · WebView '+(match?match[1]:'—')+' · '+report.errorName;
         }
-        window.__FreeSeekStartup={ready:function(){clearTimeout(timer);state='ready';panel.style.display='none';},fail:fail};
+        window.__FreeSeekStartup={
+          mounted:function(){
+            if(state!=='starting'){return;}
+            clearTimeout(timer);state='loading';
+            timer=setTimeout(function(){fail('storage',{name:'TimeoutError'});},30000);
+          },
+          ready:function(){clearTimeout(timer);state='ready';panel.style.display='none';},
+          fail:fail
+        };
         window.addEventListener('error',function(event){if(state==='ready'){return;}if(event.target&&event.target!==window){var target=event.target;if(target.tagName==='SCRIPT'||target.tagName==='LINK'){fail('resource',{name:'ResourceError'},target.src||target.href);}return;}fail('bootstrap',event.error,null,event.lineno,event.colno);},true);
         window.addEventListener('unhandledrejection',function(event){if(state!=='ready'){fail('bootstrap',event.reason);}});
         document.getElementById('fs-startup-retry').onclick=function(){location.reload();};

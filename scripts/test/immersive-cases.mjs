@@ -134,7 +134,7 @@ export const runImmersiveCases = async ({ run }) => {
   )
 
   await run(
-    'model, thinking and search stay visible together for long names, large type and both locales',
+    'model, thinking, search and context usage fit long names, large type and both locales',
     async (page) => {
       const model = 'gateway/' + '很长的模型名称-'.repeat(22) + 'instruct'
       await page.evaluate((name) => {
@@ -192,10 +192,12 @@ export const runImmersiveCases = async ({ run }) => {
               ),
             overflow: el.scrollWidth - el.clientWidth,
             clipped: measured.scrollWidth > measured.clientWidth,
-            complete: buttons.slice(1).every((b) => {
-              const text = b.querySelector('span > span')
-              return text.scrollWidth <= text.clientWidth + 1
-            }),
+            complete: buttons
+              .filter((b) => b.hasAttribute('aria-pressed'))
+              .every((b) => {
+                const text = b.querySelector('span > span')
+                return text.scrollWidth <= text.clientWidth + 1
+              }),
           }
         })
         assert.ok(
@@ -212,7 +214,7 @@ export const runImmersiveCases = async ({ run }) => {
         window.__audit.settings.setShowModelSwitcher(false)
       })
       await trigger.waitFor({ state: 'detached' })
-      assert.equal(await bar.getByRole('button').count(), 2)
+      assert.equal(await bar.getByRole('button').count(), 3)
       await page.evaluate(() => {
         window.__audit.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' })
       })
@@ -228,6 +230,75 @@ export const runImmersiveCases = async ({ run }) => {
           await bar.getByRole('button', { name, exact: true }).getAttribute('aria-pressed'),
           'true'
         )
+    }
+  )
+
+  await run(
+    'context usage follows the draft, model limit and warnings while keeping the editor focused',
+    async (page) => {
+      const providerId = await page.evaluate(() => {
+        const a = window.__audit
+        return a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            url: 'https://context.example/v1',
+            model: 'bounded',
+            models: ['bounded', 'unknown'],
+            contextWindows: { bounded: 1000 },
+            maxOutputTokens: 100,
+          },
+          true
+        ).id
+      })
+      const ring = page.getByTestId('context-usage')
+      const draft = page.getByTestId('chat-composer').locator('textarea')
+      const panel = page.getByRole('dialog', { name: '上下文使用', exact: true })
+      await draft.fill('abcdefg')
+      await draft.evaluate((el) => el.setSelectionRange(2, 4))
+      const caret = () =>
+        draft.evaluate((el) => [
+          document.activeElement === el,
+          el.selectionStart,
+          el.selectionEnd,
+          el.value,
+        ])
+      const before = await caret()
+      await ring.click()
+      await panel.getByText('238 / 1k tokens', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 24%')
+      assert.deepEqual(await caret(), before)
+      const anchor = await ring.boundingBox(),
+        floating = await panel.boundingBox()
+      assert.ok(floating.y + floating.height < anchor.y)
+      assert.equal(await panel.getAttribute('data-pointer'), '')
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.drafts.addDraftFiles(
+          null,
+          [new File(['a'.repeat(1800)], 'attachment.txt', { type: 'text/plain' })],
+          ''
+        )
+      })
+      await panel.getByText('602', { exact: true }).waitFor()
+      await panel.getByText('838 / 1k tokens', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('data-level'), 'near')
+      await page.evaluate(() => window.__audit.drafts.setDraftText(null, 'x'.repeat(1400)))
+      await panel.getByText('124%', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('data-level'), 'full')
+      await page.evaluate(
+        (providerId) => window.__audit.providers.selectModel({ providerId, model: 'unknown' }),
+        providerId
+      )
+      await panel.getByText('当前模型未设置上下文上限。', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('aria-label'), '上下文使用')
+      assert.equal(await ring.getAttribute('data-level'), null)
+      await panel.getByRole('button', { name: '关闭', exact: true }).click()
+      await panel.waitFor({ state: 'hidden' })
+      assert.ok((await caret())[0])
+      await ring.click()
+      await page.keyboard.press('Escape')
+      await panel.waitFor({ state: 'hidden' })
+      assert.ok((await caret())[0])
     }
   )
 
