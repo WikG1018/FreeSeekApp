@@ -166,7 +166,7 @@ button:disabled .modelReason {
   box-sizing: border-box;
   border: 1px solid var(--fs-floating-border);
   border-radius: 25px;
-  background: var(--fs-floating-surface);
+  background: var(--fs-composer-surface);
   box-shadow: var(--fs-floating-shadow);
   transition: border-color 140ms var(--fs-ease-out);
 }

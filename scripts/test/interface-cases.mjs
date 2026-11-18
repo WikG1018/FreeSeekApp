@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 
 const dialog = (page) => page.getByRole('dialog').last()
 const back = (page) => dialog(page).getByRole('button', { name: '返回', exact: true }).click()
@@ -533,8 +534,11 @@ export const runInterfaceCases = async ({ run }) => {
           .boundingBox()
       assert.equal((await gear.innerText()).trim(), '')
       assert.equal(settings.y, support.y)
-      assert.ok(settings.width >= 44 && settings.x + settings.width < support.x)
-      await gear.click()
+      assert.ok(settings.width >= 44 && support.x + support.width < settings.x)
+      await footer.getByRole('button', { name: '打赏开发者', exact: true }).focus()
+      await page.keyboard.press('Tab')
+      assert.ok(await gear.evaluate((el) => el === document.activeElement))
+      await page.keyboard.press('Enter')
       await page.getByRole('button', { name: /人设与提示词/ }).click()
       const scroll = page.getByTestId('settings-scroll')
       const owners = () =>
@@ -668,7 +672,18 @@ export const runInterfaceCases = async ({ run }) => {
       })
       await page.getByRole('button', { name: /本版本更新内容/ }).click()
       const installed = page.getByTestId('release-notes')
-      assert.match(await installed.innerText(), /人设库/)
+      const version = await page.evaluate(() => window.__audit.update.currentVersion())
+      const changelog = await readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8')
+      const section = changelog
+        .split(/^## /m)
+        .find((entry) => entry.split(/\s+/)[0] === 'v' + version)
+      assert.ok(section, 'installed version has release notes')
+      const bullets = section
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('- '))
+        .map((line) => line.slice(2).trim())
+      assert.ok(bullets.length > 0)
+      assert.deepEqual(await installed.getByRole('listitem').allTextContents(), bullets)
       assert.equal(
         await installed
           .locator('..')

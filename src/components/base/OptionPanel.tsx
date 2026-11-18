@@ -171,8 +171,9 @@ export const useOptionPanel = (
           editing.current = Boolean(
             editorRef?.current && document.activeElement === editorRef.current
           )
-          // A landscape IME can leave too little space for even one row. Restore the draft on selection.
+          // Long model lists need the space of a landscape IME. Attachment actions fit beside each other.
           if (
+            kind === 'choices' &&
             editing.current &&
             anchorRef.current?.closest('[data-ime-compact]') &&
             anchorRef.current.getBoundingClientRect().top < 150

@@ -75,14 +75,13 @@ export const SessionView = ({
       const height = view.clientHeight,
         top = header.offsetHeight,
         bottom = dock.offsetHeight,
+        dockHeight = Math.min(bottom, height),
         compact = height < 260
-      view.style.setProperty('--composer-height', `${bottom}px`)
+      view.style.setProperty('--composer-height', `${dockHeight}px`)
       view.style.setProperty('--composer-inset', `${bottom + (compact ? 8 : 40)}px`)
       view.style.setProperty('--message-list-top-inset', `${top ? top + 16 : 8}px`)
-      // Fade above the whole dock, then keep the message layer transparent under every control.
-      const clearBottom = Math.min(bottom, height)
-      const fadeBottom = clearBottom + Math.min(32, Math.max(0, height - clearBottom - 24))
-      view.style.setProperty('--message-clear-bottom', clearBottom + 'px')
+      // Start fading before the toolbar; the rest of the gradient continues under the dock.
+      const fadeBottom = dockHeight + Math.min(40, Math.max(0, height - dockHeight - 24))
       view.style.setProperty('--message-fade-bottom', fadeBottom + 'px')
       view.style.setProperty(
         '--message-fade-top',

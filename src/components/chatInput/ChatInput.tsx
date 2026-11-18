@@ -71,6 +71,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     side: 'top',
     kind: 'actions',
     align: 'end',
+    editorRef: textareaRef,
+    disabled: importingHistory,
   })
   const attachOpen = attachmentPanel.open
 

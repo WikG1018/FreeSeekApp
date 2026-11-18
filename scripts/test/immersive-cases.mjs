@@ -384,7 +384,7 @@ export const runImmersiveCases = async ({ run }) => {
   )
 
   await run(
-    'chat text fades fully before the model toolbar across keyboard sizes and display settings',
+    'scrolling content remains visible around the floating dock while the input surface stays opaque',
     async (page) => {
       await page.evaluate(async () => {
         const a = window.__audit,
@@ -392,66 +392,164 @@ export const runImmersiveCases = async ({ run }) => {
         a.settings.setApiKey('fixture')
         await a.seed([
           f.session({
-            messages: [f.user('u', 'Q'), f.assistant('a', '正文测试。\n\n'.repeat(80))],
+            messages: [f.user('u', 'Q'), f.assistant('a', '滚动内容。\n\n'.repeat(80))],
           }),
         ])
       })
-      for (const [w, h, scale, model, text] of [
-        [390, 844, 1, true, ''],
-        [320, 568, 1.25, true, '多行\n'.repeat(6)],
-        [740, 260, 1, false, '键盘'],
+      for (const [width, height, scale, model, theme, draft] of [
+        [390, 844, 1, true, 'light', ''],
+        [390, 844, 1, true, 'dark', ''],
+        [320, 568, 1.25, true, 'light', '多行内容\n'.repeat(6)],
+        [740, 260, 1, false, 'dark', '键盘'],
       ]) {
-        await page.setViewportSize({ width: w, height: h })
+        await page.setViewportSize({ width, height })
         await page.evaluate(
-          ([n, m]) => {
-            window.__audit.settings.setFontScale(n)
-            window.__audit.settings.setShowModelSwitcher(m)
+          ([scale, model, theme]) => {
+            const settings = window.__audit.settings
+            settings.setFontScale(scale)
+            settings.setShowModelSwitcher(model)
+            settings.setThemePreference(theme)
           },
-          [scale, model]
+          [scale, model, theme]
         )
-        await page.locator('textarea').fill(text)
-        await page.waitForTimeout(230)
+        await page.locator('textarea').fill(draft)
+        await page.waitForTimeout(250)
         const points = await page.evaluate(() => {
           const scroll = document.querySelector('[data-testid=message-scroll]'),
-            view = document.querySelector('[data-testid=chat-view]'),
-            bar = document.querySelector('[data-testid=composer-toolbar]').getBoundingClientRect()
-          const css = getComputedStyle(view),
-            r = scroll.getBoundingClientRect(),
-            z = r.height / view.clientHeight
-          const clear = parseFloat(css.getPropertyValue('--message-clear-bottom')) * z,
-            fade = parseFloat(css.getPropertyValue('--message-fade-bottom')) * z
-          scroll.style.backgroundColor = 'rgb(180, 0, 160)'
+            view = document.querySelector('[data-testid=chat-view]')
+          const rect = scroll.getBoundingClientRect(),
+            bar = document.querySelector('[data-testid=composer-toolbar]').getBoundingClientRect(),
+            input = document
+              .querySelector('[data-testid=composer-input-row]')
+              .getBoundingClientRect()
+          const fade =
+            (parseFloat(getComputedStyle(view).getPropertyValue('--message-fade-bottom')) *
+              rect.height) /
+            view.clientHeight
+          const side = Math.floor(rect.left + 3),
+            floor = Math.floor
           scroll.scrollTop = 220
-          return {
-            x: Math.floor(r.left + 3),
-            clear: r.bottom - clear,
-            bar: bar.top,
-            opaque: Math.floor(r.bottom - fade - 2),
-            edge: Math.floor(bar.top + bar.height / 2),
-            bottom: Math.floor(r.bottom - 2),
-          }
+          return [
+            [side, floor(rect.bottom - fade - 3)],
+            [side, floor(bar.top + bar.height / 2)],
+            [side, floor(input.top + input.height / 2)],
+            [side, floor(rect.bottom - 2)],
+            [floor(input.left + input.width * 0.65), floor(input.bottom - 6)],
+          ]
         })
-        assert.ok(points.clear <= points.bar + 1, JSON.stringify(points))
-        const png = (await page.screenshot()).toString('base64')
-        const colors = await page.evaluate(
-          async ({ png, points }) => {
-            const image = new Image()
-            image.src = 'data:image/png;base64,' + png
-            await image.decode()
-            const canvas = document.createElement('canvas')
-            canvas.width = image.width
-            canvas.height = image.height
-            const c = canvas.getContext('2d')
-            c.drawImage(image, 0, 0)
-            return [points.opaque, points.edge, points.bottom].map((y) => [
-              ...c.getImageData(points.x, y, 1, 1).data,
-            ])
+        const shots = []
+        const scroll = page.getByTestId('message-scroll')
+        for (const color of ['#000', '#fff']) {
+          await scroll.evaluate((el, color) => (el.style.backgroundColor = color), color)
+          shots.push((await page.screenshot({ caret: 'hide' })).toString('base64'))
+        }
+        const samples = await page.evaluate(
+          async ({ points, shots }) => {
+            return Promise.all(
+              shots.map(async (shot) => {
+                const img = new Image()
+                img.src = 'data:image/png;base64,' + shot
+                await img.decode()
+                const canvas = document.createElement('canvas')
+                canvas.width = img.width
+                canvas.height = img.height
+                const ctx = canvas.getContext('2d')
+                ctx.drawImage(img, 0, 0)
+                return points.map(([x, y]) => ctx.getImageData(x, y, 1, 1).data[0])
+              })
+            )
           },
-          { png, points }
+          { points, shots }
         )
-        assert.deepEqual(colors[1], colors[2])
-        assert.notDeepEqual(colors[0], colors[1])
+        const alpha = samples[1].map((v, i) => Math.abs(v - samples[0][i]) / 255),
+          [reading, tools, input, edge, surface] = alpha
+        assert.ok(
+          reading > 0.9 &&
+            tools >= 0.25 &&
+            tools < 0.52 &&
+            input < tools &&
+            input > edge &&
+            edge >= 0.07 &&
+            edge < 0.19 &&
+            surface <= 0.01,
+          JSON.stringify({ width, height, theme, alpha, points })
+        )
       }
+    }
+  )
+
+  await run(
+    'touching the attachment button preserves the editing focus, selection and viewport, including compact landscape',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settings.setApiKey('fixture'))
+      const root = page.getByTestId('chat-composer'),
+        draft = root.locator('textarea'),
+        panel = page.getByTestId('option-panel')
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+      const tap = async (locator) => {
+        const r = await locator.boundingBox()
+        await cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [{ x: r.x + r.width / 2, y: r.y + r.height / 2, id: 1 }],
+        })
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      }
+      const plus = () => root.getByRole('button', { name: '添加附件', exact: true })
+      for (const [width, height] of [
+        [390, 440],
+        [740, 180],
+      ]) {
+        await page.setViewportSize({ width, height })
+        await draft.fill('继续在原来的位置输入')
+        await draft.focus()
+        await draft.evaluate((t) => {
+          t.setSelectionRange(2, 5)
+          t.dataset.focusLost = '0'
+          t.onblur = () => (t.dataset.focusLost = '1')
+        })
+        const state = () =>
+          draft.evaluate((t) => [
+            document.activeElement === t,
+            t.selectionStart,
+            t.selectionEnd,
+            t.value,
+            t.dataset.focusLost,
+            t.getBoundingClientRect().y,
+            window.visualViewport.height,
+          ])
+        const expected = await state()
+        await tap(plus())
+        await panel.waitFor()
+        assert.deepEqual(await state(), expected)
+        assert.equal(await panel.getByRole('button').count(), 3)
+        if (width > height) {
+          const rows = await panel
+            .getByRole('button')
+            .evaluateAll((nodes) => nodes.map((n) => n.getBoundingClientRect().y))
+          assert.ok(Math.max(...rows) - Math.min(...rows) < 1)
+        }
+        await tap(root.getByRole('button', { name: '关闭', exact: true }))
+        await panel.waitFor({ state: 'detached' })
+        assert.deepEqual(await state(), expected)
+        await tap(plus())
+        await panel.waitFor()
+        await page.keyboard.press('Escape')
+        await panel.waitFor({ state: 'detached' })
+        assert.deepEqual(await state(), expected)
+      }
+      await cdp.detach()
+      await plus().focus()
+      await page.keyboard.press('Space')
+      await panel.waitFor()
+      assert.ok(
+        await panel
+          .getByRole('button')
+          .first()
+          .evaluate((el) => el === document.activeElement)
+      )
+      await page.keyboard.press('Escape')
+      assert.ok(await plus().evaluate((el) => el === document.activeElement))
     }
   )
 }

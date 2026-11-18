@@ -163,17 +163,6 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       <div className={styles.bottom} data-testid="sider-footer">
         <button
           type="button"
-          className={clsx(styles.settings, styles.settingsOnly)}
-          aria-label={t('settings')}
-          title={t('settings')}
-          onClick={() => openSettings()}
-        >
-          <span className={styles.settingsIcon} aria-hidden="true">
-            <IconSettingsOutline16 />
-          </span>
-        </button>
-        <button
-          type="button"
           className={clsx(styles.settings, styles.support)}
           onClick={() => setDonateOpen(true)}
           aria-label={t('donateTitle')}
@@ -184,6 +173,17 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           <span className={styles.settingsLabel}>{t('donateTitle')}</span>
           <span aria-hidden className={styles.supportArrow}>
             <IconChevronRightOutline14 />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={clsx(styles.settings, styles.settingsOnly)}
+          aria-label={t('settings')}
+          title={t('settings')}
+          onClick={() => openSettings()}
+        >
+          <span className={styles.settingsIcon} aria-hidden="true">
+            <IconSettingsOutline16 />
           </span>
         </button>
       </div>

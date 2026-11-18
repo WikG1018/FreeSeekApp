@@ -20,6 +20,19 @@
 .panel[data-kind='actions'] {
   width: 194px;
 }
+/* In landscape the IME can leave room for only one row above the composer. */
+@media (orientation: landscape) and (max-height: 260px) {
+  .panel[data-kind='actions'] {
+    flex-direction: row;
+    width: 300px;
+    padding: 3px;
+  }
+  .panel[data-kind='actions'] .option {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 4px;
+  }
+}
 @keyframes settle {
   from {
     transform: translateY(3px);

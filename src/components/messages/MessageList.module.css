@@ -48,23 +48,17 @@
   scrollbar-color: var(--scroll-color) transparent;
   scroll-padding-top: var(--message-list-top-inset, 76px);
   scroll-padding-bottom: var(--composer-inset, 150px);
-  /* 遮罩固定在可视滚动层；内容贯穿屏幕，控件区域平滑淡出。 */
-  -webkit-mask-image: linear-gradient(
+  /* 文字经过模型行和输入框时逐渐变淡，一直延伸到视口底边。 */
+  --message-mask: linear-gradient(
     to bottom,
     transparent 0,
     #000 var(--message-fade-top, 88px),
     #000 calc(100% - var(--message-fade-bottom, 180px)),
-    transparent calc(100% - var(--message-clear-bottom, 140px)),
-    transparent 100%
+    rgba(0, 0, 0, 0.48) calc(100% - var(--composer-height, 140px)),
+    rgba(0, 0, 0, 0.12) 100%
   );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--message-fade-top, 88px),
-    #000 calc(100% - var(--message-fade-bottom, 180px)),
-    transparent calc(100% - var(--message-clear-bottom, 140px)),
-    transparent 100%
-  );
+  -webkit-mask-image: var(--message-mask);
+  mask-image: var(--message-mask);
 }
 
 @media not all and (min-width: 768px) {
