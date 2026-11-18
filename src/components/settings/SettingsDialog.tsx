@@ -5,6 +5,7 @@ import logo from '../../assets/logo.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
   IconChevronRightOutline14,
+  IconBookOutline16,
   IconDownloadOutline16,
   IconShareOutline16,
   IconFileOutline16,
@@ -34,6 +35,7 @@ import { runInstall, UpdateDialog, useUpdateStatusText } from '../update/Update.
 import { useSettingsDialog } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 import { ProviderSettingsPage } from './ProviderSettings.js'
+import { SettingsDisclosure } from './SettingsDisclosure.js'
 import { Section, Row } from './SettingsRows.js'
 import { AccountPage } from './AccountPage.js'
 import { AppearancePage, ChatPreferencesPage } from './PreferencesPages.js'
@@ -69,7 +71,7 @@ const SettingsRoot = () => {
                 />
               )
             case 'providers':
-              return <ProviderSettingsPage />
+              return <ProviderSettingsPage onOfficial={finish} />
             case 'chat':
               return <ChatPreferencesPage />
             case 'personas':
@@ -130,8 +132,7 @@ const DataPage = ({
         <ExportHistory disabled={disabled} />
         <ImportHistory historyImport={historyImport} disabled={disabled} />
       </Section>
-      <details className={styles.officialTip}>
-        <summary className={styles.officialTipTitle}>{t('officialExportTitle')}</summary>
+      <SettingsDisclosure guide title={t('officialExportTitle')} icon={<IconBookOutline16 />}>
         <ol className={styles.officialTipSteps}>
           <li>{t('officialExportStep1')}</li>
           <li>{t('officialExportStep2')}</li>
@@ -139,7 +140,7 @@ const DataPage = ({
           <li>{t('officialExportStep4')}</li>
         </ol>
         <p className={styles.officialTipHint}>{t('officialExportHint')}</p>
-      </details>
+      </SettingsDisclosure>
       <Section title={t('settingsRemoveGroup')}>
         <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
       </Section>

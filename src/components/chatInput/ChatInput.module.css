@@ -1,64 +1,330 @@
 .wrapper {
-  position: relative;
   --line-height: 24px;
-  --input-padding-top: 12px;
+  position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   width: 100%;
-  cursor: text;
+  min-width: 0;
   font-size: 16px;
   line-height: var(--line-height);
-  /* dsh-Go 式玻璃输入条：胶囊 28 → 聚焦展开为 20 圆角 */
-  border-radius: 28px;
-  border: 1px solid var(--fs-floating-border);
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 3px;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.tool,
+.modelTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fs-secondary-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tool {
+  flex: 0 1 auto;
+}
+.tools > * + * .tool {
+  margin-left: 4px;
+}
+.toolFace {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-height: 29px;
+  padding: 4px 9px;
+  border-radius: 15px;
+  border: 1px solid var(--fs-line);
   background: var(--fs-floating-surface);
-  backdrop-filter: blur(20px) saturate(1.3);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3);
-  overflow: hidden;
   transition:
-    border-radius var(--fs-duration-base) var(--fs-ease-out),
-    border-color var(--fs-duration-base) var(--fs-ease-out),
-    box-shadow var(--fs-duration-base) var(--fs-ease-out),
-    transform var(--fs-duration-base) var(--fs-ease-out);
-
-  [data-ds-dark-theme] & {
-    border-color: var(--fs-floating-border);
-    background: var(--fs-floating-surface);
-  }
-
-  &:focus-within {
-    border-radius: 20px;
-    transform: none;
-    border-color: rgba(37, 99, 235, 0.32);
-    box-shadow: var(--fs-floating-shadow);
-
-    [data-ds-dark-theme] & {
-      border-color: rgba(120, 160, 255, 0.4);
-    }
+    background-color 140ms var(--fs-ease-out),
+    border-color 140ms var(--fs-ease-out),
+    color 140ms var(--fs-ease-out);
+}
+.toolFace svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-right: 5px;
+}
+.toolFace > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.tool[aria-pressed='true'] .toolFace {
+  color: var(--fs-accent-text);
+  border-color: var(--fs-accent-line);
+  background: var(--fs-accent-wash);
+}
+.tool[aria-disabled='true'] {
+  cursor: default;
+}
+.tool[aria-disabled='true'] .toolFace {
+  border-style: dashed;
+  color: var(--fs-secondary-text);
+  background: var(--fs-settings-canvas);
+}
+.tool:focus-visible,
+.modelTrigger:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+  border-radius: 14px;
+}
+@media (hover: hover) {
+  .tool:hover:not([aria-disabled='true']) .toolFace,
+  .modelTrigger:hover:enabled {
+    background: var(--fs-accent-wash);
+    color: var(--fs-accent-text);
   }
 }
-
-.session {
+.tool:active:not([aria-disabled='true']) .toolFace {
+  transform: translateY(1px);
+}
+.modelTrigger {
+  justify-content: flex-start;
+  /* Let the name yield space first; the tool labels may wrap only at extreme widths. */
+  flex: 0 9999 auto;
+  max-width: 144px;
+  margin-right: 5px;
+  padding: 0 6px;
+  border-radius: 12px;
+  color: var(--fs-accent-text);
+  font-weight: 600;
+  text-align: left;
+}
+.modelName {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modelTrigger svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-left: 3px;
+  transition: transform 140ms var(--fs-ease-out);
+}
+.modelTrigger[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.modelTrigger:disabled {
+  color: var(--fs-secondary-text);
+  cursor: default;
+}
+.modelGroup {
+  padding: 8px 10px 3px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.modelGlyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--fs-settings-canvas);
+  color: var(--fs-accent-text);
+}
+button:disabled .modelGlyph {
+  color: var(--fs-secondary-text);
+}
+button:disabled .modelReason {
+  white-space: normal;
+}
+.surface {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--fs-floating-border);
+  border-radius: 25px;
+  background: var(--fs-floating-surface);
   box-shadow: var(--fs-floating-shadow);
+  transition: border-color 140ms var(--fs-ease-out);
 }
-
-.home {
-  box-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.03),
-    0 10px 30px rgba(15, 23, 42, 0.06);
-  animation: dockIn var(--fs-duration-slow) var(--fs-ease-out) both;
-
-  [data-ds-dark-theme] & {
-    box-shadow: none;
+.surface:focus-within {
+  border-color: var(--fs-accent-line);
+}
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  min-height: 50px;
+  box-sizing: border-box;
+  padding: 3px;
+  cursor: text;
+}
+.inputRow .attachTrigger,
+.right button {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+.attachTrigger svg {
+  width: 18px;
+  height: 18px;
+}
+.attachTrigger[aria-expanded='true'] {
+  background: var(--fs-accent-wash);
+  color: var(--fs-accent-text);
+}
+.right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.textareaWrapper {
+  position: relative;
+  align-self: center;
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: var(--line-height);
+  margin: 0 3px;
+  overflow: hidden;
+  transition: height 135ms var(--fs-ease-out);
+}
+.textarea,
+.mirror {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--line-height);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  line-height: var(--line-height);
+  font-variant-ligatures: no-contextual;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.textarea {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  resize: none;
+  outline: none;
+  overscroll-behavior: contain;
+  overflow-y: auto;
+  color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-brand-text);
+  background: transparent;
+}
+.textarea::placeholder {
+  color: var(--fs-secondary-text);
+  opacity: 1;
+}
+.textareaHidden {
+  visibility: hidden;
+}
+.mirror {
+  max-height: calc(4 * var(--line-height));
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+}
+.sendButton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-static-neutral-bluish-00);
+  padding: 0;
+  cursor: pointer;
+}
+.sendButton::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  bottom: 5px;
+  left: 5px;
+  border-radius: 50%;
+  background: var(--dsw-alias-button-primary-fill);
+  transition: transform 120ms var(--fs-ease-out);
+}
+.sendButton svg {
+  position: relative;
+  width: 17px;
+  height: 17px;
+}
+.sendButton:active:enabled::before {
+  transform: scale(0.93);
+}
+.sendButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sendButton:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+@media (max-width: 767px) {
+  .modelTrigger {
+    max-width: 128px;
   }
 }
-
-@keyframes dockIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+@media (max-width: 359px) {
+  .toolFace {
+    padding-left: 6px;
+    padding-right: 6px;
   }
+  .toolFace svg {
+    margin-right: 3px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .textareaWrapper,
+  .toolFace,
+  .modelTrigger svg,
+  .sendButton::before,
+  .surface {
+    transition: none;
+  }
+}
+:global([data-ime-compact]) .mirror {
+  max-height: calc(2 * var(--line-height));
+}
+:global([data-ime-compact]) .attachments {
+  padding: 3px 8px 0;
+}
+:global([data-ime-compact]) .attachment {
+  width: 24px;
+  height: 24px;
 }
 
 .attachments {
@@ -193,301 +459,6 @@
   background-color: var(--dsw-alias-state-error-primary);
 }
 
-.textareaWrapper {
-  position: relative;
-  width: 100%;
-  transition: height var(--fs-duration-base) var(--fs-ease-out);
-  overflow: hidden;
-}
-
-.textarea,
-.mirror {
-  display: block;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: calc(var(--line-height) * 2 + var(--input-padding-top));
-  margin: 0;
-  padding: var(--input-padding-top) 12px 0 16px;
-  border: none;
-  font: inherit;
-  line-height: inherit;
-  font-variant-ligatures: no-contextual;
-  word-break: break-word;
-  white-space: pre-wrap;
-  overflow: auto;
-}
-
-.textarea {
-  position: absolute;
-  height: 100%;
-  resize: none;
-  outline: none;
-  overscroll-behavior: contain;
-  background-color: transparent;
-  color: var(--dsw-alias-label-primary);
-  caret-color: var(--dsw-alias-brand-text);
-
-  &::placeholder {
-    color: var(--dsw-alias-label-secondary);
-    opacity: 1;
-    user-select: none;
-  }
-}
-
-/* 录音中由频谱接管第一行，隐藏正文但保留高度 */
-.textareaHidden {
-  visibility: hidden;
-}
-
-@media not all and (min-width: 440px) {
-  .textarea,
-  .mirror {
-    min-height: calc(var(--line-height) * 1.25 + var(--input-padding-top));
-  }
-}
-
-.mirror {
-  visibility: hidden;
-  pointer-events: none;
-  max-height: 336px;
-}
-
-@media not all and (min-width: 768px) {
-  .wrapper {
-    flex-shrink: 0;
-    max-height: calc(var(--app-viewport-height, var(--fs-viewport-height)) - 120px);
-    /* 手机上内容更密，输入栏取更实的底色，避免正文透上来 */
-    background: var(--fs-floating-surface);
-  }
-
-  .textareaWrapper {
-    min-height: 0;
-  }
-
-  .attachments,
-  .functionRow {
-    flex-shrink: 0;
-  }
-  .remove {
-    opacity: 1;
-  }
-}
-
-.functionRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 12px;
-}
-
-:global([data-ime-compact]) .hasModelSwitcher .textarea,
-:global([data-ime-compact]) .hasModelSwitcher .mirror {
-  padding-right: 158px;
-}
-
-:global([data-ime-compact]) .wrapper {
-  flex-shrink: 0;
-  max-height: calc(var(--app-viewport-height) - var(--fs-safe-top) - 8px);
-}
-
-:global([data-ime-compact]) .textareaWrapper {
-  flex: 1;
-  min-height: 0;
-}
-
-:global([data-ime-compact]) .textarea,
-:global([data-ime-compact]) .mirror {
-  min-height: 32px;
-  padding-top: 8px;
-}
-
-:global([data-ime-compact]) .functionRow {
-  flex-shrink: 0;
-  margin-top: 0;
-  padding: 4px 8px;
-}
-
-:global([data-ime-compact]) .attachments {
-  flex-shrink: 0;
-  padding: 4px 8px 0;
-}
-
-:global([data-ime-compact]) .attachment {
-  width: 24px;
-  height: 24px;
-}
-
-.toggles {
-  display: flex;
-  flex: 1 1 176px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* 极窄屏：缩小字号与内边距，不隐藏标签、不折叠成圆钮 */
-.tightToggles .toggle {
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.toggle {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 18px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  background-color: transparent;
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
-  transition-property: border, background, transform;
-  transition-duration: var(--fs-duration-fast);
-  transition-timing-function: var(--fs-ease-out);
-
-  &:hover:not(:disabled) {
-    background-color: var(--dsw-alias-interactive-bg-hover);
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.96);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  &.selected {
-    background-color: var(--dsw-alias-button-ghost-active-fill);
-    color: var(--dsw-alias-brand-text);
-    border-color: var(--dsw-alias-button-ghost-active-border);
-
-    &:hover {
-      background-color: var(--dsw-alias-button-ghost-active-hover);
-    }
-  }
-}
-
-.right {
-  margin-left: auto;
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.sendButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  margin-left: 6px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-static-neutral-bluish-00);
-  cursor: pointer;
-  transition:
-    background var(--fs-duration-fast) var(--fs-ease-out),
-    transform var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:not(.disabled):hover {
-    background: var(--dsw-alias-button-primary-hover);
-  }
-
-  &:not(.disabled):active {
-    transform: scale(0.92);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow:
-      0 0 0 2px var(--dsw-alias-bg-base),
-      0 0 0 4px var(--dsw-alias-button-primary-fill);
-  }
-
-  &.disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-}
-
-/* 手机版工具行更紧凑：开关 30 / 圆键 30 / 主操作键 32。
-   必须放在文件末尾——媒体查询不增加优先级，靠源码顺序覆盖上面的基础尺寸。 */
-@media not all and (min-width: 768px) {
-  .functionRow {
-    gap: 6px;
-    margin-top: 2px;
-    padding: 8px 12px 10px;
-  }
-
-  .toggles {
-    gap: 6px;
-  }
-
-  .toggle {
-    height: 30px;
-    padding: 0 10px;
-    border-radius: 15px;
-    font-size: 12px;
-
-    svg {
-      width: 13px;
-      height: 13px;
-    }
-  }
-
-  .right {
-    gap: 2px;
-  }
-
-  /* 手机版此位置只放「发送」或「停止生成」 */
-  .sendButton {
-    width: 32px;
-    height: 32px;
-    margin-left: 4px;
-  }
-}
-
-/* 手机版工具行按钮视觉尺寸保持紧凑，可点区域补到 44px。
-   只上下扩展、左右不扩，避免相邻开关互相盖住。 */
-.toggle,
-.sendButton {
-  position: relative;
-}
-
-.toggle::after,
-.sendButton::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 44px;
-  transform: translateY(-50%);
-}
 .uploadProgress {
   position: absolute;
   inset: auto 4px 5px;
@@ -516,39 +487,8 @@
   }
 }
 
-/* 闲置时收成单行悬浮胶囊；输入或操作附件后展开完整工具。 */
-.compact {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 36px;
-  align-items: center;
-  column-gap: 4px;
-  min-height: 56px;
-  padding: 4px 8px;
-  border-radius: 999px;
-}
-.compact .textareaWrapper {
-  grid-column: 2;
-  grid-row: 1;
-  min-width: 0;
-}
-.compact .textarea,
-.compact .mirror {
-  min-height: 44px;
-  padding: 10px 6px 0;
-}
-.compact .functionRow,
-.compact .right {
-  display: contents;
-}
-.compact .toggles {
-  display: none;
-}
-.compact .right button {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: center;
-  align-self: center;
-}
-.compact .right .attachTrigger {
-  grid-column: 1;
+@media (max-width: 767px) {
+  .attachment .remove {
+    opacity: 1;
+  }
 }

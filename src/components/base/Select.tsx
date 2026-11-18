@@ -42,15 +42,28 @@ export const Select = <T extends string>({
   const t = useTranslate()
   const valueId = useId()
   const [query, setQuery] = useState('')
-  const panel = useOptionPanel(ariaLabel, { measureKey: query })
+  const [limit, setLimit] = useState(48)
+  const panel = useOptionPanel(ariaLabel, {
+    measureKey: query,
+    kind: pill ? 'choices' : 'field',
+    disabled,
+  })
   const current = options.find((item) => item.value === value)
   const filterable = options.length > 8
+  const needle = query.trim().toLocaleLowerCase()
   const filtered =
-    filterable && query.trim()
-      ? options.filter((item) =>
-          item.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
-        )
+    panel.open && filterable && needle
+      ? options.filter((item) => item.label.toLocaleLowerCase().includes(needle))
       : options
+  const visible = panel.open ? filtered.slice(0, limit) : []
+  if (!needle && current && visible.length && !visible.includes(current)) {
+    visible.unshift(current)
+  }
+  const toggle = () => {
+    setQuery('')
+    setLimit(48)
+    panel.trigger.onClick()
+  }
   return (
     <>
       <button
@@ -61,16 +74,25 @@ export const Select = <T extends string>({
         aria-label={prefix ? undefined : ariaLabel}
         aria-describedby={prefix ? undefined : valueId}
         {...panel.trigger}
-        onClick={() => {
-          setQuery('')
-          panel.trigger.onClick()
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (!panel.open && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
+            e.preventDefault()
+            toggle()
+          }
         }}
       >
         {prefix && <small>{prefix}</small>}
         <span id={valueId} lang={current?.lang}>
           {current?.label ?? placeholder}
         </span>
-        <IconChevronDownOutline14 />
+        {pill ? (
+          <IconChevronDownOutline14 />
+        ) : (
+          <span className={styles.indicator} aria-hidden>
+            <IconChevronDownOutline14 />
+          </span>
+        )}
       </button>
       {panel.render(
         <>
@@ -82,12 +104,15 @@ export const Select = <T extends string>({
                 aria-label={t('optionFilter')}
                 placeholder={t('optionFilter')}
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value)
+                  setLimit(48)
+                }}
               />
             </label>
           )}
           <div className={panelStyles.list} role="listbox" aria-label={ariaLabel}>
-            {filtered.map((option) => (
+            {visible.map((option) => (
               <button
                 key={option.value}
                 type="button"
@@ -109,6 +134,16 @@ export const Select = <T extends string>({
               </button>
             ))}
           </div>
+          {filtered.length > limit && (
+            <button
+              type="button"
+              data-panel-item=""
+              className={panelStyles.manage}
+              onClick={() => setLimit((value) => value + 48)}
+            >
+              {t('optionMore')}
+            </button>
+          )}
           {filtered.length === 0 && (
             <p role="status" className={panelStyles.empty}>
               {t('optionNoResults')}

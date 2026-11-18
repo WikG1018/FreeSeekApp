@@ -36,6 +36,13 @@ export const en = {
   providerDefaultModel: 'Default chat model',
   providerSelectService: 'Service',
   providerModel: 'Model name / ID',
+  providerOfficialToolsOnly:
+    'These controls apply to official DeepSeek models. Custom models use their own configuration.',
+  modelFilter: 'Filter models',
+  modelShowMore: 'Show more models',
+  modelNoMatches: 'No matching models',
+  composerTools: 'Chat tools',
+  composerMessage: 'Message',
   providerSwitch: 'Switch model',
   providerShowSwitcher: 'Show model switcher in chat',
   providerNew: 'New configuration',
@@ -134,6 +141,7 @@ export const en = {
   sessionItemMenuContinueOption: 'Continue from here',
   inheritContextChip: 'New chat inherits context from "{title}" ({rounds} rounds)',
   inheritContextRemove: 'Remove inherited context',
+  optionMore: 'Show more options',
   optionFilter: 'Filter options',
   optionNoResults: 'No matching options',
   personaRowLabel: 'Persona for new chats',
@@ -173,7 +181,25 @@ export const en = {
   settingsPrivacyLicenses: 'Privacy & open-source licenses',
   settingsFontCredits: 'Font license',
   settingsAdvancedGroup: 'Advanced',
-  settingsAdvancedHint: 'Connect a third-party service with its URL, key and model.',
+  settingsAdvancedHint: 'Optional for other model providers and self-hosted gateways.',
+  officialReadyTitle: 'Your DeepSeek API is ready',
+  officialReadyMessage:
+    'Your official API key has been verified and saved. You can start chatting now.',
+  officialReadyCustomMessage:
+    'Your official API key has been verified and saved. You are using {service}. Switch to {model} to chat with DeepSeek.',
+  officialReadyAdvancedHint:
+    'Advanced API configuration is only needed for another model provider or a self-hosted gateway.',
+  officialStayInSettings: 'Stay in settings',
+  officialStartChat: 'Start chatting',
+  officialSwitchAndChat: 'Chat with DeepSeek',
+  officialKeySaveFailed:
+    'Your key was verified, but could not be saved on this device. Check your storage and try again.',
+  advancedNoticeTitle: 'For other model providers and gateways',
+  advancedNoticeConfigured:
+    'Your official DeepSeek key is already configured. Use this page for the URL, key and model name from another provider or your own gateway.',
+  advancedNoticeUnconfigured:
+    'For official DeepSeek models, verify and save your key in API settings. This page connects other providers and self-hosted gateways.',
+  advancedReturnOfficial: 'Back to official API settings',
   settingsVerifySave: 'Verify and save',
   settingsKeySaved: 'API key verified and saved',
   settingsDiscardTitle: 'Discard unsaved changes?',

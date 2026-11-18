@@ -11,23 +11,27 @@ export const useApiKeyForm = (onSaved?: () => void) => {
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
   const [verifying, setVerifying] = useState(false)
-  const [failure, setFailure] = useState<{ cause: unknown } | null>(null)
-  const cause = failure?.cause
+  const [failure, setFailure] = useState<
+    { kind: 'verification'; cause: unknown } | { kind: 'storage' } | null
+  >(null)
+  const cause = failure?.kind === 'verification' ? failure.cause : undefined
   const error =
     failure === null
       ? null
-      : classifyApiError(cause) === 'unauthorized'
-        ? t('apiKeyInvalid')
-        : classifyApiError(cause) === 'network'
-          ? t('commonNetworkErrorToast')
-          : t('apiKeyVerificationFailed', {
-              message:
-                cause instanceof ApiError && cause.localMessage
-                  ? t(cause.localMessage.key, cause.localMessage.params)
-                  : cause instanceof Error
-                    ? cause.message
-                    : String(cause),
-            })
+      : failure.kind === 'storage'
+        ? t('officialKeySaveFailed')
+        : classifyApiError(cause) === 'unauthorized'
+          ? t('apiKeyInvalid')
+          : classifyApiError(cause) === 'network'
+            ? t('commonNetworkErrorToast')
+            : t('apiKeyVerificationFailed', {
+                message:
+                  cause instanceof ApiError && cause.localMessage
+                    ? t(cause.localMessage.key, cause.localMessage.params)
+                    : cause instanceof Error
+                      ? cause.message
+                      : String(cause),
+              })
 
   const submit = async () => {
     const apiKey = value.trim()
@@ -43,12 +47,15 @@ export const useApiKeyForm = (onSaved?: () => void) => {
       if (active.signal.aborted) {
         return
       }
-      setApiKey(apiKey)
+      if (!setApiKey(apiKey, { requirePersistence: true })) {
+        setFailure({ kind: 'storage' })
+        return
+      }
       updateValue('')
       onSaved?.()
     } catch (e) {
       if (!active.signal.aborted) {
-        setFailure({ cause: e })
+        setFailure({ kind: 'verification', cause: e })
       }
     } finally {
       controller.current = null

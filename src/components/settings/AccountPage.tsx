@@ -1,11 +1,14 @@
 import { useId, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { modelLabel, OFFICIAL_MODELS, selectModel, useProviders } from '../../services/providers.js'
+import { closeMobileSider } from '../sider/mobileSiderState.js'
+import { closeSettings } from './settingsDialogState.js'
 import { setApiKey, useSettings } from '../../services/settings.js'
 import { openExternal } from '../../utils/openExternal.js'
 import { Button } from '../base/Button.js'
 import {
   IconBookOutline16,
-  IconChevronDownOutline14,
+  IconCheckOutline16,
   IconEyeOffOutline16,
   IconEyeOutline16,
   IconRightUpOutline14,
@@ -14,6 +17,7 @@ import {
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { ConnectionSelector } from './ProviderSettings.js'
+import { SettingsDisclosure } from './SettingsDisclosure.js'
 import { Row, Section } from './SettingsRows.js'
 import { useApiKeyForm } from './useApiKeyForm.js'
 import { useSettingsLeave } from './useSettingsLeave.js'
@@ -32,55 +36,42 @@ const links = [
 ] as const
 
 const ApiTutorial = ({ open, toggle }: { open: boolean; toggle: () => void }) => {
-  const t = useTranslate(),
-    id = useId()
+  const t = useTranslate()
   return (
-    <section className={styles.tutorial} data-testid="api-tutorial">
-      <h2 className={styles.tutorialHeading}>
-        <button
-          type="button"
-          className={styles.tutorialToggle}
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={toggle}
-        >
-          <span className={styles.guideIcon} aria-hidden>
-            <IconBookOutline16 />
-          </span>
-          <span>{t('settingsApiTutorialTitle')}</span>
-          <span className={styles.guideChevron} aria-hidden>
-            <IconChevronDownOutline14 />
-          </span>
-        </button>
-      </h2>
-      <div id={id} hidden={!open} className={styles.guideBody}>
-        <ol className={styles.tutorialSteps}>
-          {steps.map((step, i) => (
-            <li className={styles.tutorialStep} key={step}>
-              <span className={styles.tutorialBadge} aria-hidden>
-                {i + 1}
-              </span>
-              <span>{t(step)}</span>
-            </li>
-          ))}
-        </ol>
-        <div className={styles.tutorialActions}>
-          {links.map(([short, label, url]) => (
-            <button
-              key={url}
-              className={styles.tutorialButton}
-              type="button"
-              aria-label={t(label)}
-              onClick={() => void openExternal(url)}
-            >
-              {t(short)}
-              <IconRightUpOutline14 />
-            </button>
-          ))}
-        </div>
-        <p className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</p>
+    <SettingsDisclosure
+      guide
+      testId="api-tutorial"
+      title={t('settingsApiTutorialTitle')}
+      icon={<IconBookOutline16 />}
+      open={open}
+      onToggle={toggle}
+    >
+      <ol className={styles.tutorialSteps}>
+        {steps.map((step, i) => (
+          <li className={styles.tutorialStep} key={step}>
+            <span className={styles.tutorialBadge} aria-hidden>
+              {i + 1}
+            </span>
+            <span>{t(step)}</span>
+          </li>
+        ))}
+      </ol>
+      <div className={styles.tutorialActions}>
+        {links.map(([short, label, url]) => (
+          <button
+            key={url}
+            className={styles.tutorialButton}
+            type="button"
+            aria-label={t(label)}
+            onClick={() => void openExternal(url)}
+          >
+            {t(short)}
+            <IconRightUpOutline14 />
+          </button>
+        ))}
       </div>
-    </section>
+      <p className={styles.tutorialHint}>{t('settingsApiTutorialHint')}</p>
+    </SettingsDisclosure>
   )
 }
 
@@ -99,10 +90,29 @@ export const AccountPage = ({
   const [editing, setEditing] = useState(false),
     [visible, setVisible] = useState(false),
     [clearing, setClearing] = useState(false)
+  const [ready, setReady] = useState(false)
+  const customName = useProviders(({ profiles, selection }) =>
+    selection.providerId === 'deepseek'
+      ? null
+      : (profiles.find((p) => p.id === selection.providerId)?.name ?? selection.model)
+  )
+  const goChat = () => {
+    if (customName !== null) {
+      try {
+        selectModel({ providerId: 'deepseek', model: OFFICIAL_MODELS[0] })
+      } catch {
+        showToast({ key: 'providerErrorStorage', type: 'error' })
+        return
+      }
+    }
+    setReady(false)
+    closeSettings()
+    closeMobileSider()
+  }
   const form = useApiKeyForm(() => {
     setEditing(false)
     setVisible(false)
-    showToast({ key: 'settingsKeySaved' })
+    setReady(true)
   })
   const leave = useSettingsLeave(Boolean(form.value.trim()))
   const cancelEdit = () => {
@@ -198,7 +208,7 @@ export const AccountPage = ({
       </Section>
       <Section title={t('providerDefaultModel')}>
         <div className={styles.accountBlock}>
-          <ConnectionSelector layout="settings" />
+          <ConnectionSelector />
         </div>
       </Section>
       <Section title={t('settingsAdvancedGroup')}>
@@ -211,6 +221,38 @@ export const AccountPage = ({
         />
       </Section>
       {leave.dialog}
+      {ready && (
+        <Modal
+          centered
+          title={
+            <span className={styles.readyTitle}>
+              <span aria-hidden="true">
+                <IconCheckOutline16 />
+              </span>
+              {t('officialReadyTitle')}
+            </span>
+          }
+          onClose={() => setReady(false)}
+          footer={
+            <>
+              <Button variant="outlined" onClick={() => setReady(false)}>
+                {t('officialStayInSettings')}
+              </Button>
+              <Button onClick={goChat}>
+                {t(customName === null ? 'officialStartChat' : 'officialSwitchAndChat')}
+              </Button>
+            </>
+          }
+        >
+          <p className={styles.readyMessage}>
+            {t(customName === null ? 'officialReadyMessage' : 'officialReadyCustomMessage', {
+              service: customName ?? '',
+              model: modelLabel(OFFICIAL_MODELS[0]),
+            })}
+          </p>
+          <p className={styles.readyHint}>{t('officialReadyAdvancedHint')}</p>
+        </Modal>
+      )}
       {clearing && (
         <Modal
           centered

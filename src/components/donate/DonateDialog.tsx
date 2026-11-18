@@ -7,9 +7,36 @@ import {
   type PayMethod,
 } from '../../services/donate.js'
 import { Modal } from '../base/Modal.js'
-import { IconCheckOutline16 } from '../base/icons.js'
+import { IconCheckOutline16, IconRightUpOutline14 } from '../base/icons.js'
 import { SupportMark } from './SupportMark.js'
 import styles from './DonateDialog.module.css'
+
+const PaymentIcon = ({ method }: { method: PayMethod }) => (
+  <svg
+    aria-hidden="true"
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.7"
+    strokeLinejoin="round"
+    strokeLinecap="round"
+  >
+    {method === 'wechat' ? (
+      <>
+        <path d="M13 15a8 8 0 0 1-5 .2L4.5 17l.7-3.1A6.2 6.2 0 0 1 3 9.5C3 5.9 6.5 3.4 10.4 3.4c4.1 0 7.4 2.5 7.4 6.1" />
+        <path d="M20.1 17.9l.5 2.6-2.9-1.5a7.1 7.1 0 0 1-2 .3c-3.4 0-6.1-2.1-6.1-5s2.7-5 6.1-5 6.1 2.2 6.1 5a4.6 4.6 0 0 1-1.7 3.6Z" />
+        <path d="M7.6 8.7h.1m4.3 0h.1m1.7 5.2h.1m3.6 0h.1" />
+      </>
+    ) : (
+      <>
+        <rect x="3" y="5" width="18" height="14" rx="3" />
+        <path d="M3 9h18m-6 6h3" />
+      </>
+    )}
+  </svg>
+)
 
 export const DonateDialog = ({ onClose }: { onClose: () => void }) => {
   const t = useTranslate()
@@ -68,7 +95,7 @@ export const DonateDialog = ({ onClose }: { onClose: () => void }) => {
       onClose={onClose}
       className={styles.sheet}
     >
-      <div className={styles.body}>
+      <div className={styles.body} data-method={method}>
         <p className={styles.intro}>{t('donateIntro')}</p>
         <div
           className={styles.methods}
@@ -77,7 +104,7 @@ export const DonateDialog = ({ onClose }: { onClose: () => void }) => {
           data-method={method}
         >
           {(['wechat', 'alipay'] as const).map((value) => (
-            <label key={value}>
+            <label key={value} data-channel={value}>
               <input
                 type="radio"
                 name={group}
@@ -88,23 +115,28 @@ export const DonateDialog = ({ onClose }: { onClose: () => void }) => {
                   setDone(null)
                 }}
               />
-              <span>
-                {method === value && <IconCheckOutline16 />}
-                {label(value)}
+              <span className={styles.channelFace}>
+                <PaymentIcon method={value} />
+                <span>{label(value)}</span>
+                <span className={styles.channelCheck} aria-hidden="true">
+                  {method === value && <IconCheckOutline16 />}
+                </span>
               </span>
             </label>
           ))}
         </div>
         <div className={styles.qrStage}>
-          <img
-            key={method}
-            width={640}
-            height={640}
-            className={styles.qr}
-            src={channel.qr}
-            alt={t('donateQrAlt', { app: label(method) })}
-            draggable={false}
-          />
+          <div className={styles.qrCard}>
+            <img
+              key={method}
+              width={640}
+              height={640}
+              className={styles.qr}
+              src={channel.qr}
+              alt={t('donateQrAlt', { app: label(method) })}
+              draggable={false}
+            />
+          </div>
         </div>
         {done ? (
           <div className={styles.status} role="status">
@@ -116,7 +148,10 @@ export const DonateDialog = ({ onClose }: { onClose: () => void }) => {
           <p className={styles.hint}>{t('donateScanHint')}</p>
         )}
         <button type="button" className={styles.pay} disabled={busy} onClick={() => void pay()}>
-          {busy ? t('donateWorking') : t('donateSaveAndOpen', { app: label(method) })}
+          <span>{busy ? t('donateWorking') : t('donateSaveAndOpen', { app: label(method) })}</span>
+          <span className={styles.payArrow} aria-hidden="true">
+            <IconRightUpOutline14 />
+          </span>
         </button>
       </div>
     </Modal>

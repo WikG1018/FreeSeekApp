@@ -420,7 +420,9 @@
       display: inline-flex;
       align-items: center;
       justify-content: flex-start;
-      max-width: 64%;
+      min-width: 44px;
+      max-width: 128px;
+      flex: 0 9999 auto;
       height: 44px;
       padding: 0 3px !important;
       color: var(--blue) !important;
@@ -429,9 +431,50 @@
       font-weight: 620;
     }
     .model-low .model-name {
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .quick-modes {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+    .quick-modes button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 2px;
+    }
+    .quick-modes .mode-face {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 6px;
+      border: 1px solid var(--faint);
+      border-radius: 14px;
+      color: var(--secondary);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .quick-modes .ico {
+      width: 13px;
+      height: 13px;
+      margin-right: 3px;
+    }
+    .quick-modes button[aria-pressed='true'] .mode-face {
+      background: var(--wash);
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+    .quick-modes button:disabled .mode-face {
+      border-style: dashed;
+      cursor: default;
+    }
+    .dock > .tagline:not(:empty) {
+      padding: 2px 4px 5px;
     }
     .active-tool,
     .filetag {
@@ -809,7 +852,7 @@
         <section class="design shown" id="design-a">
           <div class="design-head">
             <h2><b>A</b>拇指旁切换</h2>
-            <p>当前模型贴近输入框，适合边写边切换。</p>
+            <p>模型、深度思考和智能搜索并排，单手就能切换。</p>
           </div>
           <div class="phone" data-design="a"></div>
         </section>
@@ -939,8 +982,28 @@
           icon('redo') +
           '</div></div>' +
           '<div class="dock"><div class="context">' +
-          (isA ? modelButton('model-low', false) : '') +
-          '<div class="tagline"></div></div><div class="composer"><button type="button" class="round add" aria-label="添加附件或工具" aria-haspopup="dialog" aria-expanded="false">' +
+          (isA
+            ? modelButton('model-low', false) +
+              '<div class="quick-modes">' +
+              [
+                ['think', '深度思考'],
+                ['globe', '智能搜索'],
+              ]
+                .map(
+                  ([id, label]) =>
+                    '<button type="button" data-tool="' +
+                    id +
+                    '" aria-pressed="false"><span class="mode-face">' +
+                    icon(id) +
+                    label +
+                    '</span></button>'
+                )
+                .join('') +
+              '</div></div><div class="tagline"></div>'
+            : '<div class="tagline"></div></div>') +
+          '<div class="composer"><button type="button" class="round add" aria-label="' +
+          (isA ? '添加附件' : '添加附件或工具') +
+          '" aria-haspopup="dialog" aria-expanded="false">' +
           icon('plus') +
           '</button><textarea rows="1" aria-label="消息草稿" placeholder="发消息"></textarea><button type="button" class="round send" data-mode="voice" aria-label="预览语音输入"><span class="core">' +
           icon('mic') +
@@ -1070,6 +1133,15 @@
           ['globe', '智能搜索'],
         ]
         const toggleTool = (id) => (toolFlags.has(id) ? toolFlags.delete(id) : toolFlags.add(id))
+        phone.querySelectorAll('[data-tool]').forEach((button) => {
+          button.onpointerdown = (event) => {
+            if (document.activeElement === draft) event.preventDefault()
+          }
+          button.onclick = () => {
+            toggleTool(button.dataset.tool)
+            refresh()
+          }
+        })
         function open(kind, trigger) {
           if (opened === kind) {
             close()
@@ -1106,6 +1178,7 @@
             list.className = 'scroll'
             pop.append(list)
             for (const [id, name] of actions) {
+              if (isA && (id === 'think' || id === 'globe')) continue
               if ((id === 'think' || id === 'globe') && current.group !== 'DeepSeek 官方') continue
               if ((id === 'camera' || id === 'gallery') && current.id === 'pro') continue
               const b = document.createElement('button')
@@ -1204,10 +1277,18 @@
             addTag(attachment, () => {
               attachment = ''
             })
-          if (current.group === 'DeepSeek 官方')
+          phone.querySelectorAll('[data-tool]').forEach((button) => {
+            button.disabled = current.group !== 'DeepSeek 官方'
+            button.title = button.disabled ? '第三方模型使用自己的配置' : ''
+            button.setAttribute(
+              'aria-pressed',
+              String(!button.disabled && toolFlags.has(button.dataset.tool))
+            )
+          })
+          if (!isA && current.group === 'DeepSeek 官方')
             for (const flag of toolFlags)
               addTag(flag === 'think' ? '深度思考' : '智能搜索', () => toolFlags.delete(flag))
-          $('.context').hidden = (!isA || modelBtn.hidden) && !tags.children.length
+          $('.context').hidden = !isA && !tags.children.length
           const mode = running ? 'stop' : draft.value.trim() || attachment ? 'send' : 'voice'
           send.dataset.mode = mode
           send.setAttribute(

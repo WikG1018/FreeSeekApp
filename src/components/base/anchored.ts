@@ -19,6 +19,7 @@ export type AnchoredPosition = {
   left?: number
   right?: number
   maxHeight?: number
+  width?: number
 }
 
 export type AnchoredOptions = {
@@ -47,6 +48,7 @@ export type AnchoredOptions = {
    * 旧位置绘制一帧再回弹，所以需要这个同步入口。
    */
   measureKey?: unknown
+  matchAnchorWidth?: boolean
 }
 
 const safeViewport = () => {
@@ -109,6 +111,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     maxHeight,
     minSpace = 160,
     measureFirstChild = false,
+    matchAnchorWidth = false,
     measureKey,
   }: AnchoredOptions = {}
 ) => {
@@ -123,7 +126,8 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       previous.top === next.top &&
       previous.left === next.left &&
       previous.right === next.right &&
-      previous.maxHeight === next.maxHeight
+      previous.maxHeight === next.maxHeight &&
+      previous.width === next.width
         ? previous
         : next
     )
@@ -180,13 +184,28 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
         : spaceBelow
     const limit = Math.max(0, Math.min(maxHeight, available))
     const height = Math.min(floating.offsetHeight, limit)
+    const width = matchAnchorWidth
+      ? Math.min(rect.width, Math.max(0, bounds.right - bounds.left))
+      : undefined
     const natural = resolved === 'top' ? rect.top - offset - height : rect.bottom + offset
     applyPosition({
       top: Math.max(bounds.top, Math.min(natural, bounds.bottom - height)),
-      left: alignLeft(rect, floating.offsetWidth, align, alignOffset, bounds),
+      left: alignLeft(rect, width ?? floating.offsetWidth, align, alignOffset, bounds),
+      width,
       maxHeight: limit,
     })
-  }, [align, alignOffset, applyPosition, floatingRef, getAnchor, maxHeight, minSpace, offset, side])
+  }, [
+    align,
+    alignOffset,
+    applyPosition,
+    floatingRef,
+    getAnchor,
+    maxHeight,
+    minSpace,
+    offset,
+    side,
+    matchAnchorWidth,
+  ])
 
   // 打开时与内容变化时同步测量，必须在绘制前完成
   useLayoutEffect(() => {

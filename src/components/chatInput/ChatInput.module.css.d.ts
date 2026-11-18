@@ -1,25 +1,33 @@
 declare const styles: {
-  readonly "wrapper": string;
-  readonly "session": string;
-  readonly "home": string;
-  readonly "attachments": string;
-  readonly "attachment": string;
-  readonly "remove": string;
-  readonly "uploading": string;
-  readonly "spin": string;
-  readonly "failed": string;
-  readonly "textareaWrapper": string;
-  readonly "textarea": string;
-  readonly "mirror": string;
-  readonly "functionRow": string;
-  readonly "toggles": string;
-  readonly "collapsedToggles": string;
-  readonly "toggleLabel": string;
-  readonly "toggle": string;
-  readonly "selected": string;
-  readonly "right": string;
-  readonly "sendButton": string;
-  readonly "disabled": string;
-};
-export = styles;
-
+  readonly wrapper: string
+  readonly toolbar: string
+  readonly tools: string
+  readonly tool: string
+  readonly modelTrigger: string
+  readonly toolFace: string
+  readonly modelName: string
+  readonly modelGroup: string
+  readonly modelGlyph: string
+  readonly modelReason: string
+  readonly surface: string
+  readonly inputRow: string
+  readonly attachTrigger: string
+  readonly right: string
+  readonly textareaWrapper: string
+  readonly textarea: string
+  readonly mirror: string
+  readonly textareaHidden: string
+  readonly sendButton: string
+  readonly attachments: string
+  readonly attachment: string
+  readonly remove: string
+  readonly uploading: string
+  readonly attachmentFailed: string
+  readonly failed: string
+  readonly failedStatic: string
+  readonly failedReason: string
+  readonly invalidRemove: string
+  readonly uploadProgress: string
+  readonly uploadRecovery: string
+}
+export = styles

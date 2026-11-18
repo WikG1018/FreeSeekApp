@@ -1,16 +1,46 @@
-import { useId, useLayoutEffect, useState, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { useAnchoredPosition, useDismiss, type Align, type Side } from './anchored.js'
 import { useTransientPanel } from './transientPanel.js'
 import styles from './OptionPanel.module.css'
 
-type Options = { side?: Side; align?: Align; kind?: 'choices' | 'actions'; measureKey?: unknown }
+type Options = {
+  side?: Side
+  align?: Align
+  kind?: 'choices' | 'actions' | 'field'
+  measureKey?: unknown
+  editorRef?: RefObject<HTMLTextAreaElement>
+  disabled?: boolean
+}
 /** 控件旁的轻量面板。尺寸随内容，长列表在安全区内滚动。 */
 export const useOptionPanel = (
   label: string,
-  { side = 'bottom', align = 'start', kind = 'choices', measureKey }: Options = {}
+  {
+    side = 'bottom',
+    align = 'start',
+    kind = 'choices',
+    measureKey,
+    editorRef,
+    disabled = false,
+  }: Options = {}
 ) => {
-  const [open, setOpen] = useState(false)
+  const [expanded, setOpen] = useState(false)
+  const open = expanded && !disabled
+  const editing = useRef(false)
+  useLayoutEffect(() => {
+    if (disabled) {
+      setOpen(false)
+    }
+  }, [disabled])
   const id = useId()
   const { anchorRef, floatingRef, position } = useAnchoredPosition<
     HTMLButtonElement,
@@ -19,14 +49,16 @@ export const useOptionPanel = (
     side,
     align,
     offset: 7,
-    maxHeight: kind === 'choices' ? 354 : 226,
+    maxHeight: kind === 'actions' ? 226 : 354,
+    matchAnchorWidth: kind === 'field',
     minSpace: 132,
     measureKey,
   })
   const close = (restoreFocus = false) => {
     setOpen(false)
     if (restoreFocus) {
-      anchorRef.current?.focus({ preventScroll: true })
+      const target = editing.current && editorRef?.current ? editorRef.current : anchorRef.current
+      target?.focus({ preventScroll: true })
     }
   }
   useTransientPanel(open, close)
@@ -41,9 +73,11 @@ export const useOptionPanel = (
     }
     const el = floatingRef.current
     const item =
-      el?.querySelector<HTMLElement>('[aria-selected="true"]') ??
-      el?.querySelector<HTMLElement>('[data-panel-item]')
-    ;(item ?? el)?.focus({ preventScroll: true })
+      el?.querySelector<HTMLElement>('[aria-selected="true"]:not(:disabled)') ??
+      el?.querySelector<HTMLElement>('[data-panel-item]:not(:disabled)')
+    if (!editing.current) {
+      ;(item ?? el)?.focus({ preventScroll: true })
+    }
     item?.scrollIntoView({ block: 'nearest' })
   }, [open, positioned, floatingRef])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -98,6 +132,15 @@ export const useOptionPanel = (
             data-kind={kind}
             data-testid="option-panel"
             onKeyDown={keyDown}
+            onPointerDown={(event) => {
+              if (
+                editing.current &&
+                document.activeElement === editorRef?.current &&
+                (event.target as Element).closest('button')
+              ) {
+                event.preventDefault()
+              }
+            }}
             style={position ?? { visibility: 'hidden' }}
           >
             {children}
@@ -114,7 +157,31 @@ export const useOptionPanel = (
       'aria-expanded': open,
       'aria-controls': open ? id : undefined,
       'aria-haspopup': 'dialog' as const,
-      onClick: () => setOpen((value) => !value),
+      onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+        if (
+          event.button === 0 &&
+          editorRef?.current &&
+          document.activeElement === editorRef.current
+        ) {
+          event.preventDefault()
+        }
+      },
+      onClick: () => {
+        if (!open) {
+          editing.current = Boolean(
+            editorRef?.current && document.activeElement === editorRef.current
+          )
+          // A landscape IME can leave too little space for even one row. Restore the draft on selection.
+          if (
+            editing.current &&
+            anchorRef.current?.closest('[data-ime-compact]') &&
+            anchorRef.current.getBoundingClientRect().top < 150
+          ) {
+            editorRef?.current?.blur()
+          }
+        }
+        setOpen(!open)
+      },
     },
   }
 }

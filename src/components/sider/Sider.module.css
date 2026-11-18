@@ -406,60 +406,104 @@
 }
 
 .bottom .support {
-  --support-ink: #a64046;
-  --support-wash: #fbe9e5;
-  background: var(--support-wash);
-  color: var(--support-ink);
-  padding-right: 12px;
-  transition:
-    background-color 0.15s,
-    transform 0.15s;
+  position: relative;
+  min-height: 46px;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 5px 11px 5px 7px;
+  color: white;
+  background: linear-gradient(105deg, #ad1649, #c52861);
+  box-shadow: 0 2px 8px rgba(153, 26, 66, 0.14);
+  transition: transform 130ms var(--fs-ease-out);
 }
 [data-ds-dark-theme] .bottom .support {
-  --support-ink: #ffb0a4;
-  --support-wash: #412b2d;
+  background: linear-gradient(105deg, #982047, #b82458);
 }
-.support .settingsLabel,
+.support .settingsLabel {
+  color: white;
+  font-weight: 600;
+}
 .support .donateHeart {
-  color: var(--support-ink);
+  position: relative;
+  width: 33px;
+  height: 33px;
+  margin-right: 3px;
+  border-radius: 11px 11px 11px 4px;
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
 }
 .support .donateHeart svg {
-  width: 21px;
-  height: 21px;
+  width: 22px;
+  height: 22px;
 }
 .supportArrow {
-  display: flex;
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
   margin-left: auto;
-  padding-left: 8px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
   transition: transform 160ms var(--fs-ease-out);
+}
+.bottom .support:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 2px;
+  box-shadow: inset 0 0 0 2px white;
 }
 .support:active {
   transform: translateY(1px);
 }
-.support:active .donateHeart,
-.support:focus-visible .donateHeart {
-  animation: sendLove 330ms var(--fs-ease-out);
+.support:active .donateHeart svg,
+.support:focus-visible .donateHeart svg {
+  animation: sendLove 360ms var(--fs-ease-out);
 }
 @media (hover: hover) {
-  .support:hover .donateHeart {
-    animation: sendLove 330ms var(--fs-ease-out);
+  .support:hover .donateHeart svg {
+    animation: sendLove 360ms var(--fs-ease-out);
   }
   .support:hover .supportArrow {
     transform: translateX(2px);
   }
 }
-@keyframes sendLove {
-  40% {
-    transform: translateY(-2px) rotate(-10deg) scale(1.1);
+/* One small pulse when the drawer arrives; the payment code and text are always stationary. */
+:global([data-sider-open]) .support .donateHeart svg {
+  animation: sendLove 440ms var(--fs-ease-out) 120ms backwards;
+}
+:global([data-sider-open]) .support .donateHeart::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  opacity: 0;
+  pointer-events: none;
+  animation: loveRing 420ms ease-out 150ms;
+}
+@keyframes loveRing {
+  from {
+    opacity: 0.68;
+    transform: scale(0.76);
   }
-  75% {
-    transform: rotate(3deg);
+  to {
+    opacity: 0;
+    transform: scale(1.15);
+  }
+}
+@keyframes sendLove {
+  38% {
+    transform: translateY(-2px) rotate(-10deg) scale(1.13);
+  }
+  76% {
+    transform: rotate(4deg) scale(0.98);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .bottom .support,
   .support .supportArrow,
-  .support .donateHeart {
+  .support .donateHeart svg,
+  .support .donateHeart::before {
     animation: none !important;
     transform: none !important;
     transition: none;

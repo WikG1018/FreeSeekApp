@@ -60,6 +60,7 @@ const write = (key: string, value: string | null) => {
     } else {
       localStorage.setItem(key, value)
     }
+    return true
   } catch (error) {
     logEvent(
       'storage',
@@ -67,7 +68,7 @@ const write = (key: string, value: string | null) => {
       { errorName: error instanceof Error ? error.name : 'Error' },
       'error'
     )
-    // 存储不可用时只在内存中生效
+    return false
   }
 }
 
@@ -146,11 +147,14 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
   useSettings.setState({ ttsVoice })
 }
 
-export const setApiKey = (apiKey: string | null) => {
+export const setApiKey = (apiKey: string | null, { requirePersistence = false } = {}) => {
   registerLogSecret(apiKey)
-  logEvent('app', 'api-key.changed', { configured: Boolean(apiKey) })
-  write(KEYS.apiKey, apiKey)
-  useSettings.setState({ apiKey })
+  const saved = write(KEYS.apiKey, apiKey)
+  if (saved || !requirePersistence) {
+    logEvent('app', 'api-key.changed', { configured: Boolean(apiKey) })
+    useSettings.setState({ apiKey })
+  }
+  return saved
 }
 
 export const setThinking = (thinking: boolean) => {

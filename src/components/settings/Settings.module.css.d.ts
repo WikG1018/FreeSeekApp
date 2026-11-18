@@ -1,4 +1,7 @@
 declare const styles: {
+  readonly readyTitle: string
+  readonly readyMessage: string
+  readonly readyHint: string
   readonly accountBlock: string
   readonly accountStatus: string
   readonly accountStatusLabel: string
@@ -23,9 +26,6 @@ declare const styles: {
   readonly eyeButton: string
   readonly fieldHint: string
   readonly fontPreview: string
-  readonly guideBody: string
-  readonly guideChevron: string
-  readonly guideIcon: string
   readonly header: string
   readonly hint: string
   readonly importActions: string
@@ -53,10 +53,8 @@ declare const styles: {
   readonly layer: string
   readonly licenseText: string
   readonly maskRow: string
-  readonly officialTip: string
   readonly officialTipHint: string
   readonly officialTipSteps: string
-  readonly officialTipTitle: string
   readonly page: string
   readonly pageBody: string
   readonly pageClosing: string
@@ -86,15 +84,12 @@ declare const styles: {
   readonly title: string
   readonly toggleThumb: string
   readonly toggleTrack: string
-  readonly tutorial: string
   readonly tutorialActions: string
   readonly tutorialBadge: string
   readonly tutorialButton: string
-  readonly tutorialHeading: string
   readonly tutorialHint: string
   readonly tutorialStep: string
   readonly tutorialSteps: string
-  readonly tutorialToggle: string
   readonly usageToggle: string
 }
 export = styles

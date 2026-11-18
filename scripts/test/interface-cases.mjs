@@ -33,6 +33,11 @@ export const runInterfaceCases = async ({ run }) => {
             : original(url, ...args)
       })
       await page.getByRole('button', { name: '验证并保存', exact: true }).click()
+      const success = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true })
+      await success.waitFor()
+      assert.match(await success.textContent(), /只有接入其他模型服务商或自建网关/)
+      assert.doesNotMatch(await success.textContent(), /synthetic-ui-verified-key/)
+      await success.getByRole('button', { name: '留在设置', exact: true }).click()
       await page.getByText('已配置', { exact: true }).waitFor()
       await page.getByRole('radio', { name: /DeepSeek V4 Pro/ }).check()
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
@@ -211,7 +216,13 @@ export const runInterfaceCases = async ({ run }) => {
       await field.click()
       const panel = page.getByTestId('option-panel')
       assert.equal(await panel.getByRole('option').count(), 4)
-      assert.ok((await panel.boundingBox()).height < 265)
+      const menuBox = await panel.boundingBox(),
+        fieldBox = await field.boundingBox()
+      assert.ok(menuBox.height < 265)
+      assert.ok(
+        Math.abs(menuBox.width - fieldBox.width) < 2 && Math.abs(menuBox.x - fieldBox.x) < 2
+      )
+      assert.ok(await panel.getByText('/chat/completions', { exact: true }).isVisible())
       await page.keyboard.press('End')
       await page.keyboard.press('Enter')
       assert.match(await field.textContent(), /Gemini/)
@@ -243,7 +254,25 @@ export const runInterfaceCases = async ({ run }) => {
       )
       const wechat = await qr.getAttribute('src'),
         box = await qr.boundingBox()
+      const channelColors = () =>
+        donate
+          .getByRole('radio')
+          .evaluateAll((radios) =>
+            radios.map((r) =>
+              getComputedStyle(r.nextElementSibling)
+                .backgroundColor.match(/\d+/g)
+                .slice(0, 3)
+                .map(Number)
+            )
+          )
+      const [green, paleBlue] = await channelColors()
+      assert.ok(green[1] > green[0] && green[1] > green[2] && paleBlue[2] > paleBlue[1])
       await donate.getByRole('radio', { name: '支付宝', exact: true }).check()
+      await donate.evaluate((el) =>
+        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished))
+      )
+      const [paleGreen, blue] = await channelColors()
+      assert.ok(paleGreen[1] > paleGreen[0] && blue[2] > blue[1] && blue[2] > blue[0])
       assert.notEqual(await qr.getAttribute('src'), wechat)
       const next = await qr.boundingBox()
       for (const k of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(box[k] - next[k]) < 1)
@@ -320,6 +349,169 @@ export const runInterfaceCases = async ({ run }) => {
       await page.keyboard.press('Enter')
       await chooser.waitFor({ state: 'detached' })
       assert.match(await trigger.textContent(), /旅行笔记 19/)
+    }
+  )
+
+  await run(
+    'settings disclosures reverse cleanly and preserve nested values, links and keyboard access',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
+      const guide = page.getByTestId('api-tutorial'),
+        header = guide.getByRole('button', { name: /如何获取 API Key/ })
+      assert.equal(await header.getAttribute('aria-expanded'), 'true')
+      await header.click()
+      await header.click()
+      await guide.getByRole('listitem').first().waitFor()
+      assert.equal(await guide.getByRole('listitem').count(), 4)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      const more = page.getByRole('button', { name: '更多参数与输入能力', exact: true }),
+        shelf = page.locator('[data-settings-page=providers]').getByRole('spinbutton').first()
+      await more.click()
+      await shelf.fill('7777')
+      await more.click()
+      const id = await more.getAttribute('aria-controls')
+      await page.waitForFunction((id) => document.getElementById(id).hidden, id)
+      assert.equal(
+        await page.evaluate(
+          (id) => document.getElementById(id).querySelector('fieldset').disabled,
+          id
+        ),
+        true
+      )
+      await more.click()
+      assert.equal(await shelf.inputValue(), '7777')
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await more.click()
+      assert.ok(await page.evaluate((id) => document.getElementById(id).hidden, id))
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+      const official = page.getByRole('button', { name: /从 DeepSeek 官方 App 导入聊天记录/ })
+      assert.equal(await official.getAttribute('aria-expanded'), 'false')
+      await official.focus()
+      await page.keyboard.press('Enter')
+      assert.equal(await official.getAttribute('aria-expanded'), 'true')
+      assert.equal(await page.locator('[data-settings-page=data]').getByRole('listitem').count(), 4)
+    }
+  )
+
+  await run(
+    'onboarding only announces a verified and persisted official key, then returns to the existing draft',
+    async (page) => {
+      const u = new URL(page.url())
+      u.search = ''
+      await page.goto(u.href)
+      await page.getByRole('button', { name: '去绑定 API Key', exact: true }).click()
+      const ready = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true }),
+        key = page.getByLabel('API Key', { exact: true })
+      await page.evaluate(() => window.__audit.drafts.setDraftText(null, '保留原有草稿'))
+      let status = 401
+      await page.route('**/models', (r) =>
+        r.fulfill({
+          status,
+          contentType: 'application/json',
+          body: status === 200 ? '{"data":[]}' : '{"error":{"message":"Unauthorized"}}',
+        })
+      )
+      await key.fill('official-ui-fixture')
+      const submit = page.getByRole('button', { name: '验证并保存', exact: true })
+      await submit.click()
+      await page
+        .getByRole('alert')
+        .filter({ hasText: /API Key 无效/ })
+        .waitFor()
+      assert.equal(await ready.count(), 0)
+      assert.equal(await page.evaluate(() => localStorage.getItem('freeseek:api-key')), null)
+      status = 200
+      await page.evaluate(() => {
+        const orig = Storage.prototype.setItem
+        window.__restoreSettingsWrite = () => {
+          Storage.prototype.setItem = orig
+        }
+        Storage.prototype.setItem = function (name, value) {
+          if (name === 'freeseek:api-key') throw new DOMException('quota', 'QuotaExceededError')
+          return orig.call(this, name, value)
+        }
+      })
+      await submit.click()
+      await page
+        .getByRole('alert')
+        .filter({ hasText: /未能保存到本机/ })
+        .waitFor()
+      assert.equal(await ready.count(), 0)
+      assert.equal(await key.inputValue(), 'official-ui-fixture')
+      assert.equal(
+        await page.evaluate(() => window.__audit.settings.useSettings.getState().apiKey),
+        null
+      )
+      await page.evaluate(() => window.__restoreSettingsWrite())
+      await submit.click()
+      await ready.waitFor()
+      await ready.getByRole('button', { name: '开始聊天', exact: true }).click()
+      await page.waitForFunction(() => !window.__audit.settingsDialog.hasSettingsOpen())
+      assert.equal(
+        await page.getByTestId('chat-composer').locator('textarea').inputValue(),
+        '保留原有草稿'
+      )
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
+      await page.getByText('已配置', { exact: true }).waitFor()
+      assert.equal(await ready.count(), 0)
+    }
+  )
+
+  await run(
+    'advanced guidance routes back safely and changing an official key respects the selected provider',
+    async (page) => {
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: '我的服务商',
+            url: 'https://private.example/v1',
+            model: 'custom-choice',
+          },
+          true
+        )
+        a.settingsDialog.openSettings('providers')
+      })
+      const guide = page.getByTestId('advanced-provider-notice')
+      assert.match(await guide.innerText(), /验证并保存官方 Key/)
+      await page.getByLabel('配置名称', { exact: true }).fill('未保存的名称')
+      const official = guide.getByRole('button', { name: '返回官方 API 设置', exact: true })
+      await official.click()
+      await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+      assert.equal(await page.getByLabel('配置名称', { exact: true }).inputValue(), '未保存的名称')
+      await official.click()
+      await page.getByRole('button', { name: '放弃修改', exact: true }).click()
+      await page.route('**/models', (r) =>
+        r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' })
+      )
+      const key = page.getByLabel('API Key', { exact: true }),
+        ready = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true })
+      await key.fill('replace-one')
+      await page.getByRole('button', { name: '验证并保存', exact: true }).click()
+      await ready.waitFor()
+      assert.match(await ready.innerText(), /我的服务商/)
+      await ready.getByRole('button', { name: '留在设置' }).click()
+      assert.equal(
+        await page.evaluate(() => window.__audit.providers.useProviders.getState().selection.model),
+        'custom-choice'
+      )
+      await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
+      assert.match(await guide.innerText(), /官方 Key 已配置/)
+      await official.click()
+      await page.getByRole('button', { name: '更换 API Key', exact: true }).click()
+      await key.fill('replace-two')
+      await page.getByRole('button', { name: '验证并保存', exact: true }).click()
+      await ready.getByRole('button', { name: '使用 DeepSeek 聊天', exact: true }).click()
+      await page.waitForFunction(() => !window.__audit.settingsDialog.hasSettingsOpen())
+      assert.equal(
+        await page.evaluate(() => localStorage.getItem('freeseek:api-key')),
+        'replace-two'
+      )
+      assert.deepEqual(
+        await page.evaluate(() => window.__audit.providers.useProviders.getState().selection),
+        { providerId: 'deepseek', model: 'deepseek-flash' }
+      )
     }
   )
 }

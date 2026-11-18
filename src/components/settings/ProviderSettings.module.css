@@ -117,19 +117,6 @@
   font-size: 11px;
   color: var(--fs-brand);
 }
-.advanced {
-  border-block: 1px solid var(--fs-field-line);
-}
-.advanced summary {
-  padding: 16px 0;
-  min-height: 24px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-}
-.advanced > div {
-  padding-bottom: 16px;
-}
 .check {
   display: flex;
   align-items: center;
@@ -156,41 +143,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.modelTrigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 210px;
-  min-height: 32px;
-  margin: 8px 12px 0;
-  padding: 4px 10px;
-  border: 1px solid var(--fs-field-line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fs-secondary-text);
-  font-size: 12px;
-  cursor: pointer;
-  align-self: flex-start;
-}
-.modelTrigger span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.modelTrigger svg {
-  flex-shrink: 0;
-}
-:global([data-ime-compact]) .modelTrigger {
-  position: absolute;
-  right: 8px;
-  top: 4px;
-  z-index: 2;
-  max-width: 140px;
-  margin: 0;
-  min-height: 28px;
-  background: var(--fs-settings-surface);
-}
-
 .fieldGroup {
   display: flex;
   flex-direction: column;
@@ -330,4 +282,57 @@
 }
 :global([data-legacy-spacing]) .modelChoices input {
   margin-right: 8px;
+}
+
+.advancedNotice {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 13px 14px 4px;
+  border: 1px solid var(--fs-accent-line);
+  border-radius: 14px;
+  background: var(--fs-accent-wash);
+  color: var(--dsw-alias-label-primary);
+}
+.noticeIcon {
+  display: inline-flex;
+  margin: 3px 9px 0 0;
+  flex: none;
+  color: var(--fs-accent-text);
+}
+.advancedNotice h2 {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
+  margin: 0 0 3px;
+}
+.advancedNotice p {
+  margin: 0;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.advancedNotice button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 3px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--fs-accent-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.advancedNotice button svg {
+  width: 13px;
+  height: 13px;
+  margin-right: 4px;
+}
+.advancedNotice button:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+  border-radius: 6px;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { useSettings } from '../../services/settings.js'
 import { ApiError } from '../../services/api/errorTypes.js'
 import { fetchProviderModels, testProviderModel } from '../../services/api/providerClient.js'
 import {
@@ -14,11 +15,16 @@ import {
   type ProviderProfile,
   type ProviderProtocol,
 } from '../../services/providers.js'
+import { SettingsDisclosure } from './SettingsDisclosure.js'
+import {
+  IconInfoOutline16,
+  IconChevronLeftOutline16,
+  IconSettingsOutline16,
+} from '../base/icons.js'
 import { Select } from '../base/Select.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
-import { IconChevronDownOutline14 } from '../base/icons.js'
 import styles from './ProviderSettings.module.css'
 import { useSettingsLeave } from './useSettingsLeave.js'
 
@@ -37,13 +43,7 @@ const errorMessage = (error: unknown, t: ReturnType<typeof useTranslate>) =>
       ? t(error.localMessage.key, error.localMessage.params)
       : t('providerNetworkError')
 
-export const ConnectionSelector = ({
-  disabled = false,
-  layout = 'picker',
-}: {
-  disabled?: boolean
-  layout?: 'settings' | 'picker'
-}) => {
+export const ConnectionSelector = () => {
   const t = useTranslate(),
     { profiles, selection } = useProviders()
   const [error, setError] = useState('')
@@ -62,13 +62,12 @@ export const ConnectionSelector = ({
   }
   return (
     <div className={styles.fields}>
-      {(layout === 'picker' || profiles.length > 0) && (
+      {profiles.length > 0 && (
         <div className={styles.field}>
           <span>{t('providerSelectService')}</span>
           <Select
             ariaLabel={t('providerSelectService')}
             value={selection.providerId}
-            disabled={disabled}
             options={[
               { value: 'deepseek', label: t('providerOfficial') },
               ...profiles.map((p) => ({ value: p.id, label: p.name })),
@@ -84,7 +83,7 @@ export const ConnectionSelector = ({
           />
         </div>
       )}
-      {layout === 'settings' && !profile ? (
+      {!profile ? (
         <div
           role="radiogroup"
           aria-label={t('providerDefaultModel')}
@@ -95,7 +94,6 @@ export const ConnectionSelector = ({
               <input
                 type="radio"
                 name={groupId}
-                disabled={disabled}
                 checked={selection.model === model}
                 onChange={() => choose('deepseek', model)}
               />
@@ -116,17 +114,12 @@ export const ConnectionSelector = ({
           <Select
             ariaLabel={t('providerModel')}
             value={selection.model}
-            disabled={disabled}
             options={models.map((model) => ({ value: model, label: modelLabel(model) }))}
             onChange={(model) => choose(selection.providerId, model)}
           />
         </div>
       )}
-      <p className={styles.hint}>
-        {layout === 'settings' && !profile
-          ? t('settingsApiBillingValue')
-          : t(profile ? 'providerCustomHint' : 'providerOfficialHint')}
-      </p>
+      <p className={styles.hint}>{t(profile ? 'providerCustomHint' : 'settingsApiBillingValue')}</p>
       {error ? (
         <p className={styles.error} role="alert">
           {error}
@@ -136,39 +129,8 @@ export const ConnectionSelector = ({
   )
 }
 
-export const ModelPicker = ({ disabled }: { disabled: boolean }) => {
-  const t = useTranslate(),
-    selection = useProviders((state) => state.selection)
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button
-        type="button"
-        className={styles.modelTrigger}
-        disabled={disabled}
-        aria-label={t('providerSwitch')}
-        aria-haspopup="dialog"
-        title={selection.model}
-        onClick={() => setOpen(true)}
-      >
-        <span>{modelLabel(selection.model)}</span>
-        <IconChevronDownOutline14 />
-      </button>
-      {open ? (
-        <Modal
-          title={t('providerSwitch')}
-          closable
-          onClose={() => setOpen(false)}
-          footer={<Button onClick={() => setOpen(false)}>{t('confirm')}</Button>}
-        >
-          <ConnectionSelector disabled={disabled} />
-        </Modal>
-      ) : null}
-    </>
-  )
-}
-
-export const ProviderSettingsPage = () => {
+export const ProviderSettingsPage = ({ onOfficial }: { onOfficial: () => void }) => {
+  const officialConfigured = useSettings((state) => Boolean(state.apiKey))
   const t = useTranslate(),
     { profiles, selection } = useProviders()
   const [form, setForm] = useState<ProviderProfile>(
@@ -264,6 +226,23 @@ export const ProviderSettingsPage = () => {
   }
   return (
     <div className={styles.page}>
+      <aside
+        className={styles.advancedNotice}
+        aria-label={t('advancedNoticeTitle')}
+        data-testid="advanced-provider-notice"
+      >
+        <span className={styles.noticeIcon} aria-hidden="true">
+          <IconInfoOutline16 />
+        </span>
+        <div>
+          <h2>{t('advancedNoticeTitle')}</h2>
+          <p>{t(officialConfigured ? 'advancedNoticeConfigured' : 'advancedNoticeUnconfigured')}</p>
+          <button type="button" onClick={() => leave.request(onOfficial)}>
+            <IconChevronLeftOutline16 />
+            {t('advancedReturnOfficial')}
+          </button>
+        </div>
+      </aside>
       {profiles.length > 0 && (
         <div className={styles.savedHeader}>
           <span>{t('providerProfile')}</span>
@@ -312,10 +291,14 @@ export const ProviderSettingsPage = () => {
             value={form.protocol}
             disabled={Boolean(busy)}
             options={[
-              { value: 'openai', label: 'OpenAI Chat Completions' },
-              { value: 'responses', label: 'OpenAI Responses' },
-              { value: 'anthropic', label: 'Anthropic Messages' },
-              { value: 'gemini', label: 'Google Gemini' },
+              { value: 'openai', label: 'OpenAI Chat Completions', detail: '/chat/completions' },
+              { value: 'responses', label: 'OpenAI Responses', detail: '/responses' },
+              { value: 'anthropic', label: 'Anthropic Messages', detail: '/messages' },
+              {
+                value: 'gemini',
+                label: 'Google Gemini',
+                detail: 'generateContent · streamGenerateContent',
+              },
             ]}
             onChange={(protocol) => patch({ protocol, models: [] })}
           />
@@ -411,8 +394,7 @@ export const ProviderSettingsPage = () => {
         </p>
       )}
       <fieldset className={styles.fields} disabled={Boolean(busy)}>
-        <details className={styles.advanced}>
-          <summary>{t('providerParameters')}</summary>
+        <SettingsDisclosure title={t('providerParameters')} icon={<IconSettingsOutline16 />}>
           <div className={styles.fields}>
             <label className={styles.field}>
               <span>{t('providerMaxOutput')}</span>
@@ -512,7 +494,7 @@ export const ProviderSettingsPage = () => {
             </label>
             <p className={styles.hint}>{t('providerExtraHint')}</p>
           </div>
-        </details>
+        </SettingsDisclosure>
       </fieldset>
       <div className={styles.actions}>
         <Button disabled={Boolean(busy)} variant="outlined" onClick={() => save(false)}>

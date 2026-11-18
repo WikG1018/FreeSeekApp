@@ -230,7 +230,6 @@ button.row:active:not(:disabled),
 }
 .row:focus-visible,
 .back:focus-visible,
-.tutorialToggle:focus-visible,
 .tutorialButton:focus-visible,
 .textButton:focus-visible,
 .quietAction:focus-visible {
@@ -439,51 +438,6 @@ button.row:active:not(:disabled),
   padding: 16px;
   font-size: 15px;
   line-height: 1.65;
-}
-.tutorial {
-  background: var(--fs-accent-wash);
-  border: 1px solid var(--fs-accent-line);
-  border-radius: 15px;
-}
-.tutorialHeading {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.55;
-}
-.tutorialToggle {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-  padding: 14px 15px;
-  text-align: left;
-  min-height: 50px;
-  border: 0;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  border-radius: inherit;
-}
-.guideIcon,
-.guideChevron {
-  display: inline-flex;
-  flex-shrink: 0;
-  color: var(--fs-accent-text);
-}
-.guideChevron {
-  margin-left: auto;
-  transition: transform 160ms var(--fs-ease-out);
-}
-.tutorialToggle[aria-expanded='true'] .guideChevron {
-  transform: rotate(180deg);
-}
-.guideBody {
-  padding: 0 15px 13px;
-}
-.guideBody[hidden] {
-  display: none;
 }
 .tutorialSteps {
   margin: 0;
@@ -847,34 +801,19 @@ button.row:active:not(:disabled),
 }
 
 /* 数据管理页：官方 App 导出指引 */
-.officialTip {
-  margin: 6px 0 16px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: var(--fs-brand-soft);
-  border: 1px solid rgba(37, 99, 235, 0.18);
-}
-
-.officialTipTitle {
-  font-size: 14px;
-  line-height: 21px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-}
-
 .officialTipSteps {
-  margin: 8px 0 0;
+  margin: 0;
   padding-left: 18px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-secondary);
 }
 
 .officialTipHint {
-  margin-top: 8px;
-  font-size: 11.5px;
+  margin: 8px 0 0;
+  font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
 /* 导入进度与失败提示 */
@@ -1003,25 +942,6 @@ button.row:active:not(:disabled),
   filter: brightness(0) invert(0.89);
 }
 
-.officialTip {
-  margin-top: 16px;
-  padding: 0 14px;
-  background: var(--fs-settings-surface);
-  border: 1px solid var(--fs-line);
-}
-.officialTipTitle {
-  cursor: pointer;
-  padding: 12px 0;
-  min-height: 44px;
-  box-sizing: border-box;
-}
-.officialTipSteps {
-  margin-top: 0;
-}
-.officialTipHint {
-  margin-bottom: 14px;
-  color: var(--fs-secondary-text);
-}
 .importFile {
   display: flex;
   align-items: center;
@@ -1035,9 +955,6 @@ button.row:active:not(:disabled),
 :global([data-legacy-spacing]) .row > * + *,
 :global([data-legacy-spacing]) .tutorialStep > * + * {
   margin-left: 10px;
-}
-:global([data-legacy-spacing]) .tutorialToggle > .guideIcon {
-  margin-right: 10px;
 }
 :global([data-legacy-spacing]) .tutorialButton + .tutorialButton {
   margin-left: 12px;
@@ -1057,4 +974,35 @@ button.row:active:not(:disabled),
     border-radius: 0 20px 20px 0;
     overflow: hidden;
   }
+}
+
+.readyTitle {
+  display: inline-flex;
+  align-items: center;
+  font-size: 18px;
+  line-height: 1.45;
+  font-weight: 650;
+}
+.readyTitle > span {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-right: 9px;
+  border-radius: 50%;
+  background: var(--fs-accent-wash);
+  color: var(--fs-accent-text);
+}
+.readyMessage,
+.readyHint {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.readyHint {
+  margin-top: 7px;
+  color: var(--fs-secondary-text);
 }
