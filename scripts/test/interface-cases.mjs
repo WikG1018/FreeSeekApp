@@ -528,13 +528,20 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByRole('button', { name: '打开边栏', exact: true }).click()
       const footer = page.getByTestId('sider-footer'),
         gear = footer.getByRole('button', { name: '设置', exact: true })
-      const settings = await gear.boundingBox(),
-        support = await footer
-          .getByRole('button', { name: '打赏开发者', exact: true })
-          .boundingBox()
+      // The drawer moves horizontally during entry. Read both buttons in the same frame.
+      const [support, settings] = await footer.getByRole('button').evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const { left, right, top, width } = button.getBoundingClientRect()
+          return { name: button.getAttribute('aria-label'), left, right, top, width }
+        })
+      )
+      assert.deepEqual([support.name, settings.name], ['打赏开发者', '设置'])
       assert.equal((await gear.innerText()).trim(), '')
-      assert.equal(settings.y, support.y)
-      assert.ok(settings.width >= 44 && support.x + support.width < settings.x)
+      assert.equal(settings.top, support.top)
+      assert.ok(
+        settings.width >= 44 && support.right < settings.left,
+        JSON.stringify({ support, settings })
+      )
       await footer.getByRole('button', { name: '打赏开发者', exact: true }).focus()
       await page.keyboard.press('Tab')
       assert.ok(await gear.evaluate((el) => el === document.activeElement))
