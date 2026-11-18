@@ -234,21 +234,22 @@ export const runCompressionCases = async (run) => {
   )
 
   await run(
-    'compression recovery removes old document references but keeps the current question and attachment on retry',
+    'compression recovery finishes the summary before uploading or sending the pending turn',
     async (page) => {
       await page.evaluate(async () => {
         const a = window.__audit
         const f = a.fixtures
-        const document = (name, id) => ({
+        const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        const document = (name, id, serverId) => ({
           id,
-          serverId: 'file-api-' + id,
+          serverId,
           name,
-          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          mimeType,
           size: 56 * 1024,
           isImage: false,
         })
-        const earlier = document('earlier-document.docx', 'earlier-doc')
-        const current = document('current-document.docx', 'current-doc')
+        const earlier = document('earlier-document.docx', 'earlier-doc', 'file-api-earlier-doc')
+        const current = document('current-document.docx', 'current-doc', null)
         const messages = [
           ...Array.from({ length: 6 }, (_, index) => [
             f.user('q' + index, 'earlier passage ' + index, {
@@ -267,16 +268,46 @@ export const runCompressionCases = async (run) => {
             },
           }),
         ]
-        await a.seed([f.session({ id: 'documents', messages })])
+        await a.seed(
+          [f.session({ id: 'documents', messages })],
+          [{ id: current.id, blob: new Blob(['current document fixture'], { type: mimeType }) }]
+        )
         a.settings.setApiKey('fixture')
         const requests = []
         window.__contextRecoveryRequests = requests
+        const order = (window.__contextRecoveryOrder = [])
+        const open = XMLHttpRequest.prototype.open
+        XMLHttpRequest.prototype.open = function (method, url, ...args) {
+          if (method === 'POST' && String(url).endsWith('/files')) order.push('upload-current')
+          return open.call(this, method, url, ...args)
+        }
         const ordinary = window.fetch
         window.fetch = async (url, init) => {
           if (!String(url).endsWith('/messages')) return ordinary(url, init)
           const body = JSON.parse(init.body)
           requests.push(body)
-          if (body.max_tokens) return a.response('Compact earlier context')
+          if (body.max_tokens) {
+            order.push('summary')
+            const stream = await a.response('Compact earlier context').text()
+            const end = stream.lastIndexOf('data:')
+            const encoder = new TextEncoder()
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  // Deliver the summary text first. Withhold message_stop until the test releases it.
+                  controller.enqueue(encoder.encode(stream.slice(0, end)))
+                  window.__finishContextSummary = (complete) => {
+                    order.push(complete ? 'summary-complete' : 'summary-interrupted')
+                    if (complete) controller.enqueue(encoder.encode(stream.slice(end)))
+                    controller.close()
+                    window.__finishContextSummary = undefined
+                  }
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } }
+            )
+          }
+          order.push('retry-answer')
           if (JSON.stringify(body.messages).includes('file-api-earlier-doc')) {
             return new Response(
               JSON.stringify({ error: { message: 'maximum context length is 1048576 tokens' } }),
@@ -287,15 +318,31 @@ export const runCompressionCases = async (run) => {
         }
       })
       await page.getByRole('button', { name: '压缩历史并重试', exact: true }).click()
+      await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
+      assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), ['summary'])
+      await page.evaluate(() => window.__finishContextSummary(false))
+      await page.getByText(/未能生成完整摘要/).waitFor()
+      assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), [
+        'summary',
+        'summary-interrupted',
+      ])
+      await page.getByRole('button', { name: '整理并压缩上下文', exact: true }).click()
+      await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
+      assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), [
+        'summary',
+        'summary-interrupted',
+        'summary',
+      ])
+      await page.evaluate(() => window.__finishContextSummary(true))
       const result = await page.evaluate(async () => {
         const a = window.__audit
         await a.waitIdle()
         const saved = a.store.useChatStore.getState().sessionCache.documents
         const requests = window.__contextRecoveryRequests
         return {
-          summaryRequest: JSON.stringify(requests[0].messages),
-          retry: JSON.stringify(requests[1].messages),
-          calls: requests.length,
+          summaryRequests: requests.slice(0, 2).map((request) => JSON.stringify(request.messages)),
+          retry: JSON.stringify(requests[2].messages),
+          order: window.__contextRecoveryOrder,
           status: saved.messages.at(-1).status,
           questions: saved.messages.filter((message) => message.role === 'user').length,
           originalFiles: saved.messages
@@ -303,16 +350,25 @@ export const runCompressionCases = async (run) => {
             .flatMap((message) => message.files.map((file) => file.id)),
         }
       })
-      assert.match(result.summaryRequest, /earlier-document\.docx/)
-      assert.doesNotMatch(
-        result.summaryRequest,
-        /CURRENT_QUESTION_MARKER|current-document\.docx|file-api-/
-      )
+      for (const summaryRequest of result.summaryRequests) {
+        assert.match(summaryRequest, /earlier-document\.docx/)
+        assert.doesNotMatch(
+          summaryRequest,
+          /CURRENT_QUESTION_MARKER|current-document\.docx|file-api-/
+        )
+      }
       assert.match(result.retry, /Compact earlier context/)
       assert.match(result.retry, /CURRENT_QUESTION_MARKER/)
-      assert.match(result.retry, /file-api-current-doc/)
+      assert.match(result.retry, /file-api-new/)
       assert.doesNotMatch(result.retry, /file-api-earlier-doc/)
-      assert.equal(result.calls, 2)
+      assert.deepEqual(result.order, [
+        'summary',
+        'summary-interrupted',
+        'summary',
+        'summary-complete',
+        'upload-current',
+        'retry-answer',
+      ])
       assert.equal(result.status, 'done')
       assert.equal(result.questions, 7)
       assert.deepEqual(result.originalFiles, ['earlier-doc', 'current-doc'])

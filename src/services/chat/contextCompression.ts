@@ -12,6 +12,7 @@ import type {
 } from './types.js'
 
 export type ContextRound = [UserMessage, AssistantMessage]
+export type SummaryPlan = { start: number; end: number; limit?: number }
 export const MAX_SUMMARY_CHARS = 16000
 export const contextRounds = (history: Message[], inherited?: { messages: Message[] } | null) => [
   ...getContextRounds(inherited?.messages ?? []),
@@ -235,7 +236,7 @@ export async function generateContextSummary(
   connection: Connection,
   rounds: ContextRound[],
   prior: ContextSummary | undefined,
-  plan: ReturnType<typeof planCompression>,
+  plan: SummaryPlan,
   signal: AbortSignal,
   charge: (item: CompressionCharge) => void
 ): Promise<ContextSummary> {

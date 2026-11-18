@@ -35,11 +35,13 @@ import {
 import { createLatestReminder } from './latestReminder.js'
 import {
   applicableSummary,
+  contextLength,
   contextRounds,
   generateContextSummary,
   MAX_SUMMARY_CHARS,
   planCompression,
   type ContextRound,
+  type SummaryPlan,
 } from './contextCompression.js'
 import { apiLimitCounts } from '../api/knownErrors.js'
 import { activePersona } from '../personas.js'
@@ -1010,7 +1012,7 @@ const compressRounds = async (
   connection: Connection,
   rounds: ContextRound[],
   prior: ContextSummary | undefined,
-  plan: ReturnType<typeof planCompression>,
+  plan: SummaryPlan,
   signal: AbortSignal
 ) => {
   markCompressing(id, true)
@@ -1571,17 +1573,26 @@ const streamReply = async (
         connection ??= resolveConnection(initial.connection, initial.model)
         if (checkPressure) {
           checkPressure = false
-          const estimate = planCompression(
-            rounds,
-            summary,
-            connection,
-            { ...original, system: initial.systemPrompt ?? original.persona?.prompt },
-            reportedLimit
-          )
-          // The service can expand a document far beyond the size seen in this app.
-          // When it has already rejected the request, replace all earlier turns with the summary.
           const recovering = mode === 'recover'
-          const plan = recovering ? { ...estimate, end: rounds.length } : estimate
+          // A rejected turn stays pending while only the earlier history is prepared for compression.
+          // The model window and earlier rounds suffice here, even when attachments expand on the server.
+          const pressure = recovering
+            ? undefined
+            : planCompression(
+                rounds,
+                summary,
+                connection,
+                {
+                  ...original,
+                  system: initial.systemPrompt ?? original.persona?.prompt,
+                },
+                reportedLimit
+              )
+          const plan: SummaryPlan = pressure ?? {
+            start: summary?.coveredRounds ?? 0,
+            end: rounds.length,
+            limit: reportedLimit ?? contextLength(connection),
+          }
           const canReduce = plan.end > plan.start
           if (mode === 'compress' && !canReduce) {
             throw new ApiError('protocol', { key: 'compressionUnavailable' })
@@ -1590,7 +1601,7 @@ const streamReply = async (
             canReduce &&
             (recovering ||
               mode === 'compress' ||
-              (mode === 'ask' && plan.near && !plan.currentTooLarge))
+              (mode === 'ask' && pressure?.near && !pressure.currentTooLarge))
           ) {
             if (mode === 'ask' && !useSettings.getState().autoCompress) {
               throw new ApiError('protocol', { key: 'compressionSuggested' })
@@ -1635,6 +1646,7 @@ const streamReply = async (
             }
           }
         }
+        // File preparation and the answer request only start after the summary stream completes.
         if (
           connection.kind === 'deepseek' &&
           connection.model === 'deepseek-v4-pro' &&
@@ -1820,17 +1832,11 @@ const streamReply = async (
             Number(error.localMessage.params?.contextLimitTokens) ||
             apiLimitCounts(error.message).contextLimitTokens ||
             reportedLimit
-          const plan = planCompression(
-            rounds,
-            summary,
-            connection,
-            { ...original, system: initial.systemPrompt ?? original.persona?.prompt },
-            reportedLimit
-          )
+          const limit = reportedLimit ?? contextLength(connection)
           if (
             connection.kind === 'custom' &&
-            plan.limit &&
-            connection.profile.maxOutputTokens >= plan.limit
+            limit &&
+            connection.profile.maxOutputTokens >= limit
           ) {
             reply = settleReply(reply, 'error', Date.now(), {
               kind: 'protocol',
@@ -1851,12 +1857,7 @@ const streamReply = async (
             })
             break
           }
-          if (
-            mode !== 'send' &&
-            !compressionAttempted &&
-            useSettings.getState().autoCompress &&
-            plan.end > plan.start
-          ) {
+          if (mode !== 'send' && !compressionAttempted && useSettings.getState().autoCompress) {
             checkPressure = true
             mode = 'recover'
             continue
