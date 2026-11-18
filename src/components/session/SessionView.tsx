@@ -79,13 +79,14 @@ export const SessionView = ({
       view.style.setProperty('--composer-height', `${bottom}px`)
       view.style.setProperty('--composer-inset', `${bottom + (compact ? 8 : 40)}px`)
       view.style.setProperty('--message-list-top-inset', `${top ? top + 16 : 8}px`)
+      // Fade above the whole dock, then keep the message layer transparent under every control.
+      const clearBottom = Math.min(bottom, height)
+      const fadeBottom = clearBottom + Math.min(32, Math.max(0, height - clearBottom - 24))
+      view.style.setProperty('--message-clear-bottom', clearBottom + 'px')
+      view.style.setProperty('--message-fade-bottom', fadeBottom + 'px')
       view.style.setProperty(
         '--message-fade-top',
-        `${Math.min(top ? top + 28 : 0, Math.max(0, height - bottom - 32))}px`
-      )
-      view.style.setProperty(
-        '--message-fade-bottom',
-        `${Math.min(bottom + 28, Math.max(0, height - top - 24))}px`
+        Math.min(top ? top + 28 : 0, Math.max(0, height - fadeBottom - 24)) + 'px'
       )
     }
     measure()

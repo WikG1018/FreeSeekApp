@@ -514,4 +514,196 @@ export const runInterfaceCases = async ({ run }) => {
       )
     }
   )
+
+  await run(
+    'one footer row and one scroll owner for the persona library and long prompt editor',
+    async (page) => {
+      await page.setViewportSize({ width: 320, height: 620 })
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.settings.setFontScale(1.25)
+        for (let i = 0; i < 18; i++) a.personas.addPersona('导航回归 ' + i, '一段可以编辑的提示词')
+      })
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const footer = page.getByTestId('sider-footer'),
+        gear = footer.getByRole('button', { name: '设置', exact: true })
+      const settings = await gear.boundingBox(),
+        support = await footer
+          .getByRole('button', { name: '打赏开发者', exact: true })
+          .boundingBox()
+      assert.equal((await gear.innerText()).trim(), '')
+      assert.equal(settings.y, support.y)
+      assert.ok(settings.width >= 44 && settings.x + settings.width < support.x)
+      await gear.click()
+      await page.getByRole('button', { name: /人设与提示词/ }).click()
+      const scroll = page.getByTestId('settings-scroll')
+      const owners = () =>
+        scroll.evaluate((el) =>
+          [el, ...el.querySelectorAll('*')]
+            .filter(
+              (x) =>
+                x.scrollHeight > x.clientHeight + 2 &&
+                ['auto', 'scroll'].includes(getComputedStyle(x).overflowY)
+            )
+            .map((x) => (x === el ? 'page' : x.tagName))
+        )
+      assert.deepEqual(await owners(), ['page'])
+      const target = page.getByRole('button', { name: '导航回归 12的更多操作', exact: true })
+      await target.click()
+      await page.getByRole('menuitem', { name: '编辑', exact: true }).click()
+      const prompt = page.locator('#persona-prompt')
+      await prompt.fill('保留换行及所有内容。\n'.repeat(350))
+      assert.ok(await prompt.evaluate((el) => el.scrollHeight <= el.clientHeight + 2))
+      assert.deepEqual(await owners(), ['page'])
+      await page.getByRole('button', { name: '保存', exact: true }).click()
+      await target.waitFor()
+      await target.click()
+      await page.getByRole('menuitem', { name: '删除', exact: true }).click()
+      await page.getByRole('button', { name: '取消', exact: true }).click()
+      await target.waitFor()
+      assert.deepEqual(await owners(), ['page'])
+    }
+  )
+
+  await run(
+    'update notices show notes before download or install, and About keeps the installed notes offline',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        window.androidBridge = {}
+        const metadata = {
+          tag_name: 'v99.2.1',
+          body: '- 第一项新版改进\n- 第二项新版改进',
+          assets: [
+            {
+              name: 'freeseek-v99.2.1-release.apk',
+              size: 123,
+              browser_download_url:
+                'https://github.com/WikG1018/FreeSeekApp/releases/download/v99.2.1/freeseek-v99.2.1-release.apk',
+              digest: 'sha256:' + 'a'.repeat(64),
+            },
+          ],
+        }
+        window.__updateCalls = { download: 0, install: 0 }
+        window.__readyFile = false
+        window.Capacitor.nativeCallback = () => 'fixture-listener'
+        window.Capacitor.nativePromise = async (plugin, method) => {
+          if (plugin !== 'Update') throw new Error('Unsupported test plugin')
+          if (method === 'get') return { status: 200, body: JSON.stringify(metadata) }
+          if (method === 'hasFile')
+            return {
+              exists: window.__readyFile,
+              path: window.__readyFile ? '/verified.apk' : '',
+              size: 123,
+            }
+          if (method === 'download') {
+            window.__updateCalls.download++
+            return new Promise(
+              (resolve) =>
+                (window.__finishDownload = () => {
+                  window.__readyFile = true
+                  resolve({ path: '/verified.apk', size: 123 })
+                })
+            )
+          }
+          if (method === 'install') {
+            window.__updateCalls.install++
+            return { installed: true }
+          }
+          if (method === 'removeListener') return {}
+          throw new Error('Unsupported test method ' + method)
+        }
+        await a.update.checkForUpdate({ force: true })
+      })
+      const calls = () => page.evaluate(() => window.__updateCalls)
+      assert.deepEqual(await calls(), { download: 0, install: 0 })
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const notice = page.getByTestId('sidebar-update'),
+        notes = page.getByRole('dialog', { name: '版本 v99.2.1 更新内容', exact: true })
+      assert.match(await notice.innerText(), /v99.2.1/)
+      await notice.click()
+      assert.equal(await notes.getByRole('listitem').count(), 2)
+      assert.deepEqual(await calls(), { download: 0, install: 0 })
+      await notes.getByRole('button', { name: '下载更新', exact: true }).click()
+      await page
+        .waitForFunction(() => typeof window.__finishDownload === 'function')
+        .catch(async (error) => {
+          throw new Error(
+            String(error) +
+              ' ' +
+              JSON.stringify(
+                await page.evaluate(() => ({
+                  calls: window.__updateCalls,
+                  status: window.__audit.update.useUpdate.getState().status,
+                  error: window.__audit.update.useUpdate.getState().error,
+                  stored: window.__readyFile,
+                }))
+              )
+          )
+        })
+      await page.keyboard.press('Escape')
+      await notes.waitFor({ state: 'detached' })
+      await page.evaluate(() => window.__audit.update.useUpdate.setState({ percent: 57 }))
+      assert.match(await notice.innerText(), /57%/)
+      await notice.click()
+      assert.equal(await notes.getByRole('progressbar').getAttribute('aria-valuenow'), '57')
+      await page.evaluate(() => window.__finishDownload())
+      await page.keyboard.press('Escape')
+      await notes.waitFor({ state: 'detached' })
+      await notice.click()
+      assert.deepEqual(await calls(), { download: 1, install: 0 })
+      await notes.getByRole('button', { name: '安装更新', exact: true }).click()
+      assert.deepEqual(await calls(), { download: 1, install: 1 })
+      await page.keyboard.press('Escape')
+      await notes.waitFor({ state: 'detached' })
+      await page.evaluate(() => {
+        localStorage.removeItem('freeseek:update-cache')
+        window.__audit.update.useUpdate.setState({
+          release: null,
+          status: 'idle',
+          filePath: '',
+          percent: 0,
+        })
+        window.__audit.settingsDialog.openSettings('about')
+      })
+      await page.getByRole('button', { name: /本版本更新内容/ }).click()
+      const installed = page.getByTestId('release-notes')
+      assert.match(await installed.innerText(), /人设库/)
+      assert.equal(
+        await installed
+          .locator('..')
+          .locator('..')
+          .getByRole('button', { name: '安装更新', exact: true })
+          .count(),
+        0
+      )
+      await page.keyboard.press('Escape')
+      await installed.waitFor({ state: 'detached' })
+      await page.getByRole('button', { name: /检查更新/ }).click()
+      await notes.waitFor()
+      assert.deepEqual(await calls(), { download: 1, install: 1 })
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.Capacitor = {
+          PluginHeaders: [
+            {
+              name: 'Update',
+              methods: [
+                'get',
+                'hasFile',
+                'download',
+                'install',
+                'removeListener',
+                'addListener',
+              ].map((name) => ({
+                name,
+                rtype: name === 'addListener' ? 'callback' : 'promise',
+              })),
+            },
+          ],
+        }
+      })
+    }
+  )
 }

@@ -5,7 +5,7 @@ import { openExternal } from '../utils/openExternal.js'
 import { diagnosticError, logEvent } from './diagnostics/log.js'
 
 /**
- * 应用内更新：查 GitHub Release → 自动预下载 APK → 一键安装。
+ * 应用内更新：检查版本，展示发行说明，用户选择下载和安装。
  *
  * - 发布 API 与独立更新清单分别探测，兼容只代理 Release 附件的镜像站
  * - 结果缓存 6 小时，避免每次启动都请求
@@ -362,9 +362,6 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
     writeCache(release)
     const newer = await showRelease(release, Date.now())
     logEvent('update', 'check.completed', { version: release.version, newer, source: found.mirror })
-    if (newer && useUpdate.getState().status !== 'ready') {
-      void downloadUpdate()
-    }
     return newer
   } catch (error) {
     logEvent('update', 'check.failed', diagnosticError(error), 'error')
@@ -379,7 +376,7 @@ export const downloadUpdate = async (): Promise<boolean> => {
   if (!apk) {
     return false
   }
-  if (status === 'downloading' || status === 'ready') {
+  if (status !== 'available' || !isNewer(release.version, currentVersion())) {
     return status === 'ready'
   }
   if (!Capacitor.isNativePlatform()) {
@@ -484,7 +481,7 @@ let lastAutoCheck = 0
  * 1. 每次启动都查（不再被 6 小时缓存挡住），首屏渲染后 2.5 秒开始
  * 2. 回到前台超过 30 分钟补查一次
  * 3. 常驻运行时每 6 小时查一次
- * 查到新版本会自动开始下载安装包，侧边栏随即出现入口。
+ * 查到新版本时显示侧边栏入口，由更新说明页发起下载。
  */
 export const initUpdateChecker = (): void => {
   const run = (reason: string) => {

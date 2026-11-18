@@ -1,13 +1,16 @@
+import { useState } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { useTranslate } from '../../i18n/index.js'
 import {
   currentVersion,
+  isNewer,
   downloadUpdate,
   installUpdate,
   openReleasePage,
   useUpdate,
 } from '../../services/update.js'
 import { Button } from '../base/Button.js'
-import { IconUploadOutline14 } from '../base/icons.js'
+import { IconUploadOutline14, IconChevronRightOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import styles from './Update.module.css'
@@ -23,48 +26,49 @@ export const runInstall = async () => {
   return result
 }
 
-/** 侧边栏更新入口：有更新时出现；下载中显示进度；下好即可一键安装 */
+/** Keep the notes available while checking, downloading or waiting for installation. */
 export const SidebarUpdate = () => {
   const t = useTranslate()
-  const status = useUpdate((state) => state.status)
-  const release = useUpdate((state) => state.release)
-  const percent = useUpdate((state) => state.percent)
-
-  if (!release || (status !== 'available' && status !== 'downloading' && status !== 'ready')) {
+  const [open, setOpen] = useState(false)
+  const { status, release, percent, error } = useUpdate()
+  if (!release || !isNewer(release.version, currentVersion())) {
     return null
   }
-
-  const label =
+  const detail =
     status === 'ready'
-      ? t('updateSidebarReady', { version: release.version })
+      ? t('updateDownloaded')
       : status === 'downloading'
         ? percent >= 0
           ? t('updateDownloadingShort', { percent })
           : t('updateDownloading')
-        : t('updateSidebarAvailable', { version: release.version })
-
+        : error === 'download-failed'
+          ? t('updateRetryDownload')
+          : t('updateViewNotes')
   return (
-    <button
-      type="button"
-      className={status === 'ready' ? styles.sidebarReady : styles.sidebar}
-      onClick={() => {
-        if (status === 'ready') {
-          void runInstall()
-        } else if (status === 'available') {
-          void downloadUpdate()
-        }
-      }}
-    >
-      <span className={styles.sidebarIcon}>
-        <IconUploadOutline14 />
-      </span>
-      <span className={styles.sidebarText}>{label}</span>
-      {status === 'downloading' && percent >= 0 ? (
-        <span className={styles.sidebarBar} aria-hidden>
-          <span className={styles.sidebarBarFill} style={{ width: `${percent}%` }} />
+    <>
+      <button
+        type="button"
+        data-testid="sidebar-update"
+        className={styles.sidebar}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        <span className={styles.sidebarIcon} aria-hidden>
+          <IconUploadOutline14 />
         </span>
-      ) : null}
-    </button>
+        <span className={styles.sidebarText}>
+          <strong>{t('updateNewTitle', { version: release.version })}</strong>
+          <small>{detail}</small>
+        </span>
+        <IconChevronRightOutline14 />
+        {status === 'downloading' && percent >= 0 && (
+          <span className={styles.sidebarBar} aria-hidden>
+            <span className={styles.sidebarBarFill} style={{ width: percent + '%' }} />
+          </span>
+        )}
+      </button>
+      {open && <UpdateDialog onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
@@ -93,43 +97,84 @@ export const useUpdateStatusText = (): string => {
 }
 
 /** 更新说明弹窗：查看发布说明、下载 / 安装 */
-export const UpdateDialog = ({ onClose }: { onClose: () => void }) => {
+export const UpdateDialog = ({
+  onClose,
+  installed = false,
+}: {
+  onClose: () => void
+  installed?: boolean
+}) => {
   const t = useTranslate()
-  const status = useUpdate((state) => state.status)
-  const release = useUpdate((state) => state.release)
-  const percent = useUpdate((state) => state.percent)
-  if (!release) {
+  const { status, release, percent, error } = useUpdate()
+  const info = installed ? { version: currentVersion(), notes: __CURRENT_RELEASE_NOTES__ } : release
+  if (!info || (!installed && !isNewer(info.version, currentVersion()))) {
     return null
   }
+  const version = info.version,
+    notes = info.notes.trim()
   return (
     <Modal
-      title={t('updateNotesTitle', { version: release.version })}
+      title={t('updateNotesTitle', { version })}
       centered
       closable
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outlined" onClick={() => void openReleasePage()}>
-            {t('updateOpenPage')}
-          </Button>
-          {status === 'ready' ? (
-            <Button onClick={() => void runInstall()}>{t('updateInstallNow')}</Button>
-          ) : (
-            <Button disabled={status === 'downloading'} onClick={() => void downloadUpdate()}>
-              {status === 'downloading' ? t('updateDownloading') : t('updateDownloadNow')}
+        installed ? undefined : (
+          <>
+            <Button
+              variant={Capacitor.isNativePlatform() ? 'outlined' : 'primary'}
+              onClick={() => void openReleasePage()}
+            >
+              {t('updateOpenPage')}
             </Button>
-          )}
-        </>
+            {Capacitor.isNativePlatform() &&
+              (status === 'ready' ? (
+                <Button onClick={() => void runInstall()}>{t('updateInstallNow')}</Button>
+              ) : (
+                <Button disabled={status !== 'available'} onClick={() => void downloadUpdate()}>
+                  {t(status === 'downloading' ? 'updateDownloading' : 'updateDownloadNow')}
+                </Button>
+              ))}
+          </>
+        )
       }
     >
-      <pre className={styles.notes}>{release.notes || t('updateNoNotes')}</pre>
-      {status === 'downloading' && percent >= 0 ? (
-        <div className={styles.progress}>
-          <span className={styles.progressFill} style={{ width: `${percent}%` }} />
+      <div className={styles.notes} data-testid="release-notes">
+        {(notes || t('updateNoNotes')).split(/\n\s*\n/).map((paragraph, i) => {
+          const lines = paragraph.split(/\r?\n/)
+          return lines.every((line) => /^\s*[-*] /.test(line)) ? (
+            <ul key={i}>
+              {lines.map((line, j) => (
+                <li key={j}>{line.replace(/^\s*[-*] /, '')}</li>
+              ))}
+            </ul>
+          ) : (
+            <p key={i}>{paragraph}</p>
+          )
+        })}
+      </div>
+      {!installed && status === 'downloading' && (
+        <div className={styles.downloadStatus} role="status">
+          {percent >= 0 ? t('updateDownloadingShort', { percent }) : t('updateDownloading')}
+          {percent >= 0 && (
+            <div
+              className={styles.progress}
+              role="progressbar"
+              aria-label={t('updateDownloading')}
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span className={styles.progressFill} style={{ width: percent + '%' }} />
+            </div>
+          )}
         </div>
-      ) : null}
+      )}
+      {!installed && error === 'download-failed' && (
+        <p role="alert" className={styles.downloadStatus}>
+          {t('updateRetryDownload')}
+        </p>
+      )}
     </Modal>
   )
 }
-
-export const appVersion = currentVersion

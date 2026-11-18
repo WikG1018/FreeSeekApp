@@ -4,7 +4,6 @@ import { Capacitor } from '@capacitor/core'
 import logo from '../../assets/logo.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
 import {
-  IconChevronRightOutline14,
   IconBookOutline16,
   IconDownloadOutline16,
   IconShareOutline16,
@@ -30,8 +29,8 @@ import { saveNativeDiagnostics } from '../../services/diagnostics/native.js'
 import { shareDiagnostics } from '../../services/shareDiagnostics.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
-import { checkForUpdate, downloadUpdate, useUpdate } from '../../services/update.js'
-import { runInstall, UpdateDialog, useUpdateStatusText } from '../update/Update.js'
+import { checkForUpdate, currentVersion, isNewer, useUpdate } from '../../services/update.js'
+import { UpdateDialog, useUpdateStatusText } from '../update/Update.js'
 import { useSettingsDialog } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 import { ProviderSettingsPage } from './ProviderSettings.js'
@@ -151,7 +150,7 @@ const DataPage = ({
 /** 二级页：关于（完全本地，不跳转私有仓库） */
 const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
   const t = useTranslate()
-  const [updateOpen, setUpdateOpen] = useState(false)
+  const [notes, setNotes] = useState<'installed' | 'incoming' | null>(null)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
   const exportDiagnostics = async (share = true) => {
     if (diagnosticsBusy) {
@@ -206,6 +205,7 @@ const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
   const updateStatus = useUpdate((state) => state.status)
   const updateRelease = useUpdate((state) => state.release)
   const updateStatusText = useUpdateStatusText()
+  const hasIncoming = Boolean(updateRelease && isNewer(updateRelease.version, currentVersion()))
   return (
     <>
       <div className={styles.brandBlock}>
@@ -219,13 +219,10 @@ const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
         <button
           type="button"
           className={styles.row}
-          onClick={() => {
-            if (updateStatus === 'ready') {
-              void runInstall()
-            } else if (updateStatus === 'available') {
-              void downloadUpdate()
-            } else {
-              void checkForUpdate({ force: true })
+          disabled={updateStatus === 'checking' && !hasIncoming}
+          onClick={async () => {
+            if (hasIncoming || (await checkForUpdate({ force: true }))) {
+              setNotes('incoming')
             }
           }}
         >
@@ -235,18 +232,12 @@ const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
             <IconRefreshOutline16 />
           </span>
         </button>
-        {updateRelease &&
-        (updateStatus === 'available' ||
-          updateStatus === 'downloading' ||
-          updateStatus === 'ready') ? (
-          <button type="button" className={styles.row} onClick={() => setUpdateOpen(true)}>
-            <span className={styles.rowLabel}>{t('updateNotes')}</span>
-            <span className={styles.rowValue}>v{updateRelease.version}</span>
-            <span className={styles.rowChevron}>
-              <IconChevronRightOutline14 />
-            </span>
-          </button>
-        ) : null}
+        <Row
+          label={t('updateInstalledNotes')}
+          value={'v' + APP_VERSION}
+          onClick={() => setNotes('installed')}
+          target="installed-release-notes"
+        />
       </Section>
 
       <Section title={t('diagnosticsTitle')}>
@@ -276,7 +267,7 @@ const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
       <Section>
         <Row label={t('settingsPrivacyLicenses')} onClick={openInfo} target="aboutInfo" />
       </Section>
-      {updateOpen && <UpdateDialog onClose={() => setUpdateOpen(false)} />}
+      {notes && <UpdateDialog installed={notes === 'installed'} onClose={() => setNotes(null)} />}
     </>
   )
 }

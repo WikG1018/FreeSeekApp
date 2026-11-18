@@ -76,3 +76,9 @@
     animation: none;
   }
 }
+
+.option:disabled {
+  color: var(--fs-secondary-text);
+  background: transparent;
+  cursor: default;
+}

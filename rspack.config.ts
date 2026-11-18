@@ -12,6 +12,16 @@ const { version } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8')
 ) as { version: string }
 
+// Bundle only this version's changelog so About works without network access.
+const currentNotes =
+  readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')
+    .split(/^## /m)
+    .find((section) => section.split(/\s+/)[0] === 'v' + version)
+    ?.split('\n')
+    .slice(1)
+    .join('\n')
+    .trim() ?? ''
+
 const cssLoader = {
   loader: 'builtin:lightningcss-loader',
   options: { targets },
@@ -85,7 +95,10 @@ export const createConfig = ({
       scriptLoading: 'defer',
       meta: { 'application-version': version },
     }),
-    new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) }),
+    new rspack.DefinePlugin({
+      __API_ORIGIN__: JSON.stringify(apiOrigin),
+      __CURRENT_RELEASE_NOTES__: JSON.stringify(currentNotes),
+    }),
     new rspack.CopyRspackPlugin({
       patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
     }),

@@ -9,6 +9,7 @@ declare const styles: {
   readonly section: string
   readonly sectionHeader: string
   readonly bottom: string
+  readonly settingsOnly: string
   readonly settings: string
   readonly support: string
   readonly supportArrow: string

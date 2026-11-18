@@ -332,16 +332,14 @@ export const runImmersiveCases = async ({ run }) => {
       const root = page.getByTestId('chat-composer'),
         trigger = page.getByTestId('composer-model'),
         panel = page.getByTestId('option-panel')
-      await root
-        .locator('input[type=file][accept="image/*"]:not([capture])')
-        .setInputFiles({
-          name: 'pixel.png',
-          mimeType: 'image/png',
-          buffer: Buffer.from(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cqGQAAAAASUVORK5CYII=',
-            'base64'
-          ),
-        })
+      await root.locator('input[type=file][accept="image/*"]:not([capture])').setInputFiles({
+        name: 'pixel.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cqGQAAAAASUVORK5CYII=',
+          'base64'
+        ),
+      })
       await trigger.click()
       const pro = panel.getByRole('option', { name: /DeepSeek V4 Pro/ })
       assert.ok(await pro.isDisabled())
@@ -382,6 +380,78 @@ export const runImmersiveCases = async ({ run }) => {
       assert.ok(await trigger.isDisabled())
       for (const name of ['深度思考', '智能搜索'])
         assert.ok(await root.getByRole('button', { name, exact: true }).isVisible())
+    }
+  )
+
+  await run(
+    'chat text fades fully before the model toolbar across keyboard sizes and display settings',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        a.settings.setApiKey('fixture')
+        await a.seed([
+          f.session({
+            messages: [f.user('u', 'Q'), f.assistant('a', '正文测试。\n\n'.repeat(80))],
+          }),
+        ])
+      })
+      for (const [w, h, scale, model, text] of [
+        [390, 844, 1, true, ''],
+        [320, 568, 1.25, true, '多行\n'.repeat(6)],
+        [740, 260, 1, false, '键盘'],
+      ]) {
+        await page.setViewportSize({ width: w, height: h })
+        await page.evaluate(
+          ([n, m]) => {
+            window.__audit.settings.setFontScale(n)
+            window.__audit.settings.setShowModelSwitcher(m)
+          },
+          [scale, model]
+        )
+        await page.locator('textarea').fill(text)
+        await page.waitForTimeout(230)
+        const points = await page.evaluate(() => {
+          const scroll = document.querySelector('[data-testid=message-scroll]'),
+            view = document.querySelector('[data-testid=chat-view]'),
+            bar = document.querySelector('[data-testid=composer-toolbar]').getBoundingClientRect()
+          const css = getComputedStyle(view),
+            r = scroll.getBoundingClientRect(),
+            z = r.height / view.clientHeight
+          const clear = parseFloat(css.getPropertyValue('--message-clear-bottom')) * z,
+            fade = parseFloat(css.getPropertyValue('--message-fade-bottom')) * z
+          scroll.style.backgroundColor = 'rgb(180, 0, 160)'
+          scroll.scrollTop = 220
+          return {
+            x: Math.floor(r.left + 3),
+            clear: r.bottom - clear,
+            bar: bar.top,
+            opaque: Math.floor(r.bottom - fade - 2),
+            edge: Math.floor(bar.top + bar.height / 2),
+            bottom: Math.floor(r.bottom - 2),
+          }
+        })
+        assert.ok(points.clear <= points.bar + 1, JSON.stringify(points))
+        const png = (await page.screenshot()).toString('base64')
+        const colors = await page.evaluate(
+          async ({ png, points }) => {
+            const image = new Image()
+            image.src = 'data:image/png;base64,' + png
+            await image.decode()
+            const canvas = document.createElement('canvas')
+            canvas.width = image.width
+            canvas.height = image.height
+            const c = canvas.getContext('2d')
+            c.drawImage(image, 0, 0)
+            return [points.opaque, points.edge, points.bottom].map((y) => [
+              ...c.getImageData(points.x, y, 1, 1).data,
+            ])
+          },
+          { png, points }
+        )
+        assert.deepEqual(colors[1], colors[2])
+        assert.notDeepEqual(colors[0], colors[1])
+      }
     }
   )
 }

@@ -543,8 +543,7 @@ button.row:active:not(:disabled),
   min-height: 46px;
   padding: 10px 46px 10px 12px;
 }
-.apiKeyInput,
-.page input[type='search'] {
+.apiKeyInput {
   border: 1px solid var(--fs-field-line);
   border-radius: 10px;
   background: var(--fs-settings-surface);

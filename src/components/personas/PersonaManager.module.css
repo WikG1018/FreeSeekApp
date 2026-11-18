@@ -1,359 +1,243 @@
-/* 人设库：新建按钮置顶 + 卡片列表 + 编辑表单 */
-
-.dialog {
-  width: min(560px, calc(100vw - 32px));
-}
-
-.main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-/* 新建：整行主操作，不再藏在小字按钮里 */
-.addButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  height: 46px;
-  margin-bottom: 12px;
-  border: none;
-  border-radius: 13px;
-  background: var(--fs-brand);
-  color: #fff;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    transform var(--fs-duration-fast) var(--fs-ease-out),
-    opacity var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:active {
-    transform: scale(0.98);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
-}
-
-.addIcon {
-  display: flex;
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-}
-
-.hint {
-  margin: 0 2px 12px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--fs-secondary-text);
-}
-
-/* 列表：卡片容器 + 分隔行 */
-.list {
-  display: flex;
-  flex-direction: column;
-  max-height: min(58vh, 520px);
-  overflow-y: auto;
-  border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-2);
-  box-shadow: 0 0 0 0.5px var(--dsw-alias-border-l1);
-}
-
-[data-ds-dark-theme] .list {
-  background: var(--dsw-alias-bg-layer-3);
-}
-
-.item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 12px;
-
-  & + & {
-    border-top: 0.5px solid var(--dsw-alias-border-l1);
-  }
-}
-
-.itemActive {
-  background: var(--fs-brand-soft);
-}
-
-.itemMain {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  cursor: pointer;
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-    border-radius: 8px;
-  }
-}
-
-.itemHeader {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.itemName {
-  overflow: hidden;
-  font-size: 15px;
-  line-height: 21px;
-  font-weight: 500;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--dsw-alias-label-primary);
-}
-
-.badge,
-.badgeActive {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  line-height: 15px;
-  font-weight: 500;
-}
-
-.badge {
-  color: var(--fs-secondary-text);
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.badgeActive {
-  color: var(--fs-brand);
-  background: rgba(37, 99, 235, 0.12);
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-}
-
-.itemPrompt {
-  display: -webkit-box;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 17px;
-  color: var(--fs-secondary-text);
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.itemActions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 2px;
-  margin-left: 6px;
-}
-
-.iconAction {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  height: 34px;
-  padding: 0 6px;
-  border: none;
-  border-radius: 10px;
-  background: none;
-  color: var(--fs-secondary-text);
-  cursor: pointer;
-  transition:
-    background-color var(--fs-duration-fast) var(--fs-ease-out),
-    color var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:hover {
-    background: var(--dsw-alias-interactive-bg-hover);
-    color: var(--dsw-alias-label-primary);
-  }
-
-  &:active {
-    transform: scale(0.94);
-  }
-}
-
-.iconActionDanger {
-  min-width: auto;
-  padding: 0 10px;
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-  color: var(--dsw-alias-state-error-primary);
-  font: inherit;
-  font-size: 12px;
-}
-
-.deleteConfirmText {
-  white-space: nowrap;
-}
-
-/* 编辑表单 */
+.library,
 .editor {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  min-width: 0;
 }
-
+.search {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--fs-field-line);
+  border-radius: 12px;
+  background: var(--fs-settings-surface);
+  color: var(--fs-secondary-text);
+}
+.search svg {
+  flex: none;
+  margin-right: 8px;
+}
+.search input {
+  appearance: none;
+  padding: 0;
+  min-height: 40px;
+  min-width: 0;
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  color: var(--dsw-alias-label-primary);
+  outline: 0;
+}
+.search input::placeholder {
+  color: var(--fs-secondary-text);
+}
+.search:focus-within,
+.input:focus,
+.textarea:focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 1px;
+}
+.libraryTools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 8px;
+  margin-top: 10px;
+}
+.libraryTools .toolButton,
+.editorActions button {
+  min-width: 0;
+  min-height: 44px;
+  height: auto;
+  padding: 7px;
+  border-radius: 11px;
+  white-space: normal;
+  line-height: 1.4;
+}
+.toolButton svg {
+  flex: none;
+  margin-right: 5px;
+  width: 16px;
+  height: 16px;
+}
+.hint,
+.empty {
+  margin: 8px 2px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fs-secondary-text);
+}
+.group {
+  margin-top: 18px;
+  min-width: 0;
+}
+.group h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fs-secondary-text);
+  line-height: 1.5;
+  margin: 0 2px 6px;
+}
+.list {
+  background: var(--fs-settings-surface);
+  border: 1px solid var(--fs-line);
+  border-radius: 15px;
+}
+.item {
+  display: flex;
+  align-items: center;
+  padding: 5px 5px 5px 12px;
+  min-width: 0;
+}
+.item:first-child {
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.item:last-child {
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+.item + .item {
+  border-top: 1px solid var(--fs-line);
+}
+.item[data-selected='true'] {
+  background: var(--fs-accent-wash);
+}
+.itemMain {
+  flex: 1;
+  min-width: 0;
+  min-height: 50px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.itemMain:focus-visible,
+.more:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -1px;
+}
+.itemHeader {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.itemName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 7px;
+  color: var(--fs-accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge svg {
+  width: 12px;
+  height: 12px;
+  margin-right: 3px;
+}
+.itemPrompt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fs-secondary-text);
+}
+.item .more {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  margin-left: 4px;
+}
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  min-width: 0;
+  margin-bottom: 14px;
 }
-
 .fieldLabel {
-  font-size: 13px;
-  line-height: 19px;
-  color: var(--dsw-alias-label-secondary);
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--dsw-alias-label-primary);
 }
-
 .input,
-.textarea {
+.textarea,
+.promptMirror {
+  display: block;
   box-sizing: border-box;
   width: 100%;
+  margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--fs-field-line);
   border-radius: 11px;
-  background: var(--dsw-alias-bg-base);
+  background: var(--fs-settings-surface);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   font-size: 15px;
-  line-height: 22px;
-  outline: none;
-
-  &:focus {
-    border-color: rgba(37, 99, 235, 0.5);
-  }
+  line-height: 1.55;
+  letter-spacing: inherit;
 }
-
 .input {
-  height: 44px;
-  padding: 0 12px;
+  min-height: 44px;
 }
-
+.promptArea {
+  display: block;
+  position: relative;
+  min-width: 0;
+}
+.promptMirror,
 .textarea {
-  min-height: 170px;
-  max-height: 42vh;
-  resize: vertical;
+  min-height: 166px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
-
+.promptMirror {
+  visibility: hidden;
+  pointer-events: none;
+}
+.textarea {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  resize: none;
+  overflow: hidden;
+}
+.editor .hint {
+  margin: 0 2px 12px;
+}
 .editorActions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 2px;
+  column-gap: 8px;
 }
-
-.ghostButton,
-.primaryButton {
-  height: 46px;
-  border-radius: 12px;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: transform var(--fs-duration-fast) var(--fs-ease-out);
-}
-
-.ghostButton {
-  border: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-}
-
-[data-ds-dark-theme] .ghostButton {
-  background: var(--dsw-alias-bg-layer-3);
-}
-
-.primaryButton {
-  border: none;
-  background: var(--fs-brand);
-  color: #fff;
-}
-
-.ghostButton:active,
-.primaryButton:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.primaryButton:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.library {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.libraryTools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.libraryActions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 12px 10px;
-}
-.libraryActions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 40px;
-  min-height: 40px;
-  border: 0;
-  background: transparent;
-  color: var(--fs-brand);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.libraryActions button:disabled {
-  color: var(--fs-secondary-text);
-  cursor: default;
-}
-.library .item {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-}
-
-.libraryTools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.libraryTools .addButton {
-  margin: 0;
-  min-height: 44px;
-  width: auto;
-  padding: 8px 14px;
-}
-.libraryTools > button {
-  min-height: 44px;
+@media (max-width: 359px) {
+  .toolButton svg {
+    margin-right: 3px;
+    width: 14px;
+    height: 14px;
+  }
 }

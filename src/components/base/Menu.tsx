@@ -10,6 +10,7 @@ export type MenuOption = {
   label: string
   icon: ReactNode
   danger?: boolean
+  disabled?: boolean
   onSelect: () => void
 }
 
@@ -37,7 +38,7 @@ export const Menu = ({
   useEffect(() => {
     if (open) {
       floatingRef.current
-        ?.querySelector<HTMLElement>('[role="menuitem"]')
+        ?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')
         ?.focus({ preventScroll: true })
     }
   }, [open, floatingRef])
@@ -62,7 +63,9 @@ export const Menu = ({
                   return
                 }
                 const items = Array.from(
-                  event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                    '[role="menuitem"]:not(:disabled)'
+                  )
                 )
                 const index = items.indexOf(document.activeElement as HTMLButtonElement)
                 const offsets: Record<string, number> = {
@@ -85,9 +88,10 @@ export const Menu = ({
                   type="button"
                   key={option.key}
                   role="menuitem"
+                  disabled={option.disabled}
                   className={clsx(styles.option, option.danger && styles.danger)}
                   onClick={() => {
-                    setOpen(false)
+                    returnFocus()
                     option.onSelect()
                   }}
                 >

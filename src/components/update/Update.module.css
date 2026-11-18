@@ -1,65 +1,59 @@
-/* 侧边栏更新入口 */
-.sidebar,
-.sidebarReady {
+.sidebar {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  box-sizing: border-box;
   width: 100%;
+  box-sizing: border-box;
+  min-height: 52px;
   margin: 0 0 8px;
-  padding: 8px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--fs-accent-line);
   border-radius: 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-layer-2);
-  font: inherit;
-  font-size: 13px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary);
+  background: var(--fs-accent-wash);
+  color: var(--fs-accent-text);
   text-align: left;
+  font: inherit;
   cursor: pointer;
   overflow: hidden;
-  transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:hover {
-    background: var(--dsw-alias-interactive-bg-hover);
-  }
-
-  &:active {
-    transform: scale(0.98);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
 }
-
-[data-ds-dark-theme] .sidebar,
-[data-ds-dark-theme] .sidebarReady {
-  background: var(--dsw-alias-bg-layer-3);
+.sidebar:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
 }
-
-.sidebarReady {
-  border-color: var(--fs-brand);
-  background: var(--fs-brand-soft);
-  color: var(--fs-brand);
-  font-weight: 500;
-}
-
 .sidebarIcon {
-  display: flex;
-  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-right: 9px;
+  border-radius: 8px;
+  background: var(--fs-settings-surface);
 }
-
 .sidebarText {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
-
+.sidebarText strong,
+.sidebarText small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.sidebarText strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.sidebarText small,
+.downloadStatus {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fs-secondary-text);
+}
+.sidebar > svg {
+  flex: none;
+  margin-left: 6px;
+}
 /* 下载进度条：贴在按钮底部 */
 .sidebarBar {
   position: absolute;
@@ -77,19 +71,29 @@
   transition: width 0.25s linear;
 }
 
-/* 更新说明弹窗 */
 .notes {
-  margin: 0;
-  max-height: min(50vh, 380px);
-  overflow: auto;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 21px;
-  white-space: pre-wrap;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
   word-break: break-word;
-  color: var(--dsw-alias-label-secondary);
 }
-
+.notes ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.notes li + li,
+.notes > p + p,
+.notes > p + ul {
+  margin-top: 8px;
+}
+.notes p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.downloadStatus {
+  margin: 10px 0 0;
+}
 .progress {
   height: 4px;
   margin-top: 12px;

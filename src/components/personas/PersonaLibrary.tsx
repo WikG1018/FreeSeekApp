@@ -1,4 +1,3 @@
-import clsx from 'clsx'
 import { useDeferredValue, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
@@ -15,6 +14,8 @@ import {
 } from '../../services/personas.js'
 import { setSessionPersona, useChatStore } from '../../services/chat/store.js'
 import { saveBackup } from '../../services/saveBackup.js'
+import { Menu } from '../base/Menu.js'
+import { IconButton } from '../base/IconButton.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { useSettingsLeave } from '../settings/useSettingsLeave.js'
@@ -23,6 +24,11 @@ import {
   IconAddOutline16,
   IconCheckOutline16,
   IconEditOutline16,
+  IconEllipsisOutline16,
+  IconCopyOutline16,
+  IconUploadOutline14,
+  IconDownloadOutline16,
+  IconSearchOutline16,
   IconTrashOutline16,
 } from '../base/icons.js'
 import styles from './PersonaManager.module.css'
@@ -70,15 +76,21 @@ export const PersonaEditor = ({ persona, onDone }: { persona: Persona; onDone: (
       </label>
       <label className={styles.field} htmlFor="persona-prompt">
         <span className={styles.fieldLabel}>{t('personaPromptLabel')}</span>
-        <textarea
-          id="persona-prompt"
-          className={styles.textarea}
-          value={prompt}
-          maxLength={100000}
-          rows={9}
-          placeholder={t('personaPromptPlaceholder')}
-          onChange={(e) => setPrompt(e.target.value)}
-        />
+        <span className={styles.promptArea}>
+          <textarea
+            id="persona-prompt"
+            className={styles.textarea}
+            value={prompt}
+            maxLength={100000}
+            rows={1}
+            placeholder={t('personaPromptPlaceholder')}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+          <span className={styles.promptMirror} aria-hidden="true">
+            {prompt}
+            {'\u200b'}
+          </span>
+        </span>
       </label>
       <p className={styles.hint}>
         {t('personaLimits')} · {prompt.length.toLocaleString()}
@@ -139,37 +151,44 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
   }
   return (
     <div className={styles.library}>
-      <label className={styles.field}>
-        <span className={styles.fieldLabel}>{t('personaSearch')}</span>
+      <label className={styles.search}>
+        <IconSearchOutline16 />
         <input
           type="search"
-          className={styles.input}
+          aria-label={t('personaSearch')}
+          placeholder={t('personaSearch')}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
         />
       </label>
       <div className={styles.libraryTools}>
-        <button
-          type="button"
-          className={styles.addButton}
+        <Button
+          className={styles.toolButton}
+          aria-label={t('personaAdd')}
           onClick={() => onEdit({ id: '', name: '', prompt: '' })}
         >
-          <span className={styles.addIcon}>
-            <IconAddOutline16 />
-          </span>
-          {t('personaAdd')}
-        </button>
-
-        <Button variant="outlined" size="s" disabled={busy} onClick={() => picker.current?.click()}>
-          {t('personaImport')}
+          <IconAddOutline16 />
+          {t('personaNewShort')}
         </Button>
         <Button
+          className={styles.toolButton}
           variant="outlined"
-          size="s"
-          disabled={busy || !personas.some((persona) => !isBuiltin(persona))}
+          aria-label={t('personaImport')}
+          disabled={busy}
+          onClick={() => picker.current?.click()}
+        >
+          <IconUploadOutline14 />
+          {t('personaImportShort')}
+        </Button>
+        <Button
+          className={styles.toolButton}
+          variant="outlined"
+          aria-label={t('personaExport')}
+          disabled={busy || !personas.some((p) => !isBuiltin(p))}
           onClick={() => void exportAll()}
         >
-          {t('personaExport')}
+          <IconDownloadOutline16 />
+          {t('personaExportShort')}
         </Button>
       </div>
       <input
@@ -195,102 +214,128 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
         }}
       />
       <p className={styles.hint}>{t('personaImportHint')}</p>
-      {activeId ? (
-        <p className={styles.hint}>{t('personaCurrentHint')}</p>
-      ) : (
-        <p className={styles.hint}>{t('personaManagerHint')}</p>
+      {!visible.length && (
+        <p role="status" className={styles.empty}>
+          {t('personaEmptyResults')}
+        </p>
       )}
-      <div className={styles.list}>
-        {!visible.length ? <p className={styles.hint}>{t('personaEmptyResults')}</p> : null}
-        {visible.map((persona) => {
-          const selected = persona.id === defaultId,
-            builtin = isBuiltin(persona)
-          const applied = Boolean(
-            current &&
-            ((current.persona?.name === persona.name &&
-              current.persona?.prompt === persona.prompt) ||
-              (!current.persona && persona.id === 'builtin-default'))
-          )
-          return (
-            <div key={persona.id} className={clsx(styles.item, selected && styles.itemActive)}>
-              <button
-                type="button"
-                className={styles.itemMain}
-                aria-pressed={selected}
-                onClick={() => run(() => setDefaultPersona(persona.id))}
-              >
-                <span className={styles.itemHeader}>
-                  <span className={styles.itemName}>{persona.name}</span>
-                  {selected ? (
-                    <span className={styles.badgeActive}>
-                      <IconCheckOutline16 />
-                      {t('personaDefaultBadge')}
-                    </span>
-                  ) : null}
-                  {builtin ? (
-                    <span className={styles.badge}>{t('personaBuiltinBadge')}</span>
-                  ) : null}
-                </span>
-                <span className={styles.itemPrompt}>
-                  {persona.prompt ? persona.prompt.slice(0, 240) : t('personaDefaultPromptHint')}
-                </span>
-              </button>
-              <div className={styles.libraryActions}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onEdit({
-                      id: '',
-                      name: t('personaCopyName', { name: persona.name }).slice(0, 80),
-                      prompt: persona.prompt,
-                    })
-                  }
-                >
-                  {t('personaCopy')}
-                </button>
-                {activeId ? (
-                  <button
-                    type="button"
-                    disabled={streaming || replacing || !current || applied}
-                    onClick={() => {
-                      if (
-                        setSessionPersona(
-                          activeId,
-                          persona.prompt ? { name: persona.name, prompt: persona.prompt } : null
-                        )
-                      ) {
-                        showToast({ key: 'personaApplied' })
-                      } else {
-                        showToast({ key: 'personaBusy' })
-                      }
-                    }}
-                  >
-                    {t(applied ? 'providerActive' : 'personaApplyCurrent')}
-                  </button>
-                ) : null}
-                {!builtin ? (
-                  <>
+      {([true, false] as const).map((builtin) => {
+        const items = visible.filter((p) => isBuiltin(p) === builtin)
+        if (!items.length) {
+          return null
+        }
+        const heading = t(builtin ? 'personaBuiltinGroup' : 'personaCustomGroup')
+        return (
+          <section className={styles.group} key={heading} aria-label={heading}>
+            <h2>{heading}</h2>
+            <div className={styles.list}>
+              {items.map((persona) => {
+                const selected = persona.id === defaultId
+                const applied = Boolean(
+                  current &&
+                  ((current.persona?.name === persona.name &&
+                    current.persona?.prompt === persona.prompt) ||
+                    (!current.persona && persona.id === 'builtin-default'))
+                )
+                return (
+                  <div className={styles.item} key={persona.id} data-selected={selected}>
                     <button
                       type="button"
-                      aria-label={t('personaEditAction')}
-                      onClick={() => onEdit(persona)}
+                      className={styles.itemMain}
+                      aria-pressed={selected}
+                      onClick={() => run(() => setDefaultPersona(persona.id))}
                     >
-                      <IconEditOutline16 />
+                      <span className={styles.itemHeader}>
+                        <span className={styles.itemName}>{persona.name}</span>
+                        {selected && (
+                          <span className={styles.badge}>
+                            <IconCheckOutline16 />
+                            {t('personaDefaultBadge')}
+                          </span>
+                        )}
+                      </span>
+                      <span className={styles.itemPrompt}>
+                        {persona.prompt
+                          ? persona.prompt.slice(0, 240)
+                          : t('personaDefaultPromptHint')}
+                      </span>
                     </button>
-                    <button
-                      type="button"
-                      aria-label={t('delete')}
-                      onClick={() => setConfirmDelete(persona)}
+                    <Menu
+                      options={[
+                        ...(activeId
+                          ? [
+                              {
+                                key: 'apply',
+                                label: t(applied ? 'providerActive' : 'personaApplyCurrent'),
+                                icon: <IconCheckOutline16 />,
+                                disabled: streaming || replacing || !current || applied,
+                                onSelect: () => {
+                                  if (
+                                    setSessionPersona(
+                                      activeId,
+                                      persona.prompt
+                                        ? { name: persona.name, prompt: persona.prompt }
+                                        : null
+                                    )
+                                  ) {
+                                    showToast({ key: 'personaApplied' })
+                                  } else {
+                                    showToast({ key: 'personaBusy' })
+                                  }
+                                },
+                              },
+                            ]
+                          : []),
+                        {
+                          key: 'copy',
+                          label: t('personaCopy'),
+                          icon: <IconCopyOutline16 />,
+                          onSelect: () =>
+                            onEdit({
+                              id: '',
+                              name: t('personaCopyName', { name: persona.name }).slice(0, 80),
+                              prompt: persona.prompt,
+                            }),
+                        },
+                        ...(!builtin
+                          ? [
+                              {
+                                key: 'edit',
+                                label: t('personaEditAction'),
+                                icon: <IconEditOutline16 />,
+                                onSelect: () => onEdit(persona),
+                              },
+                              {
+                                key: 'delete',
+                                label: t('delete'),
+                                icon: <IconTrashOutline16 />,
+                                danger: true,
+                                onSelect: () => setConfirmDelete(persona),
+                              },
+                            ]
+                          : []),
+                      ]}
                     >
-                      <IconTrashOutline16 />
-                    </button>
-                  </>
-                ) : null}
-              </div>
+                      {({ toggle, open }) => (
+                        <IconButton
+                          size="xl"
+                          className={styles.more}
+                          icon={<IconEllipsisOutline16 />}
+                          aria-label={t('personaMore', { name: persona.name })}
+                          aria-haspopup="menu"
+                          aria-expanded={open}
+                          onClick={toggle}
+                        />
+                      )}
+                    </Menu>
+                  </div>
+                )
+              })}
             </div>
-          )
-        })}
-      </div>
+          </section>
+        )
+      })}
+      <p className={styles.hint}>{t(activeId ? 'personaCurrentHint' : 'personaManagerHint')}</p>
       {confirmDelete ? (
         <Modal
           title={t('personaDeleteConfirm')}

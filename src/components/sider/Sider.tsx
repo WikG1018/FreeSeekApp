@@ -161,11 +161,16 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </div>
       </div>
       <div className={styles.bottom} data-testid="sider-footer">
-        <button type="button" className={styles.settings} onClick={() => openSettings()}>
-          <span className={styles.settingsIcon}>
+        <button
+          type="button"
+          className={clsx(styles.settings, styles.settingsOnly)}
+          aria-label={t('settings')}
+          title={t('settings')}
+          onClick={() => openSettings()}
+        >
+          <span className={styles.settingsIcon} aria-hidden="true">
             <IconSettingsOutline16 />
           </span>
-          <span className={styles.settingsLabel}>{t('settings')}</span>
         </button>
         <button
           type="button"
