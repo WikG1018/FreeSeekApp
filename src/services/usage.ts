@@ -63,14 +63,15 @@ const UNPRICED: FlashPricing = {
   peakOut: 0,
   searchPer1k: 0,
 }
+type PricedModel = Pick<AssistantMessage, 'model' | 'responseModel' | 'connection'>
 export const hasKnownPricing = (
-  message: AssistantMessage,
+  message: PricedModel,
   model = message.responseModel ?? message.model
 ) =>
   (!message.connection || message.connection.providerId === 'deepseek') &&
   (!model || ['deepseek-flash', 'deepseek-v4-pro'].includes(model))
 const messagePricing = (
-  message: AssistantMessage,
+  message: PricedModel,
   flash: FlashPricing,
   model = message.responseModel ?? message.model
 ) =>
@@ -243,21 +244,29 @@ export const collectUsage = async (): Promise<UsageStats> => {
   const allSessions = await loadAllSessions().catch(() => [])
   for (const session of allSessions) {
     const sessionTotals = emptyTotals()
+    const addEntry = (
+      message: PricedModel,
+      entry: { createdAt: number; usage: MessageUsage; model?: string }
+    ) => {
+      const effectivePricing = messagePricing(message, pricing, entry.model),
+        priced = hasKnownPricing(message, entry.model)
+      const key = dayKey(entry.createdAt),
+        day = days.get(key) ?? emptyTotals(),
+        peak = isPeakBeijing(entry.createdAt)
+      addUsage(day, entry.usage, peak, effectivePricing, priced)
+      days.set(key, day)
+      addUsage(total, entry.usage, peak, effectivePricing, priced)
+      addUsage(sessionTotals, entry.usage, peak, effectivePricing, priced)
+    }
     for (const message of session.messages) {
-      if (message.role !== 'assistant' || !message.usage) {
-        continue
+      if (message.role === 'assistant' && message.usage) {
+        for (const entry of usageEntries(message)) {
+          addEntry(message, entry)
+        }
       }
-      for (const entry of usageEntries(message)) {
-        const effectivePricing = messagePricing(message, pricing, entry.model),
-          priced = hasKnownPricing(message, entry.model)
-        const key = dayKey(entry.createdAt)
-        const day = days.get(key) ?? emptyTotals()
-        const peak = isPeakBeijing(entry.createdAt)
-        addUsage(day, entry.usage, peak, effectivePricing, priced)
-        days.set(key, day)
-        addUsage(total, entry.usage, peak, effectivePricing, priced)
-        addUsage(sessionTotals, entry.usage, peak, effectivePricing, priced)
-      }
+    }
+    for (const charge of session.compressionUsage ?? []) {
+      addEntry(charge, charge)
     }
     if (sessionTotals.requests > 0) {
       sessions.push({ ...sessionTotals, id: session.id, title: session.title || '' })

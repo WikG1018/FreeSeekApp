@@ -261,10 +261,15 @@ export async function* streamMessage(
         }
       }
       if (isErrorBody(payload)) {
-        throw new ApiError('stream', payload.error.message)
+        throw new ApiError(
+          'stream',
+          payload.error.message,
+          undefined,
+          describeKnownApiError(payload.error.message)
+        )
       }
       if (eventName === 'error') {
-        throw new ApiError('stream', data)
+        throw new ApiError('stream', data, undefined, describeKnownApiError(data))
       }
       const event = readMessageEvent(payload)
       if (!event) {

@@ -18,10 +18,11 @@ import {
   exportHistory,
   importHistory,
 } from '../../services/chat/backup.js'
-import { useChatStore } from '../../services/chat/store.js'
+import { useChatStore, selectSession } from '../../services/chat/store.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
+import { closeMobileSider } from '../sider/mobileSiderState.js'
 import { showToast } from '../base/toastState.js'
 import { saveBackup } from '../../services/saveBackup.js'
 import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
@@ -31,11 +32,12 @@ import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
 import { checkForUpdate, currentVersion, isNewer, useUpdate } from '../../services/update.js'
 import { UpdateDialog, useUpdateStatusText } from '../update/Update.js'
-import { useSettingsDialog } from './settingsDialogState.js'
+import { GettingStarted, UsageNotice } from '../onboarding/Onboarding.js'
+import { closeSettings, useSettingsDialog, type SettingsPageId } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 import { ProviderSettingsPage } from './ProviderSettings.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
-import { Section, Row } from './SettingsRows.js'
+import { Section, Row, TutorialSteps } from './SettingsRows.js'
 import { AccountPage } from './AccountPage.js'
 import { AppearancePage, ChatPreferencesPage } from './PreferencesPages.js'
 import { SettingsShell } from './SettingsShell.js'
@@ -55,6 +57,7 @@ const SettingsRoot = () => {
   const [persona, setPersona] = useState<Persona>({ id: '', name: '', prompt: '' })
   const historyImport = useHistoryImport(),
     historyDelete = useHistoryDelete()
+  const ready = useChatStore((state) => state.ready)
   const replacing = useChatStore((state) => state.importingHistory)
   return (
     <>
@@ -91,7 +94,7 @@ const SettingsRoot = () => {
                 <DataPage
                   historyImport={historyImport}
                   historyDelete={historyDelete}
-                  disabled={replacing || historyImport.busy || historyDelete.busy}
+                  disabled={!ready || replacing || historyImport.busy || historyDelete.busy}
                 />
               )
             case 'usage':
@@ -99,7 +102,26 @@ const SettingsRoot = () => {
             case 'usagePricing':
               return <PricingForm />
             case 'about':
-              return <AboutPage openInfo={() => open('aboutInfo')} />
+              return <AboutPage open={open} />
+            case 'disclaimer':
+              return (
+                <Section>
+                  <div className={styles.paragraph}>
+                    <UsageNotice />
+                  </div>
+                </Section>
+              )
+            case 'guide':
+              return (
+                <GettingStarted
+                  open={(next) => {
+                    if (next === 'account') {
+                      setGuideOpen(true)
+                    }
+                    open(next)
+                  }}
+                />
+              )
             case 'aboutInfo':
               return <AboutInfoPage />
             default:
@@ -125,30 +147,43 @@ const DataPage = ({
   disabled: boolean
 }) => {
   const t = useTranslate()
+  const hasHistory = useChatStore((state) => state.sessions.length > 0)
+  const showTutorial = useSettingsDialog((state) => state.showTutorial)
   return (
     <>
       <Section title={t('settingsBackupGroup')}>
-        <ExportHistory disabled={disabled} />
         <ImportHistory historyImport={historyImport} disabled={disabled} />
+        {hasHistory && <ExportHistory disabled={disabled} />}
       </Section>
-      <SettingsDisclosure guide title={t('officialExportTitle')} icon={<IconBookOutline16 />}>
-        <ol className={styles.officialTipSteps}>
-          <li>{t('officialExportStep1')}</li>
-          <li>{t('officialExportStep2')}</li>
-          <li>{t('officialExportStep3')}</li>
-          <li>{t('officialExportStep4')}</li>
-        </ol>
-        <p className={styles.officialTipHint}>{t('officialExportHint')}</p>
+      <SettingsDisclosure
+        guide
+        defaultOpen={showTutorial}
+        title={t('officialExportTitle')}
+        icon={<IconBookOutline16 />}
+      >
+        <TutorialSteps
+          steps={[
+            'officialExportStep1',
+            'officialExportStep2',
+            'officialExportStep3',
+            'officialExportStep4',
+          ]}
+        />
+        <p className={styles.officialTipHint}>
+          {t(hasHistory ? 'officialExportHint' : 'guideKeyFree')}
+        </p>
       </SettingsDisclosure>
-      <Section title={t('settingsRemoveGroup')}>
-        <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
-      </Section>
+      {hasHistory && (
+        <Section title={t('settingsRemoveGroup')}>
+          <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
+        </Section>
+      )}
     </>
   )
 }
 
 /** 二级页：关于（完全本地，不跳转私有仓库） */
-const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
+const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
   const [notes, setNotes] = useState<'installed' | 'incoming' | null>(null)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
@@ -265,7 +300,13 @@ const AboutPage = ({ openInfo }: { openInfo: () => void }) => {
         <p className={styles.paragraph}>{t('diagnosticsPrivacy')}</p>
       </Section>
       <Section>
-        <Row label={t('settingsPrivacyLicenses')} onClick={openInfo} target="aboutInfo" />
+        <Row label={t('guideTitle')} onClick={() => open('guide')} target="guide" />
+        <Row label={t('disclaimerTitle')} onClick={() => open('disclaimer')} target="disclaimer" />
+        <Row
+          label={t('settingsPrivacyLicenses')}
+          onClick={() => open('aboutInfo')}
+          target="aboutInfo"
+        />
       </Section>
       {notes && <UpdateDialog installed={notes === 'installed'} onClose={() => setNotes(null)} />}
     </>
@@ -400,18 +441,32 @@ const ImportConfirm = ({
   const sessionCount = useChatStore((state) => state.sessions.length)
   const fileName = historyImport.file?.name ?? ''
 
-  if (stage === 'warn') {
+  const [backingUp, setBackingUp] = useState(false)
+  const empty = sessionCount === 0
+  if (stage === 'warn' && !empty && !historyImport.busy && !historyImport.errorKey) {
     return (
       <Modal
         title={t('historyImportConfirmTitle')}
         centered
+        dismissible={!backingUp}
         onClose={historyImport.cancel}
         footer={
           <>
-            <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
+            <Button
+              variant="outlined"
+              size="m"
+              autoFocus
+              disabled={backingUp}
+              onClick={historyImport.cancel}
+            >
               {t('cancel')}
             </Button>
-            <Button variant="danger" size="m" onClick={() => setStage('final')}>
+            <Button
+              variant="danger"
+              size="m"
+              disabled={backingUp}
+              onClick={() => setStage('final')}
+            >
               {t('historyImportContinue')}
             </Button>
           </>
@@ -427,6 +482,7 @@ const ImportConfirm = ({
             {t('historyImportWarnBody', { count: sessionCount })}
           </div>
         </div>
+        <ExportHistory disabled={backingUp} label="importBackupFirst" onBusy={setBackingUp} />
       </Modal>
     )
   }
@@ -453,7 +509,7 @@ const ImportConfirm = ({
           ? t('historyImportBusyTitle')
           : errorKey
             ? t('historyImportFailedTitle')
-            : t('historyImportFinalTitle')
+            : t(empty ? 'importEmpty' : 'historyImportFinalTitle')
       }
       centered
       dismissible={!busy}
@@ -481,16 +537,22 @@ const ImportConfirm = ({
                 variant="outlined"
                 size="m"
                 autoFocus
-                onClick={() => (errorKey ? historyImport.cancel() : setStage('warn'))}
+                onClick={() => (errorKey || empty ? historyImport.cancel() : setStage('warn'))}
               >
-                {errorKey ? t('close') : t('historyImportBack')}
+                {t(errorKey ? 'close' : empty ? 'cancel' : 'historyImportBack')}
               </Button>
               <Button
-                variant={errorKey ? 'primary' : 'danger'}
+                variant={errorKey || empty ? 'primary' : 'danger'}
                 size="m"
                 onClick={() => void historyImport.confirm()}
               >
-                {errorKey ? t('historyImportRetry') : t('historyImportFinalConfirm')}
+                {t(
+                  errorKey
+                    ? 'historyImportRetry'
+                    : empty
+                      ? 'importStart'
+                      : 'historyImportFinalConfirm'
+                )}
               </Button>
             </div>
           )}
@@ -498,8 +560,15 @@ const ImportConfirm = ({
       }
     >
       {!busy && !errorKey && (
-        <div className={styles.importWarnFinal}>
-          {t('historyImportFinalBody', { count: sessionCount })}
+        <div className={empty ? styles.importFile : styles.importWarnFinal}>
+          {empty ? (
+            <>
+              <IconFileOutline16 />
+              <span>{fileName}</span>
+            </>
+          ) : (
+            t('historyImportFinalBody', { count: sessionCount })
+          )}
         </div>
       )}
       {busy ? (
@@ -540,7 +609,7 @@ const ImportConfirm = ({
   )
 }
 
-/** 导入完成：提示并给「立即重启」，让界面切到新数据 */
+/** 导入完成后可直接打开恢复的对话，也可以留在数据管理。 */
 const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHistoryImport> }) => {
   const t = useTranslate()
   const count = historyImport.result ?? 0
@@ -557,10 +626,16 @@ const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHis
           <Button
             size="m"
             onClick={() => {
-              window.location.reload()
+              const first = useChatStore.getState().sessions[0]
+              historyImport.dismissResult()
+              if (first) {
+                selectSession(first.id)
+                closeMobileSider()
+              }
+              closeSettings()
             }}
           >
-            {t('restartNow')}
+            {t(count ? 'importView' : 'importFinish')}
           </Button>
         </>
       }
@@ -667,6 +742,7 @@ const ImportHistory = ({
       <Row
         icon={<IconUploadOutline14 />}
         label={t('historyImport')}
+        description={t('guideFileType')}
         disabled={disabled}
         onClick={() => {
           if (!disabled) {
@@ -697,7 +773,15 @@ const ImportHistory = ({
 }
 
 /** 将全部会话及图片导出为 ZIP 文件并下载 */
-const ExportHistory = ({ disabled }: { disabled: boolean }) => {
+const ExportHistory = ({
+  disabled,
+  label = 'exportAllLabel',
+  onBusy,
+}: {
+  disabled: boolean
+  label?: TranslationKey
+  onBusy?: (busy: boolean) => void
+}) => {
   const t = useTranslate()
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
@@ -709,12 +793,14 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     }
     setBusy(true)
     setStatus(null)
+    onBusy?.(true)
     try {
       const { name, blob } = await exportHistory()
       await saveBackup(name, blob)
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {
+      onBusy?.(false)
       setBusy(false)
     }
   }
@@ -723,7 +809,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     <div>
       <Row
         icon={<IconDownloadOutline16 />}
-        label={t('exportAllLabel')}
+        label={t(label)}
         disabled={disabled || busy || empty}
         onClick={() => void onExport()}
       />

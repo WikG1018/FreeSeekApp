@@ -120,10 +120,27 @@ export type Message = UserMessage | AssistantMessage
 export type InheritedContext = {
   fromId: string
   fromTitle: string
+  contextSummary?: ContextSummary
   messages: Message[]
 }
 
+export type ContextSummary = {
+  text: string
+  coveredRounds: number
+  signature: string
+  updatedAt: number
+}
+
+export type CompressionCharge = {
+  createdAt: number
+  model: string
+  connection: ConnectionRef
+  usage: MessageUsage
+}
+
 export type Session = {
+  contextSummary?: ContextSummary
+  compressionUsage?: CompressionCharge[]
   id: string
   title: string
   pinned?: boolean

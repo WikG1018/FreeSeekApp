@@ -87,7 +87,7 @@ export const SettingsShell = ({
       target: motion === 'back' ? page : undefined,
     }
     setDirection(motion)
-    openSettings(next)
+    openSettings(next, { showTutorial: page === 'guide' && motion === 'forward' })
   }
   const go = (next: SettingsPageId, motion: Direction) => {
     if (next !== page) {

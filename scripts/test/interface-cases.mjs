@@ -6,6 +6,52 @@ const back = (page) => dialog(page).getByRole('button', { name: '返回', exact:
 
 export const runInterfaceCases = async ({ run }) => {
   await run(
+    'onboarding, About and Settings share the same key-free import screen',
+    async (page) => {
+      const clean = new URL(page.url())
+      clean.search = ''
+      await page.goto(clean.href)
+      const button = (name) => page.getByRole('button', { name, exact: true })
+      const tutorial = button('如何从 DeepSeek 导出聊天记录')
+      const data = page.locator('[data-settings-page="data"]')
+      const importButton = data.getByRole('button', { name: '导入历史对话', exact: true })
+      await button('我已阅读，继续').click()
+      await page.getByRole('button', { name: /^把以前的聊天搬过来/ }).click()
+      await data.waitFor()
+      assert.equal(await tutorial.getAttribute('aria-expanded'), 'true')
+      assert.equal(await importButton.count(), 1)
+      assert.equal(await button('删除所有对话').count(), 0)
+      const picker = page.waitForEvent('filechooser')
+      await importButton.click()
+      const chooser = await picker
+      await chooser.setFiles({
+        name: 'example.zip',
+        mimeType: 'application/zip',
+        buffer: Buffer.from('fixture'),
+      })
+      const confirm = page.getByRole('dialog', { name: '准备导入聊天记录', exact: true })
+      await confirm.getByRole('button', { name: '取消', exact: true }).click()
+      await confirm.waitFor({ state: 'detached' })
+
+      await back(page)
+      await page.locator('[data-settings-target="about"]').click()
+      await button('使用指南').click()
+      await page.getByRole('button', { name: /^把以前的聊天搬过来/ }).click()
+      await data.waitFor()
+      assert.equal(await tutorial.getAttribute('aria-expanded'), 'true')
+      await back(page)
+      await page.locator('[data-settings-target="data"]').click()
+      await data.waitFor()
+      assert.equal(await tutorial.getAttribute('aria-expanded'), 'false')
+      assert.equal(await importButton.count(), 1)
+      assert.equal(
+        await page.evaluate(() => window.__audit.settings.useSettings.getState().apiKey),
+        null
+      )
+    }
+  )
+
+  await run(
     'API tutorial leads the page, all official links stay accessible, and a verified key and model survive reopening',
     async (page) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
@@ -385,7 +431,10 @@ export const runInterfaceCases = async ({ run }) => {
       await more.click()
       assert.ok(await page.evaluate((id) => document.getElementById(id).hidden, id))
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
-      const official = page.getByRole('button', { name: /从 DeepSeek 官方 App 导入聊天记录/ })
+      const official = page.getByRole('button', {
+        name: '如何从 DeepSeek 导出聊天记录',
+        exact: true,
+      })
       assert.equal(await official.getAttribute('aria-expanded'), 'false')
       await official.focus()
       await page.keyboard.press('Enter')
@@ -400,7 +449,8 @@ export const runInterfaceCases = async ({ run }) => {
       const u = new URL(page.url())
       u.search = ''
       await page.goto(u.href)
-      await page.getByRole('button', { name: '去绑定 API Key', exact: true }).click()
+      await page.getByRole('button', { name: '我已阅读，继续', exact: true }).click()
+      await page.getByRole('button', { name: /^和 AI 聊天/ }).click()
       const ready = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true }),
         key = page.getByLabel('API Key', { exact: true })
       await page.evaluate(() => window.__audit.drafts.setDraftText(null, '保留原有草稿'))

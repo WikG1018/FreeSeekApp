@@ -1,5 +1,6 @@
+import { ContextSummaryDialog } from '../components/messages/ContextSummaryDialog.js'
 import { Onboarding } from '../components/onboarding/Onboarding.js'
-import { shouldShowOnboarding } from '../services/onboarding.js'
+import { initialOnboardingStep } from '../services/onboarding.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { hasSettingsOpen } from '../components/settings/settingsDialogState.js'
 import { Toast } from '../components/base/Toast.js'
@@ -58,9 +59,9 @@ export const App = () => {
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
-  // 首次使用：没绑 Key 且没看过引导时弹一次
+  // 声明版本和新手指南分别记录。
   const [onboarding, setOnboarding] = useState(() =>
-    shouldShowOnboarding(hasChatConnection() ? 'configured' : useSettings.getState().apiKey)
+    initialOnboardingStep(Boolean(hasChatConnection() || useSettings.getState().apiKey))
   )
   const initError = useChatStore((state) => state.initError)
   const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
@@ -248,8 +249,15 @@ export const App = () => {
         </main>
         <SearchPanel />
       </div>
+      <ContextSummaryDialog />
       <SettingsDialog />
-      {onboarding ? <Onboarding onDone={() => setOnboarding(false)} /> : null}
+      {onboarding ? (
+        <Onboarding
+          initial={onboarding}
+          configured={Boolean(hasChatConnection() || useSettings.getState().apiKey)}
+          onDone={() => setOnboarding(null)}
+        />
+      ) : null}
       <Toast />
     </>
   )

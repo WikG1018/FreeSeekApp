@@ -97,9 +97,11 @@ export const Modal = ({
       if (!root) {
         return
       }
-      const target = root.querySelector<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )
+      const target =
+        root.querySelector<HTMLElement>('[data-modal-initial-focus]') ??
+        root.querySelector<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
       ;(target ?? root).focus({ preventScroll: true })
     }
     focusFirst()
@@ -142,7 +144,7 @@ export const Modal = ({
         const first = focusables[0]
         const last = focusables[focusables.length - 1]
         const active = document.activeElement as HTMLElement | null
-        if (event.shiftKey && (active === first || !root.contains(active))) {
+        if (event.shiftKey && (active === first || !active || !focusables.includes(active))) {
           event.preventDefault()
           last.focus()
         } else if (!event.shiftKey && (active === last || !root.contains(active))) {

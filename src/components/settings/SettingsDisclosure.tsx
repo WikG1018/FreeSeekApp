@@ -7,6 +7,7 @@ export const SettingsDisclosure = ({
   title,
   icon,
   open,
+  defaultOpen = false,
   onToggle,
   guide = false,
   testId,
@@ -15,12 +16,13 @@ export const SettingsDisclosure = ({
   title: string
   icon: ReactNode
   open?: boolean
+  defaultOpen?: boolean
   onToggle?: () => void
   guide?: boolean
   testId?: string
   children: ReactNode
 }) => {
-  const [local, setLocal] = useState(false)
+  const [local, setLocal] = useState(defaultOpen)
   const expanded = open ?? local
   const id = useId()
   const shelf = useRef<HTMLDivElement>(null)

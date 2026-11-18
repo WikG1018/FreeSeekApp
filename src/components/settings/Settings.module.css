@@ -800,12 +800,8 @@ button.row:active:not(:disabled),
 }
 
 /* 数据管理页：官方 App 导出指引 */
-.officialTipSteps {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-secondary);
+.pageBody[data-settings-page='data'] > [data-guide] {
+  margin-top: 14px;
 }
 
 .officialTipHint {

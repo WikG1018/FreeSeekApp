@@ -54,7 +54,6 @@ declare const styles: {
   readonly licenseText: string
   readonly maskRow: string
   readonly officialTipHint: string
-  readonly officialTipSteps: string
   readonly page: string
   readonly pageBody: string
   readonly pageClosing: string

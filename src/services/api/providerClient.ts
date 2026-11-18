@@ -1,3 +1,4 @@
+import { describeKnownApiError, apiLimitCounts } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
 import { readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
@@ -80,7 +81,17 @@ const headersFor = (profile: ProviderProfile): Record<string, string> => {
   registerLogSecret(profile.apiKey)
   return Object.fromEntries(headers.entries())
 }
-const readJson = async (response: Response, signal: AbortSignal): Promise<Json> => {
+const remoteLimit = (data: Json) => {
+  const detail = record(data.error ?? record(data.response).error ?? data)
+  const message = text(detail.code) + ' ' + text(detail.message)
+  const known = describeKnownApiError(message)
+  return known && { ...known, params: apiLimitCounts(message) }
+}
+const readJson = async (
+  response: Response,
+  signal: AbortSignal,
+  limit = 8 * 1024 * 1024
+): Promise<Json> => {
   if (!response.body) {
     throw new ApiError('protocol', { key: 'providerInvalidResponse' })
   }
@@ -105,7 +116,7 @@ const readJson = async (response: Response, signal: AbortSignal): Promise<Json> 
         break
       }
       size += value.length
-      if (size > 8 * 1024 * 1024) {
+      if (size > limit) {
         throw new ApiError('protocol', { key: 'providerResponseTooLarge' })
       }
       body += decoder.decode(value, { stream: true })
@@ -160,10 +171,15 @@ const fetchResponse = async (
       signal: controller.signal,
     })
     if (!response.ok) {
+      const known =
+        response.status === 400 || response.status === 413 || response.status === 422
+          ? remoteLimit(await readJson(response, controller.signal, 32768).catch(() => ({})))
+          : undefined
       void response.body?.cancel().catch(() => {})
+      signal.throwIfAborted()
       throw new ApiError(
         'http',
-        { key: 'providerHttpError', params: { status: response.status } },
+        known ?? { key: 'providerHttpError', params: { status: response.status } },
         response.status
       )
     }
@@ -425,7 +441,7 @@ export async function* streamProviderMessage(
   }
   const consume = function* (data: Json): Generator<MessageStreamEvent> {
     if (data.error || data.type === 'error' || data.type === 'response.failed') {
-      throw new ApiError('stream', { key: 'providerRemoteError' })
+      throw new ApiError('stream', remoteLimit(data) ?? { key: 'providerRemoteError' })
     }
     if (profile.protocol === 'openai') {
       const choice = record(Array.isArray(data.choices) ? data.choices[0] : undefined),
@@ -472,7 +488,7 @@ export async function* streamProviderMessage(
           }
         }
         if (result.status === 'failed' || result.error) {
-          throw new ApiError('stream', { key: 'providerRemoteError' })
+          throw new ApiError('stream', remoteLimit(result) ?? { key: 'providerRemoteError' })
         }
         completed = true
         reason = stopReason(record(result.incomplete_details).reason)

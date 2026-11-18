@@ -6,7 +6,7 @@ import type { TranslationMessage } from '../../i18n/index.js'
  */
 export const describeKnownApiError = (message: string): TranslationMessage | undefined => {
   if (
-    /context.{0,60}(?:length|window|limit|exceed|too.{0,8}long)|maximum.{0,30}context|input.{0,25}tokens?.{0,40}(?:exceed|too.{0,8}long)/i.test(
+    /context.{0,60}(?:length|window|limit|exceed|too.{0,8}long)|maximum.{0,30}context|input.{0,25}tokens?.{0,40}(?:exceed|too.{0,8}long)|prompt is too long/i.test(
       message
     )
   ) {

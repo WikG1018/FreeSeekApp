@@ -22,6 +22,7 @@ type Settings = {
   fontScale: number
   /** 对话内显示 Token 用量与估算费用。 */
   showUsage: boolean
+  autoCompress: boolean
   showModelSwitcher: boolean
 }
 
@@ -36,6 +37,7 @@ const KEYS = {
   siderCollapsed: 'freeseek:sider-collapsed',
   fontScale: 'freeseek:font-scale',
   showUsage: 'freeseek:show-usage',
+  autoCompress: 'freeseek:auto-compress',
   showModelSwitcher: 'freeseek:show-model-switcher',
 } as const
 
@@ -118,6 +120,7 @@ export const useSettings = create<Settings>(() => ({
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
+  autoCompress: read(KEYS.autoCompress) === 'true',
   showUsage: read(KEYS.showUsage) !== 'false',
   showModelSwitcher: read(KEYS.showModelSwitcher) === 'true',
   fontScale: (() => {
@@ -188,4 +191,9 @@ export const setShowUsage = (showUsage: boolean) => {
 export const setShowModelSwitcher = (showModelSwitcher: boolean) => {
   write(KEYS.showModelSwitcher, String(showModelSwitcher))
   useSettings.setState({ showModelSwitcher })
+}
+
+export const setAutoCompress = (autoCompress: boolean) => {
+  write(KEYS.autoCompress, String(autoCompress))
+  useSettings.setState({ autoCompress })
 }

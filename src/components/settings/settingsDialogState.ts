@@ -15,6 +15,8 @@ export type SettingsPageId =
   | 'usagePricing'
   | 'about'
   | 'aboutInfo'
+  | 'disclaimer'
+  | 'guide'
 
 /** 可直接打开任意设置，返回路径始终与从目录进入时一致。 */
 export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
@@ -27,7 +29,7 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   if (page === 'usagePricing') {
     return 'usage'
   }
-  if (page === 'aboutInfo') {
+  if (page === 'aboutInfo' || page === 'disclaimer' || page === 'guide') {
     return 'about'
   }
   return 'home'
@@ -41,10 +43,11 @@ export const useSettingsDialog = create(() => ({
   open: false,
   closing: false,
   page: 'home' as SettingsPageId,
+  showTutorial: false,
 }))
 
-export const openSettings = (page: SettingsPageId = 'home') =>
-  useSettingsDialog.setState({ open: true, closing: false, page })
+export const openSettings = (page: SettingsPageId = 'home', { showTutorial = false } = {}) =>
+  useSettingsDialog.setState({ open: true, closing: false, page, showTutorial })
 
 /** 关闭：先进入 closing 相位（播放退出动画），由 SettingsRoot 在动画结束后真正卸载 */
 export const closeSettings = () => {

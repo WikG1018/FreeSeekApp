@@ -33,8 +33,18 @@ import {
   prepareDraftMessage,
 } from './drafts.js'
 import { createLatestReminder } from './latestReminder.js'
+import {
+  applicableSummary,
+  contextRounds,
+  generateContextSummary,
+  MAX_SUMMARY_CHARS,
+  planCompression,
+  type ContextRound,
+} from './contextCompression.js'
+import { apiLimitCounts } from '../api/knownErrors.js'
 import { activePersona } from '../personas.js'
 import {
+  activeConnection,
   activeConnectionRef,
   resolveConnection,
   useProviders,
@@ -54,6 +64,7 @@ import {
 import {
   toSessionSummary,
   type AssistantMessage,
+  type ContextSummary,
   type FileAttachment,
   type InheritedContext,
   type Message,
@@ -128,6 +139,7 @@ type ChatState = {
   /** 对话接续：待带入下一个新会话的来源上下文快照；null 表示未启用 */
   inheritFrom: InheritedContext | null
   /** 正在生成回复的会话 */
+  compressing: Record<string, boolean>
   streaming: Record<string, AbortController>
 }
 
@@ -142,6 +154,7 @@ export const useChatStore = create<ChatState>(() => ({
   activeId: null,
   inheritFrom: null,
   streaming: {},
+  compressing: {},
 }))
 
 const { getState: get, setState: set } = useChatStore
@@ -567,7 +580,12 @@ export const startInheritSession = (id: string) => {
     }
     const messages = [...(session.inherited?.messages ?? []), ...getVisibleMessages(session)]
     set({
-      inheritFrom: { fromId: summary.id, fromTitle: summary.title, messages },
+      inheritFrom: {
+        fromId: summary.id,
+        fromTitle: summary.title,
+        messages,
+        contextSummary: currentContextSummary(session),
+      },
       activeId: null,
     })
     trimSessionCache()
@@ -736,7 +754,9 @@ export const sendMessage = (targetSessionId: string | null) => {
       updatedAt: now,
       messages: [],
       rootMessageId: null,
-      ...(inherit && inherit.messages.length > 0 ? { inherited: inherit } : null),
+      ...(inherit && inherit.messages.length > 0
+        ? { inherited: inherit, contextSummary: inherit.contextSummary }
+        : null),
       ...(persona ? { persona } : null),
     }
     sessionId = session.id
@@ -954,6 +974,183 @@ type Request = {
   persona?: { name: string; prompt: string } | null
 }
 
+export const currentContextSummary = (session: Session) =>
+  applicableSummary(
+    session.contextSummary,
+    contextRounds(getVisibleMessages(session), session.inherited)
+  )
+
+type CompressionMode = 'ask' | 'compress' | 'send'
+const markCompressing = (id: string, value: boolean) =>
+  set((state) => {
+    const compressing = { ...state.compressing }
+    if (value) {
+      compressing[id] = true
+    }
+    return {
+      compressing: value
+        ? compressing
+        : Object.fromEntries(Object.entries(compressing).filter(([key]) => key !== id)),
+    }
+  })
+
+const compressRounds = async (
+  id: string,
+  connection: Connection,
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  plan: ReturnType<typeof planCompression>,
+  signal: AbortSignal
+) => {
+  markCompressing(id, true)
+  logEvent('chat', 'compression.started', { coveredRounds: plan.start, targetRounds: plan.end })
+  try {
+    const summary = await generateContextSummary(
+      connection,
+      rounds,
+      prior,
+      plan,
+      signal,
+      (charge) => {
+        if (get().importingHistory || deletingSessions.has(id)) {
+          return
+        }
+        updateSession(id, (session) => ({
+          ...session,
+          compressionUsage: [...(session.compressionUsage ?? []), charge],
+        }))
+        persist(id)
+      }
+    )
+    signal.throwIfAborted()
+    updateSession(id, (session) => ({ ...session, contextSummary: summary }))
+    persist(id)
+    logEvent('chat', 'compression.completed', { coveredRounds: summary.coveredRounds })
+    return summary
+  } catch (error) {
+    logEvent(
+      'chat',
+      'compression.failed',
+      { ...diagnosticError(error), cancelled: signal.aborted },
+      signal.aborted ? 'info' : 'warn'
+    )
+    throw error
+  } finally {
+    markCompressing(id, false)
+  }
+}
+
+export const compressSession = async (id: string) => {
+  const session = getSession(id)
+  if (!session || deletingSessions.has(id) || get().importingHistory || getStreamController(id)) {
+    throw new ApiError('protocol', { key: 'compressionUnavailable' })
+  }
+  const connection = activeConnection(),
+    rounds = contextRounds(getVisibleMessages(session), session.inherited)
+  const prior = applicableSummary(session.contextSummary, rounds)
+  const controller = new AbortController()
+  set((state) => ({ streaming: { ...state.streaming, [id]: controller } }))
+  try {
+    return await compressRounds(
+      id,
+      connection,
+      rounds,
+      prior,
+      planCompression(rounds, prior, connection),
+      controller.signal
+    )
+  } finally {
+    set((state) => {
+      return {
+        streaming: Object.fromEntries(
+          Object.entries(state.streaming).filter(([key]) => key !== id)
+        ),
+      }
+    })
+  }
+}
+
+export const editContextSummary = (id: string, original: ContextSummary, text: string) => {
+  const session = getSession(id)
+  const summary = session && currentContextSummary(session)
+  if (
+    !summary ||
+    summary !== original ||
+    !text.trim() ||
+    text.length > MAX_SUMMARY_CHARS ||
+    getStreamController(id) ||
+    deletingSessions.has(id) ||
+    get().importingHistory
+  ) {
+    return false
+  }
+  updateSession(id, (s) => ({
+    ...s,
+    contextSummary: { ...summary, text: text.trim(), updatedAt: Date.now() },
+  }))
+  persist(id)
+  return true
+}
+
+export const retryContextReply = (id: string, replyId: string, mode: 'compress' | 'send') => {
+  const session = getSession(id)
+  if (!session || getStreamController(id) || get().importingHistory || deletingSessions.has(id)) {
+    return
+  }
+  const path = getVisibleMessages(session),
+    index = path.findIndex((m) => m.id === replyId)
+  const question = path[index - 1],
+    previous = path[index]
+  if (
+    question?.role !== 'user' ||
+    previous?.role !== 'assistant' ||
+    previous.status !== 'error' ||
+    ![
+      'replyContextTooLong',
+      'compressionSuggested',
+      'compressionFailed',
+      'compressionUnavailable',
+    ].includes(previous.error?.localMessage?.key ?? '')
+  ) {
+    return
+  }
+  const reply: AssistantMessage = {
+    ...previous,
+    status: 'pending',
+    error: undefined,
+    stopReason: undefined,
+    stopDetails: undefined,
+  }
+  updateReply(id, reply)
+  persist(id)
+  void streamReply(
+    id,
+    reply,
+    {
+      history: path.slice(0, index - 1),
+      question,
+      prefix: previous.blocks.length ? previous : undefined,
+      inherited: session.inherited,
+      persona: session.persona,
+    },
+    mode,
+    Number(previous.error?.localMessage?.params?.contextLimitTokens) || undefined
+  )
+}
+
+const withSummaryText = (request: Request, summary?: ContextSummary): Request => {
+  if (!summary) {
+    return request
+  }
+  // Keep the summary at user priority. The active persona remains the only system prompt.
+  const note = '[Earlier conversation summary]\n' + summary.text + '\n[End of earlier summary]\n\n'
+  const withNote = (q: UserMessage) => ({ ...q, content: note + q.content })
+  const first = request.history[0]
+  return first?.role === 'user'
+    ? { ...request, history: [withNote(first), ...request.history.slice(1)] }
+    : { ...request, question: withNote(request.question) }
+}
+
 /** 把补传得到的 serverId 写回会话里所有引用同一附件的消息（编辑、重新生成会共用附件） */
 const saveServerIds = (sessionId: string, serverIds: Map<string, string>) => {
   if (serverIds.size === 0) {
@@ -1012,7 +1209,9 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
     history: request.history.map(pick),
     question: pick(request.question),
     prefix: request.prefix,
-    inherited: session.inherited,
+    inherited: request.inherited
+      ? { ...request.inherited, messages: request.inherited.messages.map(pick) }
+      : undefined,
     persona: request.persona,
   }
 }
@@ -1115,21 +1314,18 @@ const prepareFiles = async (
     }
 
     // 用补齐后的会话重新取历史与提问，保证请求里都是 serverId
-    const session = getSession(sessionId)
-    const byId = new Map(session?.messages.map((message) => [message.id, message]))
+    const fresh = refreshRequest(sessionId, request)
     const filter = <T extends Message>(message: T): T =>
       message.role === 'user'
         ? { ...message, files: message.files.filter((file) => !omitted.has(file.id)) }
         : message
-    const resolve = <T extends Message>(message: T): T =>
-      filter((byId.get(message.id) as T | undefined) ?? message)
-    const inherited = session?.inherited ?? request.inherited
     return {
-      history: request.history.map(resolve),
-      question: resolve(request.question),
-      prefix: request.prefix,
-      inherited: inherited ? { ...inherited, messages: inherited.messages.map(filter) } : undefined,
-      persona: request.persona,
+      ...fresh,
+      history: fresh.history.map(filter),
+      question: filter(fresh.question),
+      inherited: fresh.inherited
+        ? { ...fresh.inherited, messages: fresh.inherited.messages.map(filter) }
+        : undefined,
     }
   } finally {
     signal.removeEventListener('abort', onAbort)
@@ -1299,7 +1495,18 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
  * 补传失败时回复记为 upload 错误，可重试。
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
  */
-const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
+const streamReply = async (
+  sessionId: string,
+  initial: AssistantMessage,
+  original: Request,
+  mode: CompressionMode = 'ask',
+  reportedLimit?: number
+) => {
+  let request = original
+  const rounds = contextRounds(original.history, original.inherited)
+  let summary = applicableSummary(getSession(sessionId)?.contextSummary, rounds)
+  let compressionAttempted = false
+  let checkPressure = true
   const controller = new AbortController()
   if (!getSession(sessionId)?.title) {
     titleRequests.add(controller)
@@ -1340,6 +1547,58 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       let receivedContent = false
       try {
         connection ??= resolveConnection(initial.connection, initial.model)
+        if (checkPressure) {
+          checkPressure = false
+          const plan = planCompression(
+            rounds,
+            summary,
+            connection,
+            { ...original, system: initial.systemPrompt ?? original.persona?.prompt },
+            reportedLimit
+          )
+          const canReduce = plan.end > plan.start
+          if (
+            mode === 'compress' ||
+            (mode !== 'send' && plan.near && !plan.currentTooLarge && canReduce)
+          ) {
+            if (mode !== 'compress' && !useSettings.getState().autoCompress) {
+              throw new ApiError('protocol', { key: 'compressionSuggested' })
+            }
+            compressionAttempted = true
+            if (!canReduce) {
+              throw new ApiError('protocol', { key: 'compressionUnavailable' })
+            }
+            try {
+              summary = await compressRounds(
+                sessionId,
+                connection,
+                rounds,
+                summary,
+                plan,
+                controller.signal
+              )
+            } catch (error) {
+              if (
+                error instanceof ApiError &&
+                (error.status === 401 ||
+                  error.status === 402 ||
+                  error.localMessage?.key === 'compressionNoKey')
+              ) {
+                throw error
+              }
+              throw new ApiError('protocol', { key: 'compressionFailed' })
+            }
+          }
+          if (summary) {
+            request = {
+              ...original,
+              inherited: undefined,
+              history: rounds
+                .slice(summary.coveredRounds)
+                .flatMap(([user, assistant]) => [user, assistant]),
+            }
+          }
+        }
         if (
           connection.kind === 'deepseek' &&
           connection.model === 'deepseek-v4-pro' &&
@@ -1352,13 +1611,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           throw new ApiError('protocol', { key: 'providerProNoImages' })
         }
         preparing = connection.kind === 'deepseek'
-        const prepared =
+        const rawPrepared =
           connection.kind === 'deepseek'
             ? await prepareFiles(sessionId, request, controller.signal, omitted, connection.apiKey)
             : refreshRequest(sessionId, request)
-        if (!prepared.question.content.trim() && prepared.question.files.length === 0) {
+        if (!rawPrepared.question.content.trim() && rawPrepared.question.files.length === 0) {
           throw new ApiError('protocol', { key: 'replyNoReadableAttachment' })
         }
+        const prepared = withSummaryText(rawPrepared, summary)
         preparing = false
         // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
         const latestReminder = prepared.prefix
@@ -1507,6 +1767,62 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             retryable: !(error instanceof UnsupportedImageError) && isRetryableUploadError(error),
           })
           break
+        }
+        if (
+          error instanceof ApiError &&
+          error.localMessage?.key === 'replyContextTooLong' &&
+          connection &&
+          !receivedContent
+        ) {
+          reportedLimit =
+            Number(error.localMessage.params?.contextLimitTokens) ||
+            apiLimitCounts(error.message).contextLimitTokens ||
+            reportedLimit
+          const plan = planCompression(
+            rounds,
+            summary,
+            connection,
+            { ...original, system: initial.systemPrompt ?? original.persona?.prompt },
+            reportedLimit
+          )
+          if (
+            connection.kind === 'custom' &&
+            plan.limit &&
+            connection.profile.maxOutputTokens >= plan.limit
+          ) {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'replyOutputLimitInvalid' },
+            })
+            break
+          }
+          // Only the service can establish that a request without earlier turns is too large.
+          // Attachment size estimates alone cannot tell whether reducing the history will help.
+          if (!rounds.length) {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'compressionInputLarge' },
+            })
+            break
+          }
+          if (
+            mode !== 'send' &&
+            !compressionAttempted &&
+            useSettings.getState().autoCompress &&
+            plan.end > plan.start
+          ) {
+            checkPressure = true
+            mode = 'compress'
+            continue
+          }
+          if (reportedLimit) {
+            error.localMessage.params = {
+              ...error.localMessage.params,
+              contextLimitTokens: reportedLimit,
+            }
+          }
         }
         // 附件失效：重新补传后重发。收到过内容块（含丢弃的客户端工具）后不自动重发。
         if (

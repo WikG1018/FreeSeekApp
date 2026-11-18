@@ -28,6 +28,8 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   data: 'settingsDataManage',
   about: 'settingsAboutApp',
   aboutInfo: 'settingsPrivacyLicenses',
+  disclaimer: 'disclaimerTitle',
+  guide: 'guideTitle',
 }
 const groups = [
   {

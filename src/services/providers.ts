@@ -14,6 +14,7 @@ export type ProviderProfile = {
   model: string
   models: string[]
   modelListUrl: string
+  contextWindows?: Record<string, number>
   maxOutputTokens: number
   temperature: number | null
   tokenParameter: 'max_tokens' | 'max_completion_tokens'
@@ -88,6 +89,18 @@ export const emptyProfile = (): ProviderProfile => ({
 export const validateProfile = (input: ProviderProfile, requireModel = true): ProviderProfile => {
   if (!protocols.includes(input.protocol) || (requireModel && !validModel(input.model))) {
     throw new ProviderConfigError('model')
+  }
+  if (
+    input.contextWindows !== undefined &&
+    (!input.contextWindows ||
+      typeof input.contextWindows !== 'object' ||
+      Array.isArray(input.contextWindows) ||
+      Object.entries(input.contextWindows).some(
+        ([model, size]) =>
+          !validModel(model) || !Number.isSafeInteger(size) || size < 512 || size > 10000000
+      ))
+  ) {
+    throw new ProviderConfigError('parameters')
   }
   const url = validateProviderUrl(input.url)
   if (

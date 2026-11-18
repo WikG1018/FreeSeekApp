@@ -2,6 +2,7 @@ import { useId } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   setFontScale,
+  setAutoCompress,
   setLocale,
   setShowModelSwitcher,
   setShowUsage,
@@ -119,6 +120,7 @@ export const ChatPreferencesPage = () => {
   const t = useTranslate(),
     name = useId()
   const showModelSwitcher = useSettings((s) => s.showModelSwitcher),
+    autoCompress = useSettings((s) => s.autoCompress),
     showUsage = useSettings((s) => s.showUsage),
     voice = useSettings((s) => s.ttsVoice)
   return (
@@ -130,6 +132,10 @@ export const ChatPreferencesPage = () => {
           change={setShowModelSwitcher}
         />
         <SwitchRow label={t('settingsShowUsage')} checked={showUsage} change={setShowUsage} />
+      </Section>
+      <Section title={t('longChats')}>
+        <SwitchRow label={t('autoCompress')} checked={autoCompress} change={setAutoCompress} />
+        <p className={styles.paragraph}>{t('autoCompressHint')}</p>
       </Section>
       <Section title={t('settingsTtsVoice')}>
         <div role="radiogroup" aria-label={t('settingsTtsVoice')}>

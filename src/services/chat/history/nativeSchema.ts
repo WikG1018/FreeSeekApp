@@ -3,6 +3,7 @@ import type { MessageUsage } from '../../api/types.js'
 import type { FileAttachment, Message, ReplyBlock, Session } from '../types.js'
 import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
+import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
 import { validModel } from '../../providers.js'
 
 const invalid = (): never => fail('backupIncomplete')
@@ -234,6 +235,23 @@ const message = (value: unknown): Message => {
   }
 }
 
+const contextSummary = (value: unknown) => {
+  const raw = record(value),
+    text = string(raw.text),
+    coveredRounds = number(raw.coveredRounds)
+  const signature = string(raw.signature)
+  if (
+    !text.trim() ||
+    text.length > MAX_SUMMARY_CHARS ||
+    !Number.isSafeInteger(coveredRounds) ||
+    coveredRounds < 1 ||
+    !/^[a-z0-9]{1,7}-[a-z0-9]{1,7}$/.test(signature)
+  ) {
+    return invalid()
+  }
+  return { text, coveredRounds, signature, updatedAt: number(raw.updatedAt) }
+}
+
 export const readNativeSession = (value: unknown): Session => {
   const item = record(value)
   const messages = list(item.messages, message)
@@ -283,11 +301,29 @@ export const readNativeSession = (value: unknown): Session => {
     createdAt: number(item.createdAt),
     updatedAt: number(item.updatedAt),
     messages,
+    contextSummary: optional(item.contextSummary, contextSummary),
+    compressionUsage: optional(item.compressionUsage, (value) =>
+      list(value, (raw) => {
+        const entry = record(raw),
+          ref = record(entry.connection),
+          providerId = id(ref.providerId)
+        if (providerId !== 'deepseek' && !/^custom-[\w-]+$/.test(providerId)) {
+          return invalid()
+        }
+        return {
+          usage: usage(entry.usage),
+          createdAt: number(entry.createdAt),
+          model: validModel(entry.model) ? entry.model : invalid(),
+          connection: { providerId, revision: optional(ref.revision, id) },
+        }
+      })
+    ),
     rootMessageId,
     inherited: inherited
       ? {
           fromId: id(inherited.fromId),
           fromTitle: string(inherited.fromTitle),
+          contextSummary: optional(inherited.contextSummary, contextSummary),
           messages: list(inherited.messages, message),
         }
       : inherited,

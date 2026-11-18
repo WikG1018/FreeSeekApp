@@ -1,34 +1,38 @@
-/**
- * 首次使用引导：没绑 Key 且没看过引导时弹出一次。
- * 只要用户成功保存过 Key 或主动跳过，就不再打扰。
- */
-const KEY = 'freeseek:onboarded'
+const GUIDE_KEY = 'freeseek:onboarded'
+const NOTICE_KEY = 'freeseek:notice-version'
+const NOTICE_VERSION = '1'
+const volatile = new Map<string, string>()
 
-export const hasSeenOnboarding = (): boolean => {
+const stored = (key: string) => {
   try {
-    return localStorage.getItem(KEY) === '1'
+    return volatile.get(key) ?? localStorage.getItem(key)
   } catch {
-    return true
+    return volatile.get(key)
   }
 }
 
-export const markOnboardingSeen = (): void => {
+const remember = (key: string, value: string) => {
+  volatile.set(key, value)
   try {
-    localStorage.setItem(KEY, '1')
+    localStorage.setItem(key, value)
   } catch {
-    // 存储不可用时本次会话内不再重复弹（由调用方控制状态）
+    // The current launch still remembers the reader's choice.
   }
 }
 
-/** 自动化测试带 ?e2e=1，跳过引导（否则会挡住既有回归用例） */
-const isAutomation = (): boolean => {
-  try {
-    return new URLSearchParams(window.location.search).has('e2e')
-  } catch {
-    return false
+export const hasSeenOnboarding = () => stored(GUIDE_KEY) === '1'
+export const markOnboardingSeen = () => remember(GUIDE_KEY, '1')
+export const acceptUsageNotice = () => remember(NOTICE_KEY, NOTICE_VERSION)
+export type OnboardingStep = 'notice' | 'guide'
+export const initialOnboardingStep = (configured: boolean): OnboardingStep | null => {
+  if (
+    process.env.NODE_ENV === 'development' &&
+    new URLSearchParams(window.location.search).has('e2e')
+  ) {
+    return null
   }
+  if (stored(NOTICE_KEY) !== NOTICE_VERSION) {
+    return 'notice'
+  }
+  return configured || hasSeenOnboarding() ? null : 'guide'
 }
-
-/** 是否应展示首启引导：没看过引导、且还没配置 Key */
-export const shouldShowOnboarding = (apiKey: string | null): boolean =>
-  !isAutomation() && !hasSeenOnboarding() && !apiKey

@@ -18,7 +18,7 @@ import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { ConnectionSelector } from './ProviderSettings.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
-import { Row, Section } from './SettingsRows.js'
+import { Row, Section, TutorialSteps } from './SettingsRows.js'
 import { useApiKeyForm } from './useApiKeyForm.js'
 import { useSettingsLeave } from './useSettingsLeave.js'
 import styles from './Settings.module.css'
@@ -46,16 +46,7 @@ const ApiTutorial = ({ open, toggle }: { open: boolean; toggle: () => void }) =>
       open={open}
       onToggle={toggle}
     >
-      <ol className={styles.tutorialSteps}>
-        {steps.map((step, i) => (
-          <li className={styles.tutorialStep} key={step}>
-            <span className={styles.tutorialBadge} aria-hidden>
-              {i + 1}
-            </span>
-            <span>{t(step)}</span>
-          </li>
-        ))}
-      </ol>
+      <TutorialSteps steps={steps} />
       <div className={styles.tutorialActions}>
         {links.map(([short, label, url]) => (
           <button

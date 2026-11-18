@@ -13,6 +13,7 @@ import { runImmersiveCases } from './test/immersive-cases.mjs'
 import { runImportCases } from './test/import-cases.mjs'
 import { runNavigationCases } from './test/navigation-cases.mjs'
 import { runInterfaceCases } from './test/interface-cases.mjs'
+import { runCompressionCases } from './test/compression-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -155,6 +156,7 @@ try {
   }
   browser = await chromium.launch({ headless: true })
   await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
+  await runCompressionCases(run)
   await runCompatibilityCases(run)
   await runAndroidStabilityCases({
     run,

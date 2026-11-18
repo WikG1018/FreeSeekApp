@@ -4,7 +4,13 @@ import { memo, useState } from 'react'
 import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
 import { canContinueReply } from '../../services/chat/reply.js'
-import { continueReply, regenerateReply, newChat } from '../../services/chat/store.js'
+import {
+  continueReply,
+  regenerateReply,
+  newChat,
+  retryContextReply,
+  useChatStore,
+} from '../../services/chat/store.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
 import { openSettings } from '../settings/settingsDialogState.js'
@@ -58,6 +64,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     .filter(Boolean)
     .join('\n\n')
   const copyText = responseText || notice?.text
+  const compressing = useChatStore((s) => streaming && Boolean(s.compressing[sessionId]))
   const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
   const summaryEntry = `${message.id}-summary`
   return (
@@ -86,7 +93,9 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         />
       ) : null}
-      {waiting ? (
+      {compressing ? (
+        <div role="status">{t('compressionBusy')}</div>
+      ) : waiting ? (
         <div className={styles.waiting}>
           {[0, 1, 2].map((index) => (
             <span key={index} className={styles.waitingDot} />
@@ -102,9 +111,19 @@ export const AssistantMessage = memo(function AssistantMessage({
           disableLink={false}
         />
       ) : notice ? (
-        <div className={styles.notice}>
-          <IconWarningOutline16 />
-          <span>
+        <div
+          className={clsx(
+            styles.notice,
+            message.error?.localMessage?.key === 'compressionSuggested' && styles.compressionPrompt
+          )}
+        >
+          {message.error?.localMessage?.key === 'compressionSuggested' ? null : (
+            <IconWarningOutline16 />
+          )}
+          <div>
+            {message.error?.localMessage?.key === 'compressionSuggested' && (
+              <strong>{t('compressionPromptTitle')}</strong>
+            )}
             {notice.text}
             {notice.action === 'apiKey' ? (
               <>
@@ -131,12 +150,36 @@ export const AssistantMessage = memo(function AssistantMessage({
                 </a>
               </>
             ) : null}
+            {(notice.action === 'compression' || notice.action === 'newChat') && (
+              <div className={styles.contextActions}>
+                {message.error?.localMessage?.key !== 'compressionUnavailable' && (
+                  <Button
+                    size="s"
+                    variant={notice.action === 'compression' ? 'primary' : 'outlined'}
+                    disabled={busy}
+                    onClick={() => retryContextReply(sessionId, message.id, 'compress')}
+                  >
+                    {t(notice.action === 'newChat' ? 'compressionRetry' : 'compressTitle')}
+                  </Button>
+                )}
+                {notice.action === 'compression' && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className={styles.noticeAction}
+                    onClick={() => retryContextReply(sessionId, message.id, 'send')}
+                  >
+                    {t('compressionSendOnce')}
+                  </button>
+                )}
+              </div>
+            )}
             {notice.action === 'newChat' ? (
               <button type="button" className={styles.noticeAction} onClick={newChat}>
                 {t('newChatWithoutHistory')}
               </button>
             ) : null}
-          </span>
+          </div>
         </div>
       ) : null}
       {!streaming ? (
@@ -163,7 +206,11 @@ export const AssistantMessage = memo(function AssistantMessage({
           <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
             {copyText ? <CopyButton text={copyText} /> : null}
             {responseText && !refused ? (
-              <ReadAloudButton messageId={message.id} text={responseText} allowed={!message.connection || message.connection.providerId === 'deepseek'} />
+              <ReadAloudButton
+                messageId={message.id}
+                text={responseText}
+                allowed={!message.connection || message.connection.providerId === 'deepseek'}
+              />
             ) : null}
             <IconButton
               icon={<IconRefreshOutline16 />}

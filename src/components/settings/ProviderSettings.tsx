@@ -408,6 +408,33 @@ export const ProviderSettingsPage = ({ onOfficial }: { onOfficial: () => void })
               />
             </label>
             <label className={styles.field}>
+              <span>{t('contextWindow')}</span>
+              <input
+                type="number"
+                min={512}
+                max={10000000}
+                disabled={!form.model.trim()}
+                value={
+                  Object.hasOwn(form.contextWindows ?? {}, form.model.trim())
+                    ? form.contextWindows?.[form.model.trim()]
+                    : ''
+                }
+                onChange={(event) => {
+                  const model = form.model.trim()
+                  const windows = { ...form.contextWindows }
+                  if (event.target.value) {
+                    windows[model] = Number(event.target.value)
+                  }
+                  patch({
+                    contextWindows: event.target.value
+                      ? windows
+                      : Object.fromEntries(Object.entries(windows).filter(([id]) => id !== model)),
+                  })
+                }}
+              />
+              <small>{t('contextWindowHint')}</small>
+            </label>
+            <label className={styles.field}>
               <span>{t('providerTemperature')}</span>
               <input
                 aria-label={t('providerTemperature')}

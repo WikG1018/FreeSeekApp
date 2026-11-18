@@ -3,6 +3,7 @@ import { memo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   IconEditOutline16,
+  IconBookOutline16,
   IconEllipsisOutline16,
   IconLinkOutline16,
   IconPinOutline16,
@@ -15,6 +16,7 @@ import {
   startInheritSession,
 } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
+import { openContextSummary } from '../messages/ContextSummaryDialog.js'
 import { IconButton } from '../base/IconButton.js'
 import { Menu } from '../base/Menu.js'
 import { showToast } from '../base/toastState.js'
@@ -99,6 +101,16 @@ export const SessionItem = memo(function SessionItem({
               onSelect: () => {
                 startInheritSession(session.id)
                 closeMobileSider()
+              },
+            },
+            {
+              key: 'compress',
+              label: t('compressTitle'),
+              icon: <IconBookOutline16 />,
+              onSelect: () => {
+                selectSession(session.id)
+                closeMobileSider()
+                openContextSummary(session.id)
               },
             },
             {

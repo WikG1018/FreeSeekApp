@@ -72,7 +72,7 @@
     margin-top: 4px;
   }
 
-  > span {
+  > div {
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
@@ -165,4 +165,33 @@
 .chipLabel {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.contextActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin: 8px 0 4px;
+}
+
+.compressionPrompt {
+  padding: 14px 16px 10px;
+  background: var(--fs-settings-icon-bg, rgba(74, 113, 241, 0.08));
+  border-radius: 16px;
+  color: var(--fs-secondary-text);
+}
+.compressionPrompt strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.compressionPrompt .contextActions > button:first-child {
+  color: white;
+  background: var(--fs-brand);
+}
+.contextActions .noticeAction {
+  min-height: 44px;
 }
