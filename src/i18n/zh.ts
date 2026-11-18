@@ -459,6 +459,8 @@ export const zh = {
   compressionSendOnce: '这次照常发送',
   compressionRetry: '压缩历史并重试',
   compressionInputLarge: '当前消息或附件已超过模型能处理的长度。请分几次发送，或拆分附件后再试。',
+  compressionStillTooLong:
+    '历史已压缩，但摘要和本轮消息、附件合计仍超过模型上限。请缩短本轮消息，或拆分附件后重新发送。',
   compressionUnavailable: '这段对话还没有可进一步压缩的历史。',
   compressionFailed: '未能生成完整摘要。可以重新压缩，也可以照常发送。',
   compressionBusy: '正在整理并压缩上下文…',

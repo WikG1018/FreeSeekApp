@@ -208,7 +208,13 @@ export const runCompressionCases = async (run) => {
       })
       assert.deepEqual(result, [
         { attempts: 2, summaries: 1, status: 'done', error: null, userCount: 2 },
-        { attempts: 2, summaries: 1, status: 'error', error: 'replyContextTooLong', userCount: 2 },
+        {
+          attempts: 2,
+          summaries: 1,
+          status: 'error',
+          error: 'compressionStillTooLong',
+          userCount: 2,
+        },
         {
           attempts: 1,
           summaries: 0,
@@ -224,6 +230,92 @@ export const runCompressionCases = async (run) => {
           userCount: 1,
         },
       ])
+    }
+  )
+
+  await run(
+    'compression recovery removes old document references but keeps the current question and attachment on retry',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const document = (name, id) => ({
+          id,
+          serverId: 'file-api-' + id,
+          name,
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          size: 56 * 1024,
+          isImage: false,
+        })
+        const earlier = document('earlier-document.docx', 'earlier-doc')
+        const current = document('current-document.docx', 'current-doc')
+        const messages = [
+          ...Array.from({ length: 6 }, (_, index) => [
+            f.user('q' + index, 'earlier passage ' + index, {
+              files: index === 5 ? [earlier] : [],
+            }),
+            f.assistant('a' + index, 'earlier answer ' + index),
+          ]).flat(),
+          f.user('current-question', 'CURRENT_QUESTION_MARKER', { files: [current] }),
+          f.assistant('failed-reply', '', {
+            status: 'error',
+            error: {
+              kind: 'http',
+              message: '',
+              status: 400,
+              localMessage: { key: 'replyContextTooLong' },
+            },
+          }),
+        ]
+        await a.seed([f.session({ id: 'documents', messages })])
+        a.settings.setApiKey('fixture')
+        const requests = []
+        window.__contextRecoveryRequests = requests
+        const ordinary = window.fetch
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return ordinary(url, init)
+          const body = JSON.parse(init.body)
+          requests.push(body)
+          if (body.max_tokens) return a.response('Compact earlier context')
+          if (JSON.stringify(body.messages).includes('file-api-earlier-doc')) {
+            return new Response(
+              JSON.stringify({ error: { message: 'maximum context length is 1048576 tokens' } }),
+              { status: 400 }
+            )
+          }
+          return a.response('Reply after compression')
+        }
+      })
+      await page.getByRole('button', { name: '压缩历史并重试', exact: true }).click()
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.waitIdle()
+        const saved = a.store.useChatStore.getState().sessionCache.documents
+        const requests = window.__contextRecoveryRequests
+        return {
+          summaryRequest: JSON.stringify(requests[0].messages),
+          retry: JSON.stringify(requests[1].messages),
+          calls: requests.length,
+          status: saved.messages.at(-1).status,
+          questions: saved.messages.filter((message) => message.role === 'user').length,
+          originalFiles: saved.messages
+            .filter((message) => message.role === 'user')
+            .flatMap((message) => message.files.map((file) => file.id)),
+        }
+      })
+      assert.match(result.summaryRequest, /earlier-document\.docx/)
+      assert.doesNotMatch(
+        result.summaryRequest,
+        /CURRENT_QUESTION_MARKER|current-document\.docx|file-api-/
+      )
+      assert.match(result.retry, /Compact earlier context/)
+      assert.match(result.retry, /CURRENT_QUESTION_MARKER/)
+      assert.match(result.retry, /file-api-current-doc/)
+      assert.doesNotMatch(result.retry, /file-api-earlier-doc/)
+      assert.equal(result.calls, 2)
+      assert.equal(result.status, 'done')
+      assert.equal(result.questions, 7)
+      assert.deepEqual(result.originalFiles, ['earlier-doc', 'current-doc'])
     }
   )
 

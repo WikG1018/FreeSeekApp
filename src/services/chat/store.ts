@@ -991,7 +991,7 @@ export const currentContextSummary = (session: Session) =>
     contextRounds(getVisibleMessages(session), session.inherited)
   )
 
-type CompressionMode = 'ask' | 'compress' | 'send'
+type CompressionMode = 'ask' | 'compress' | 'recover' | 'send'
 const markCompressing = (id: string, value: boolean) =>
   set((state) => {
     const compressing = { ...state.compressing }
@@ -1014,7 +1014,11 @@ const compressRounds = async (
   signal: AbortSignal
 ) => {
   markCompressing(id, true)
-  logEvent('chat', 'compression.started', { coveredRounds: plan.start, targetRounds: plan.end })
+  logEvent('chat', 'compression.started', {
+    sessionId: id,
+    coveredRounds: plan.start,
+    targetRounds: plan.end,
+  })
   try {
     const summary = await generateContextSummary(
       connection,
@@ -1036,13 +1040,16 @@ const compressRounds = async (
     signal.throwIfAborted()
     updateSession(id, (session) => ({ ...session, contextSummary: summary }))
     persist(id)
-    logEvent('chat', 'compression.completed', { coveredRounds: summary.coveredRounds })
+    logEvent('chat', 'compression.completed', {
+      sessionId: id,
+      coveredRounds: summary.coveredRounds,
+    })
     return summary
   } catch (error) {
     logEvent(
       'chat',
       'compression.failed',
-      { ...diagnosticError(error), cancelled: signal.aborted },
+      { sessionId: id, ...diagnosticError(error), cancelled: signal.aborted },
       signal.aborted ? 'info' : 'warn'
     )
     throw error
@@ -1132,6 +1139,10 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     stopReason: undefined,
     stopDetails: undefined,
   }
+  const local = previous.error?.localMessage
+  const recover =
+    mode === 'compress' &&
+    (local?.key === 'replyContextTooLong' || local?.params?.recoverContext === 1)
   updateReply(id, reply)
   persist(id)
   void streamReply(
@@ -1144,8 +1155,8 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
       inherited: session.inherited,
       persona: session.persona,
     },
-    mode,
-    Number(previous.error?.localMessage?.params?.contextLimitTokens) || undefined
+    recover ? 'recover' : mode,
+    Number(local?.params?.contextLimitTokens) || undefined
   )
 }
 
@@ -1560,25 +1571,31 @@ const streamReply = async (
         connection ??= resolveConnection(initial.connection, initial.model)
         if (checkPressure) {
           checkPressure = false
-          const plan = planCompression(
+          const estimate = planCompression(
             rounds,
             summary,
             connection,
             { ...original, system: initial.systemPrompt ?? original.persona?.prompt },
             reportedLimit
           )
+          // The service can expand a document far beyond the size seen in this app.
+          // When it has already rejected the request, replace all earlier turns with the summary.
+          const recovering = mode === 'recover'
+          const plan = recovering ? { ...estimate, end: rounds.length } : estimate
           const canReduce = plan.end > plan.start
+          if (mode === 'compress' && !canReduce) {
+            throw new ApiError('protocol', { key: 'compressionUnavailable' })
+          }
           if (
-            mode === 'compress' ||
-            (mode !== 'send' && plan.near && !plan.currentTooLarge && canReduce)
+            canReduce &&
+            (recovering ||
+              mode === 'compress' ||
+              (mode === 'ask' && plan.near && !plan.currentTooLarge))
           ) {
-            if (mode !== 'compress' && !useSettings.getState().autoCompress) {
+            if (mode === 'ask' && !useSettings.getState().autoCompress) {
               throw new ApiError('protocol', { key: 'compressionSuggested' })
             }
             compressionAttempted = true
-            if (!canReduce) {
-              throw new ApiError('protocol', { key: 'compressionUnavailable' })
-            }
             try {
               summary = await compressRounds(
                 sessionId,
@@ -1597,7 +1614,15 @@ const streamReply = async (
               ) {
                 throw error
               }
-              throw new ApiError('protocol', { key: 'compressionFailed' })
+              throw new ApiError('protocol', {
+                key: 'compressionFailed',
+                params: recovering
+                  ? {
+                      recoverContext: 1,
+                      ...(reportedLimit ? { contextLimitTokens: reportedLimit } : {}),
+                    }
+                  : undefined,
+              })
             }
           }
           if (summary) {
@@ -1654,6 +1679,12 @@ const streamReply = async (
           messagesCount: messages.length,
           bodyBytes: new Blob([JSON.stringify(messages)]).size,
           omittedFiles: omitted.size,
+          compressedRounds: summary?.coveredRounds ?? 0,
+          currentFiles: prepared.question.files.length,
+          historyFiles: contextRounds(prepared.history, prepared.inherited).reduce(
+            (total, [question]) => total + question.files.length,
+            0
+          ),
         })
         const events =
           connection.kind === 'custom'
@@ -1810,11 +1841,13 @@ const streamReply = async (
           }
           // Only the service can establish that a request without earlier turns is too large.
           // Attachment size estimates alone cannot tell whether reducing the history will help.
-          if (!rounds.length) {
+          if (!rounds.length || summary?.coveredRounds === rounds.length) {
             reply = settleReply(reply, 'error', Date.now(), {
               kind: 'protocol',
               message: '',
-              localMessage: { key: 'compressionInputLarge' },
+              localMessage: {
+                key: summary ? 'compressionStillTooLong' : 'compressionInputLarge',
+              },
             })
             break
           }
@@ -1825,7 +1858,7 @@ const streamReply = async (
             plan.end > plan.start
           ) {
             checkPressure = true
-            mode = 'compress'
+            mode = 'recover'
             continue
           }
           if (reportedLimit) {

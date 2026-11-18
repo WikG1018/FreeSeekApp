@@ -487,6 +487,8 @@ export const en = {
   compressionRetry: 'Compress history and retry',
   compressionInputLarge:
     'The current message or its attachments exceed the available context. Split the message or attachments and try again.',
+  compressionStillTooLong:
+    'The summary and your current message and attachments still exceed the model limit. Shorten the message or split the attachment and send it again.',
   compressionUnavailable: 'There is no earlier history to compress in this conversation.',
   compressionFailed:
     'Could not complete the summary. Try compressing again or send without compressing.',
