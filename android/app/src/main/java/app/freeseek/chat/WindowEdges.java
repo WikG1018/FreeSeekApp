@@ -19,6 +19,7 @@ final class WindowEdges {
     private final Window window;
     private final Bridge bridge;
     private Insets safe;
+    private boolean imeOpen;
     private String lastScript;
 
     WindowEdges(Window window, Bridge bridge) {
@@ -51,6 +52,7 @@ final class WindowEdges {
                     view.getPaddingLeft() != 0 || view.getPaddingRight() != 0) {
                 view.setPadding(0, 0, 0, keyboardPadding);
             }
+            imeOpen = keyboardPadding > 0;
             safe = Insets.of(system.left, system.top, system.right, keyboardPadding == 0 ? system.bottom : 0);
             publish(false);
             // Chromium 139+ 还会按 IME 自动缩小视觉视口，清零已处理的距离以免重复留白。
@@ -76,8 +78,11 @@ final class WindowEdges {
         String script = String.format(Locale.US,
             "(function(){var s=document.documentElement.style;" +
             "s.setProperty('--fs-native-top','%.2fpx');s.setProperty('--fs-native-bottom','%.2fpx');" +
-            "s.setProperty('--fs-native-left','%.2fpx');s.setProperty('--fs-native-right','%.2fpx');})()",
-            safe.top / density, safe.bottom / density, safe.left / density, safe.right / density);
+            "s.setProperty('--fs-native-left','%.2fpx');s.setProperty('--fs-native-right','%.2fpx');" +
+            "if(%b){document.documentElement.setAttribute('data-ime-open','');}" +
+            "else{document.documentElement.removeAttribute('data-ime-open');}})()",
+            safe.top / density, safe.bottom / density, safe.left / density, safe.right / density,
+            imeOpen);
         if (newDocument || !script.equals(lastScript)) {
             lastScript = script;
             bridge.getWebView().evaluateJavascript(script, null);

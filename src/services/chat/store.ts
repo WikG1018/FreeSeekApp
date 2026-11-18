@@ -136,6 +136,7 @@ type ChatState = {
   sessionSaveErrors: Record<string, boolean>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
+  targetMessageId: string | null
   /** 对话接续：待带入下一个新会话的来源上下文快照；null 表示未启用 */
   inheritFrom: InheritedContext | null
   /** 正在生成回复的会话 */
@@ -152,6 +153,7 @@ export const useChatStore = create<ChatState>(() => ({
   sessionLoadErrors: {},
   sessionSaveErrors: {},
   activeId: null,
+  targetMessageId: null,
   inheritFrom: null,
   streaming: {},
   compressing: {},
@@ -533,6 +535,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionLoadErrors: {},
       sessionSaveErrors: {},
       activeId: null,
+      targetMessageId: null,
       inheritFrom: null,
     })
     return summaries.length
@@ -552,7 +555,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
 export const newChat = () => {
   if (!get().importingHistory) {
     inheritSequence += 1
-    set({ activeId: null, inheritFrom: null })
+    set({ activeId: null, targetMessageId: null, inheritFrom: null })
     trimSessionCache()
   }
 }
@@ -587,6 +590,7 @@ export const startInheritSession = (id: string) => {
         contextSummary: currentContextSummary(session),
       },
       activeId: null,
+      targetMessageId: null,
     })
     trimSessionCache()
   }
@@ -607,13 +611,19 @@ export const cancelInherit = () => {
   set({ inheritFrom: null })
 }
 
-export const selectSession = (id: string) => {
+export const selectSession = (id: string, messageId?: string) => {
   if (!get().importingHistory && get().sessions.some((session) => session.id === id)) {
     inheritSequence += 1
     touchSession(id)
-    set({ activeId: id, inheritFrom: null })
+    set({ activeId: id, targetMessageId: messageId ?? null, inheritFrom: null })
     void ensureSessionLoaded(id)
     trimSessionCache()
+  }
+}
+
+export const clearMessageTarget = (sessionId: string, messageId: string) => {
+  if (get().activeId === sessionId && get().targetMessageId === messageId) {
+    set({ targetMessageId: null })
   }
 }
 
@@ -702,6 +712,7 @@ const removeSessionData = async (id: string): Promise<boolean> => {
         Object.entries(state.sessionSaveErrors).filter(([key]) => key !== id)
       ),
       activeId: state.activeId === id ? null : state.activeId,
+      targetMessageId: state.activeId === id ? null : state.targetMessageId,
       inheritFrom: state.inheritFrom?.fromId === id ? null : state.inheritFrom,
     }))
     return true

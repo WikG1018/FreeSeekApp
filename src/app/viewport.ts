@@ -58,6 +58,7 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
       frame.style.removeProperty('--app-viewport-height')
       frame.style.removeProperty('--app-viewport-top')
       frame.removeAttribute('data-ime-compact')
+      frame.removeAttribute('data-ime-open')
     }
     const update = () => {
       // 双指缩放由浏览器处理，保持当前布局尺寸。
@@ -78,6 +79,7 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
         'data-ime-compact',
         (viewport?.height ?? innerHeight) / layoutScale < 260
       )
+      frame.toggleAttribute('data-ime-open', innerHeight - (viewport?.height ?? innerHeight) >= 80)
     }
     const scheduleFrame = () => {
       cancelAnimationFrame(animationFrame)

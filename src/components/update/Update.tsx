@@ -10,7 +10,7 @@ import {
   useUpdate,
 } from '../../services/update.js'
 import { Button } from '../base/Button.js'
-import { IconUploadOutline14, IconChevronRightOutline14 } from '../base/icons.js'
+import { IconUploadOutline14 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import styles from './Update.module.css'
@@ -44,6 +44,10 @@ export const SidebarUpdate = () => {
         : error === 'download-failed'
           ? t('updateRetryDownload')
           : t('updateViewNotes')
+  const label =
+    status === 'downloading'
+      ? detail
+      : `${t(status === 'ready' ? 'updateSidebarReady' : 'updateSidebarLabel')} v${release.version}`
   return (
     <>
       <button
@@ -51,16 +55,14 @@ export const SidebarUpdate = () => {
         data-testid="sidebar-update"
         className={styles.sidebar}
         aria-haspopup="dialog"
+        aria-label={t('updateSidebarAvailable', { version: release.version }) + ' · ' + detail}
+        title={detail}
         onClick={() => setOpen(true)}
       >
         <span className={styles.sidebarIcon} aria-hidden>
           <IconUploadOutline14 />
         </span>
-        <span className={styles.sidebarText}>
-          <strong>{t('updateNewTitle', { version: release.version })}</strong>
-          <small>{detail}</small>
-        </span>
-        <IconChevronRightOutline14 />
+        <span className={styles.sidebarText}>{label}</span>
         {status === 'downloading' && percent >= 0 && (
           <span className={styles.sidebarBar} aria-hidden>
             <span className={styles.sidebarBarFill} style={{ width: percent + '%' }} />

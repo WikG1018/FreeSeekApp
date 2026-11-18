@@ -56,13 +56,34 @@
 .item:focus-within .action {
   display: flex;
 }
-.title {
+.copy {
   flex: 1;
   min-width: 0;
+}
+.title,
+.excerpt {
+  display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.title {
   line-height: 18px;
+}
+.item.withExcerpt {
+  height: auto;
+  min-height: 56px;
+}
+.excerpt {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--fs-secondary-text);
+}
+.excerpt mark {
+  color: var(--fs-accent-text);
+  background: var(--fs-accent-wash);
+  font-weight: 600;
 }
 
 .pin {

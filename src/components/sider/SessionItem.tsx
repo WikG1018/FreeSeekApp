@@ -21,15 +21,18 @@ import { IconButton } from '../base/IconButton.js'
 import { Menu } from '../base/Menu.js'
 import { showToast } from '../base/toastState.js'
 import { closeMobileSider } from './mobileSiderState.js'
+import type { MessageMatch } from './useSessionSearch.js'
 import styles from './SessionItem.module.css'
 
 export const SessionItem = memo(function SessionItem({
   session,
   active,
+  match,
   onDelete,
 }: {
   session: SessionSummary
   active: boolean
+  match?: MessageMatch
   onDelete: () => void
 }) {
   const t = useTranslate()
@@ -62,14 +65,17 @@ export const SessionItem = memo(function SessionItem({
   }
 
   return (
-    <div className={clsx(styles.item, active && styles.active)} data-session-id={session.id}>
+    <div
+      className={clsx(styles.item, active && styles.active, match && styles.withExcerpt)}
+      data-session-id={session.id}
+    >
       <button
         type="button"
         className={styles.openSession}
         data-sider-swipe-row
         aria-current={active ? 'page' : undefined}
         onClick={() => {
-          selectSession(session.id)
+          selectSession(session.id, match?.messageId)
           closeMobileSider()
         }}
       >
@@ -78,7 +84,16 @@ export const SessionItem = memo(function SessionItem({
             <IconPinOutline16 />
           </span>
         )}
-        <span className={styles.title}>{displayTitle}</span>
+        <span className={styles.copy}>
+          <span className={styles.title}>{displayTitle}</span>
+          {match && (
+            <span className={styles.excerpt}>
+              {match.before}
+              <mark>{match.keyword}</mark>
+              {match.after}
+            </span>
+          )}
+        </span>
       </button>
       <div className={styles.action} onClick={(event) => event.stopPropagation()}>
         <Menu

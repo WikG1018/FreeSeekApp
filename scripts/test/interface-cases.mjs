@@ -193,7 +193,7 @@ export const runInterfaceCases = async ({ run }) => {
       const rect = await drawer.boundingBox()
       assert.equal(rect.y, 0)
       assert.equal(rect.height, 844)
-      const first = await drawer.getByRole('button', { name: '收起边栏' }).boundingBox(),
+      const first = await drawer.getByRole('searchbox').boundingBox(),
         last = await drawer.getByRole('button', { name: '打赏开发者' }).boundingBox()
       assert.ok(first.y >= 41 && last.y + last.height <= 811)
       await drawer.getByRole('button', { name: '更多', exact: true }).first().click()
@@ -679,9 +679,9 @@ export const runInterfaceCases = async ({ run }) => {
       const calls = () => page.evaluate(() => window.__updateCalls)
       assert.deepEqual(await calls(), { download: 0, install: 0 })
       await page.getByRole('button', { name: '打开边栏', exact: true }).click()
-      const notice = page.getByTestId('sidebar-update'),
+      const notice = page.getByTestId('sider-header').getByTestId('sidebar-update'),
         notes = page.getByRole('dialog', { name: '版本 v99.2.1 更新内容', exact: true })
-      assert.match(await notice.innerText(), /v99.2.1/)
+      assert.equal(await notice.innerText(), '更新 v99.2.1')
       await notice.click()
       assert.equal(await notes.getByRole('listitem').count(), 2)
       assert.deepEqual(await calls(), { download: 0, install: 0 })

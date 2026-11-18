@@ -74,12 +74,123 @@ export const runNavigationCases = async ({ run }) => {
       await page.waitForFunction(
         () => document.querySelectorAll('[data-session-id]').length === 160
       )
-      await page.getByPlaceholder('搜索对话标题…').fill('会话 1255')
+      await page.getByRole('searchbox', { name: '搜索标题和聊天正文' }).fill('会话 1255')
       await page.waitForFunction(() => document.querySelectorAll('[data-session-id]').length === 1)
       assert.equal(
         await page.locator('[data-session-id]').first().getAttribute('data-session-id'),
         'batch-1255'
       )
+    }
+  )
+  await run(
+    'sidebar searches uncached message text and opens the result without mounting a long conversation',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const history = Array.from({ length: 160 }, (_, index) =>
+          index % 2 === 0
+            ? f.user('message-' + index, index === 4 ? '书单关键字 海边书店' : '旧问题 ' + index)
+            : f.assistant(
+                'message-' + index,
+                index === 5 ? '原文里有 A+B 这个记号。' : '旧回复 ' + index,
+                index === 39 ? { status: 'stopped' } : {}
+              )
+        )
+        await a.seed([
+          f.session({ id: 'long-body', title: '已存档的长对话', messages: history }),
+          f.session({ id: 'title-only', title: 'A+B 的标题', messages: [] }),
+          f.session({
+            id: 'irrelevant',
+            title: '没有匹配',
+            messages: [f.user('different', '这里是 abb 而不是带加号的短语')],
+          }),
+        ])
+        a.store.newChat()
+        a.store.useChatStore.setState({ sessionCache: {} })
+      })
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const drawer = page.getByRole('dialog', { name: '历史对话', exact: true })
+      const field = drawer.getByRole('searchbox')
+      const body = drawer.locator('[data-session-id="long-body"]')
+      await field.fill('海边书店')
+      await body.locator('mark').getByText('海边书店', { exact: true }).waitFor()
+      assert.equal(await drawer.locator('[data-session-id]').count(), 1)
+      // Legacy Android input methods can keep Latin text in composition until the user accepts it.
+      await field.evaluate((input) => {
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+        const value = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+        value.set.call(input, 'a+b')
+        input.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            isComposing: true,
+            inputType: 'insertCompositionText',
+          })
+        )
+      })
+      await body.locator('mark').getByText('A+B', { exact: true }).waitFor()
+      assert.equal(await drawer.locator('[data-session-id]').count(), 2)
+      assert.equal(
+        await page.evaluate(
+          () => Object.keys(window.__audit.store.useChatStore.getState().sessionCache).length
+        ),
+        0
+      )
+      await body.getByRole('button', { name: /已存档的长对话/ }).click()
+      await drawer.waitFor({ state: 'hidden' })
+      const reply = page.locator('[data-message-id="message-5"]')
+      await reply.waitFor()
+      assert.ok(
+        await reply.evaluate((element) => {
+          const top = element.getBoundingClientRect().top
+          return top >= 0 && top < innerHeight / 2
+        })
+      )
+      assert.ok((await page.locator('[data-message-id]').count()) <= 40)
+      assert.equal(await page.getByRole('button', { name: '继续生成', exact: true }).count(), 0)
+      await page.getByRole('button', { name: '回到最新消息', exact: true }).click()
+      await page.locator('[data-message-id="message-159"]').waitFor()
+      assert.ok((await page.locator('[data-message-id]').count()) <= 40)
+    }
+  )
+
+  await run(
+    'sidebar search gives the keyboard space and restores footer controls after dismissal',
+    async (page) => {
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const drawer = page.getByRole('dialog', { name: '历史对话', exact: true })
+      const footer = drawer.getByTestId('sider-footer')
+      const field = drawer.getByRole('searchbox')
+      await footer.waitFor()
+      assert.equal(await drawer.getByRole('button', { name: '收起边栏', exact: true }).count(), 0)
+      assert.equal(await drawer.getByTestId('sidebar-update').count(), 0)
+      await field.fill('仍在搜索')
+      await page.evaluate(() => {
+        const viewport = window.visualViewport
+        const fullHeight = viewport.height
+        Object.defineProperty(viewport, 'height', {
+          configurable: true,
+          get: () => (window.__imeOpen ? 210 : fullHeight),
+        })
+        window.__imeOpen = true
+        viewport.dispatchEvent(new Event('resize'))
+      })
+      await footer.waitFor({ state: 'hidden' })
+      const metrics = await drawer.getByTestId('sider-list').evaluate((node) => ({
+        height: node.clientHeight,
+        bottom: node.getBoundingClientRect().bottom,
+        visible: window.visualViewport.height,
+      }))
+      assert.ok(metrics.height >= 75, JSON.stringify(metrics))
+      assert.ok(metrics.bottom <= metrics.visible + 1)
+      await page.evaluate(() => {
+        window.__imeOpen = false
+        visualViewport.dispatchEvent(new Event('resize'))
+      })
+      await footer.waitFor()
+      assert.equal(await field.inputValue(), '仍在搜索')
+      assert.ok(await field.evaluate((element) => element === document.activeElement))
     }
   )
   await run(

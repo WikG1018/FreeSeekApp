@@ -8,7 +8,11 @@ import {
   selectVersion as selectBranch,
   type MessageVersions,
 } from '../../services/chat/branches.js'
-import { selectMessageVersion, useChatStore } from '../../services/chat/store.js'
+import {
+  clearMessageTarget,
+  selectMessageVersion,
+  useChatStore,
+} from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { AssistantMessage } from './AssistantMessage.js'
@@ -35,7 +39,13 @@ import { logEvent } from '../../services/diagnostics/log.js'
 
 /** 距底部小于该值时视为在底部，流式内容增长时跟随 */
 const STICKY_THRESHOLD = 40
+const HISTORY_PAGE_SIZE = 40
 const EMPTY_VERSIONS: MessageVersions = { ids: [], index: -1 }
+type HistoryWindow = {
+  sessionId: string
+  count: number
+  through?: { end: number; latest?: string }
+}
 
 export const MessageList = ({
   session,
@@ -58,14 +68,31 @@ export const MessageList = ({
   const [atBottom, setAtBottom] = useState(true)
   const scrolledRef = useRef(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
-  const allMessages = getVisibleMessages(session)
-  const [historyWindow, setHistoryWindow] = useState({ sessionId: session.id, count: 40 })
-  const visibleCount = historyWindow.sessionId === session.id ? historyWindow.count : 40
-  const visibleStart = Math.max(0, allMessages.length - visibleCount)
-  const messages = allMessages.slice(visibleStart)
+  const allMessages = useMemo(() => getVisibleMessages(session), [session])
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindow>({
+    sessionId: session.id,
+    count: HISTORY_PAGE_SIZE,
+  })
+  const target = useChatStore((state) =>
+    state.activeId === session.id ? state.targetMessageId : null
+  )
+  const targetIndex = target ? allMessages.findIndex((message) => message.id === target) : -1
+  const latest = allMessages.at(-1)?.id
+  const windowForSession = historyWindow.sessionId === session.id ? historyWindow : null
+  const through =
+    windowForSession?.through?.latest === latest ? windowForSession?.through : undefined
+  const visibleEnd =
+    targetIndex >= 0
+      ? Math.min(allMessages.length, Math.max(HISTORY_PAGE_SIZE, targetIndex + 21))
+      : (through?.end ?? allMessages.length)
+  const visibleCount =
+    targetIndex >= 0 ? HISTORY_PAGE_SIZE : (windowForSession?.count ?? HISTORY_PAGE_SIZE)
+  const visibleStart = Math.max(0, visibleEnd - visibleCount)
+  const showingEarlier = visibleEnd < allMessages.length
+  const messages = allMessages.slice(visibleStart, visibleEnd)
   const earlierScroll = useRef<{ top: number; height: number } | null>(null)
-  useEffect(() => {
-    setHistoryWindow({ sessionId: session.id, count: 40 })
+  useLayoutEffect(() => {
+    setHistoryWindow({ sessionId: session.id, count: HISTORY_PAGE_SIZE })
   }, [session.id])
   useLayoutEffect(() => {
     const anchor = earlierScroll.current,
@@ -102,9 +129,13 @@ export const MessageList = ({
       return
     }
     stickyRef.current = true
+    if (showingEarlier) {
+      setHistoryWindow({ sessionId: session.id, count: HISTORY_PAGE_SIZE })
+      return
+    }
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     setAtBottom(true)
-  }, [])
+  }, [session.id, showingEarlier])
 
   // 内容、键盘和输入框高度变化时，继续遵循当前跟随状态。
   useLayoutEffect(() => {
@@ -136,6 +167,30 @@ export const MessageList = ({
     stickyRef.current = true
     scrollToBottom()
   }, [session.id, lastMessageId, scrollToBottom])
+
+  useLayoutEffect(() => {
+    if (!target) {
+      return
+    }
+    const scroll = scrollRef.current
+    const found =
+      targetIndex >= 0 &&
+      scroll?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(target)}"]`)
+    if (found && scroll) {
+      stickyRef.current = false
+      setHistoryWindow({
+        sessionId: session.id,
+        count: HISTORY_PAGE_SIZE,
+        through: showingEarlier ? { end: visibleEnd, latest } : undefined,
+      })
+      const inset = Number.parseFloat(getComputedStyle(scroll).scrollPaddingTop) || 0
+      scroll.scrollTop +=
+        found.getBoundingClientRect().top - scroll.getBoundingClientRect().top - inset
+      scrollTopRef.current = scroll.scrollTop
+      setAtBottom(scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < STICKY_THRESHOLD)
+    }
+    clearMessageTarget(session.id, target)
+  }, [session.id, target, targetIndex, latest, showingEarlier, visibleEnd])
 
   useEffect(closeSearchPanel, [session.id, lastMessageId])
 
@@ -197,8 +252,8 @@ export const MessageList = ({
     return () => el.removeEventListener('scroll', onScroll)
   }, [isMobile, scrollToBottom, onScrolledChange])
 
-  const lastIndex = messages.length - 1
-  const uploadRetryId = getUploadRetryId(messages, streaming)
+  const latestIndex = allMessages.length - 1
+  const uploadRetryId = getUploadRetryId(allMessages, streaming)
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
       <div className={styles.container}>
@@ -218,7 +273,11 @@ export const MessageList = ({
                     totalMessages: allMessages.length,
                     shownMessages: visibleCount,
                   })
-                  setHistoryWindow({ sessionId: session.id, count: visibleCount + 40 })
+                  setHistoryWindow({
+                    sessionId: session.id,
+                    count: visibleCount + HISTORY_PAGE_SIZE,
+                    through,
+                  })
                 }}
               >
                 {t('loadEarlierMessages', { count: visibleStart })}
@@ -232,7 +291,7 @@ export const MessageList = ({
                   message={message}
                   retryUploadId={uploadRetryId}
                   isFirst={visibleStart + index === 0}
-                  isLast={index === lastIndex || index === lastIndex - 1}
+                  isLast={visibleStart + index >= latestIndex - 1}
                   busy={streaming}
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}
@@ -242,8 +301,8 @@ export const MessageList = ({
                   key={message.id}
                   sessionId={session.id}
                   message={message}
-                  isLast={index === lastIndex}
-                  streaming={streaming && index === lastIndex}
+                  isLast={visibleStart + index === latestIndex}
+                  streaming={streaming && visibleStart + index === latestIndex}
                   busy={streaming}
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}
@@ -253,11 +312,11 @@ export const MessageList = ({
           </div>
         </div>
         {footer}
-        {messages.length > 0 && !atBottom ? (
+        {messages.length > 0 && (showingEarlier || !atBottom) ? (
           <button
             type="button"
             className={styles.toBottom}
-            aria-label={t('backToBottom')}
+            aria-label={t(showingEarlier ? 'backToLatestMessage' : 'backToBottom')}
             onClick={goToBottom}
           >
             <IconChevronDownOutline14 />

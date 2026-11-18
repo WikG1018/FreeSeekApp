@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   IconChevronRightOutline14,
@@ -22,29 +22,33 @@ import { DonateDialog } from '../donate/DonateDialog.js'
 import { SidebarUpdate } from '../update/Update.js'
 import { closeMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
+import { useSessionSearch } from './useSessionSearch.js'
 import styles from './Sider.module.css'
 
-/** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
+/** 展开的会话侧边栏，移动端放在由手势和系统返回控制的抽屉里。 */
 export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const t = useTranslate()
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
   const [now, setNow] = useState(Date.now)
   const [query, setQuery] = useState('')
+  const keyword = query.trim()
+  const composing = useRef(false)
+  const search = useSessionSearch(sessions, keyword)
+  const listRef = useRef<HTMLDivElement>(null)
   const [visibleCount, setVisibleCount] = useState(80)
-  useEffect(() => setVisibleCount(80), [query])
-  const filteredSessions = useMemo(() => {
-    const keyword = query.trim().toLowerCase()
-    return keyword
-      ? sessions.filter((session) => (session.title || '').toLowerCase().includes(keyword))
-      : sessions
-  }, [sessions, query])
+  useLayoutEffect(() => {
+    setVisibleCount(80)
+    if (listRef.current) {
+      listRef.current.scrollTop = 0
+    }
+  }, [keyword])
   const ordered = useMemo(
     () => [
-      ...filteredSessions.filter((session) => session.pinned),
-      ...filteredSessions.filter((session) => !session.pinned),
+      ...search.sessions.filter((session) => session.pinned),
+      ...search.sessions.filter((session) => !session.pinned),
     ],
-    [filteredSessions]
+    [search.sessions]
   )
   const groups = useMemo(
     () => groupSessions(ordered.slice(0, visibleCount), now, t),
@@ -81,32 +85,44 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
 
   return (
     <div className={clsx(styles.sider, mobile && styles.mobile)}>
-      <div className={styles.top}>
+      <header className={styles.top} data-testid="sider-header">
+        {!mobile && (
+          <IconButton
+            size="m"
+            hitArea
+            icon={<IconPanelLeftOutline16 />}
+            tooltip={t('collapseSiderbarButton')}
+            tooltipPlacement="bottom"
+            onClick={() => setSiderCollapsed(true)}
+          />
+        )}
         <div className={styles.appName}>{t('appName')}</div>
-        <IconButton
-          size="m"
-          hitArea
-          icon={<IconPanelLeftOutline16 />}
-          tooltip={t('collapseSiderbarButton')}
-          tooltipPlacement="bottom"
-          onClick={() => (mobile ? closeMobileSider() : setSiderCollapsed(true))}
+        <SidebarUpdate />
+      </header>
+      <div className={styles.searchBox}>
+        <span className={styles.searchIcon} aria-hidden="true">
+          <IconSearchOutline16 />
+        </span>
+        <input
+          className={styles.searchInput}
+          type="search"
+          aria-label={t('siderSearchPlaceholder')}
+          placeholder={t('siderSearchPlaceholder')}
+          enterKeyHint="search"
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          onCompositionStart={() => (composing.current = true)}
+          onCompositionEnd={(event) => {
+            composing.current = false
+            setQuery(event.currentTarget.value)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !composing.current && !event.nativeEvent.isComposing) {
+              event.currentTarget.blur()
+            }
+          }}
         />
       </div>
-      {mobile ? (
-        <div className={styles.searchBox}>
-          <span className={styles.searchIcon}>
-            <IconSearchOutline16 />
-          </span>
-          <input
-            className={styles.searchInput}
-            type="search"
-            aria-label={t('siderSearchPlaceholder')}
-            placeholder={t('siderSearchPlaceholder')}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-      ) : null}
       <button
         type="button"
         className={styles.newChat}
@@ -120,9 +136,9 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </span>
         {t('newChat')}
       </button>
-      <SidebarUpdate />
       <div className={styles.listWrap}>
         <div
+          ref={listRef}
           className={styles.list}
           data-testid="sider-list"
           onScroll={(event) => {
@@ -135,9 +151,9 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             }
           }}
         >
-          {groups.length === 0 && (
+          {groups.length === 0 && !search.searching && !search.failed && (
             <p className={styles.emptyList} role="status">
-              {t(query.trim() ? 'siderEmptySearch' : 'siderEmptyHistory')}
+              {t(keyword ? 'siderEmptySearch' : 'siderEmptyHistory')}
             </p>
           )}
           {groups.map((group) => (
@@ -148,6 +164,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
                   key={session.id}
                   session={session}
                   active={session.id === activeId}
+                  match={search.matches?.get(session.id)}
                   onDelete={() => setDeleting(session)}
                 />
               ))}
@@ -157,6 +174,11 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             <button type="button" className={styles.showMore} onClick={showMore}>
               {t('sessionShowMore')}
             </button>
+          )}
+          {(search.searching || search.failed) && (
+            <p className={styles.emptyList} role="status">
+              {t(search.searching ? 'siderSearching' : 'siderSearchFailed')}
+            </p>
           )}
         </div>
       </div>

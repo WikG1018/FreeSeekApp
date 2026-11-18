@@ -2,11 +2,11 @@
   position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
+  max-width: 62%;
+  min-width: 0;
   box-sizing: border-box;
-  min-height: 52px;
-  margin: 0 0 8px;
-  padding: 7px 10px;
+  min-height: 44px;
+  padding: 0 12px;
   border: 1px solid var(--fs-accent-line);
   border-radius: 12px;
   background: var(--fs-accent-wash);
@@ -16,43 +16,33 @@
   cursor: pointer;
   overflow: hidden;
 }
+.sidebar:hover {
+  border-color: var(--fs-focus);
+}
 .sidebar:focus-visible {
   outline: 2px solid var(--fs-focus);
   outline-offset: -2px;
 }
 .sidebarIcon {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
   flex: none;
-  width: 28px;
-  height: 28px;
-  margin-right: 9px;
-  border-radius: 8px;
-  background: var(--fs-settings-surface);
+  margin-right: 7px;
 }
 .sidebarText {
-  flex: 1;
   min-width: 0;
-}
-.sidebarText strong,
-.sidebarText small {
-  display: block;
-  overflow-wrap: anywhere;
-}
-.sidebarText strong {
-  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
-.sidebarText small,
 .downloadStatus {
   font-size: 12px;
   line-height: 1.5;
   color: var(--fs-secondary-text);
-}
-.sidebar > svg {
-  flex: none;
-  margin-left: 6px;
 }
 /* 下载进度条：贴在按钮底部 */
 .sidebarBar {
