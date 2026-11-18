@@ -38,7 +38,7 @@ Android 聊天页铺满屏幕，正文和侧边栏延伸到状态栏、导航栏
   <img src="docs/screenshots/immersive-dark.png" width="40%" alt="深色沉浸聊天" />
 </p>
 
-Android 10–17 兼容目标：使用 compileSdk/targetSdk 37，保留旧 WebView 兼容层。构建使用 JDK 21、AGP 9.2.1 与 Gradle 9.4.1。运行验证和具体边界见 [Android 10–17 自审记录](docs/reviews/2026-11-17-android10-17.md)、[模型与导入验收](docs/reviews/2026-11-18-models-personas-share.md)、[2.5.0 界面验收](docs/reviews/2026-11-18-ui-navigation.md)及 [2.6.0 正式版验收](docs/reviews/2026-11-18-v2.6.0-release.md)，系统版本覆盖不等同于全部厂商实机验收。
+Android 10–17 兼容目标：使用 compileSdk/targetSdk 37，保留旧 WebView 兼容层。构建使用 JDK 21、AGP 9.2.1 与 Gradle 9.4.1。运行验证和具体边界见 [Android 10–17 自审记录](docs/reviews/2026-11-17-android10-17.md)、[模型与导入验收](docs/reviews/2026-11-18-models-personas-share.md)、[2.5.0 界面验收](docs/reviews/2026-11-18-ui-navigation.md)、[2.6.0 正式版验收](docs/reviews/2026-11-18-v2.6.0-release.md)及 [2.6.1 输入区与键盘验收](docs/reviews/2026-11-18-v2.6.1-release.md)，系统版本覆盖不等同于全部厂商实机验收。
 
 文字草稿在本机自动保存，重启后可继续输入；未发送附件需要重新选择。录音/朗读在应用进入后台时停止。备份 JSON 分块解析，支持超过旧版 32MiB 限制的官方长会话；单条解压记录上限 128MiB，并限制结构复杂度，附件仍分块处理。导入时显示进度，完整校验并暂存成功后才替换原数据，失败保留原记录。
 
