@@ -166,17 +166,25 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       return
     }
 
-    const resolved = resolveSide(spaceAbove, spaceBelow, side, minSpace)
-    const available = Math.max(0, resolved === 'top' ? spaceAbove : spaceBelow)
-    // 内容比可用空间小时按内容收口，避免浮层留出多余空白
-    const height = Math.max(40, Math.min(maxHeight, available, floating.scrollHeight + 2))
+    const resolved = resolveSide(
+      spaceAbove,
+      spaceBelow,
+      side,
+      Math.min(minSpace, floating.scrollHeight + 2)
+    )
+    const overlap = Math.max(spaceAbove, spaceBelow) < Math.min(116, floating.scrollHeight + 2)
+    const available = overlap
+      ? bounds.bottom - bounds.top
+      : resolved === 'top'
+        ? spaceAbove
+        : spaceBelow
+    const limit = Math.max(0, Math.min(maxHeight, available))
+    const height = Math.min(floating.offsetHeight, limit)
+    const natural = resolved === 'top' ? rect.top - offset - height : rect.bottom + offset
     applyPosition({
-      top:
-        resolved === 'top'
-          ? Math.max(bounds.top, rect.top - offset - height)
-          : rect.bottom + offset,
-      right: Math.max(window.innerWidth - bounds.right, window.innerWidth - rect.right),
-      maxHeight: height,
+      top: Math.max(bounds.top, Math.min(natural, bounds.bottom - height)),
+      left: alignLeft(rect, floating.offsetWidth, align, alignOffset, bounds),
+      maxHeight: limit,
     })
   }, [align, alignOffset, applyPosition, floatingRef, getAnchor, maxHeight, minSpace, offset, side])
 
@@ -207,10 +215,14 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     }
     window.addEventListener('scroll', update, { capture: true, passive: true })
     window.addEventListener('resize', update, { passive: true })
+    window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
     return () => {
       observer.disconnect()
       window.removeEventListener('scroll', update, { capture: true })
       window.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
     }
   }, [floatingRef, getAnchor, open, update])
 
@@ -228,10 +240,12 @@ export const useDismiss = (
   open: boolean,
   refs: RefObject<HTMLElement | null>[],
   onDismiss: () => void,
-  { captureEscape = false }: { captureEscape?: boolean } = {}
+  { captureEscape = false, onEscape }: { captureEscape?: boolean; onEscape?: () => void } = {}
 ) => {
   const onDismissRef = useRef(onDismiss)
   onDismissRef.current = onDismiss
+  const escapeRef = useRef(onEscape)
+  escapeRef.current = onEscape
   const refsRef = useRef(refs)
   refsRef.current = refs
 
@@ -251,9 +265,10 @@ export const useDismiss = (
         return
       }
       if (captureEscape) {
+        event.preventDefault()
         event.stopPropagation()
       }
-      onDismissRef.current()
+      ;(escapeRef.current ?? onDismissRef.current)()
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown, captureEscape)

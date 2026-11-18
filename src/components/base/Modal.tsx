@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
 import { IconCloseOutline16 } from './icons.js'
+import { hasTransientPanel } from './transientPanel.js'
 import { IconButton } from './IconButton.js'
 import styles from './Modal.module.css'
 
@@ -23,7 +24,7 @@ export const closeTopModal = (): boolean => {
 }
 
 /** 退出动画时长：与 sheetOut/dialogOut 的 CSS 时长一致；reduced-motion 下动画瞬时完成 */
-const EXIT_MS = 200
+const EXIT_MS = 145
 
 /**
  * 遮罩 + 居中卡片（移动端为底部 Sheet），Esc / 点遮罩关闭。
@@ -39,6 +40,7 @@ export const Modal = ({
   centered = false,
   className,
   mainClassName,
+  onDismissStart,
   onClose,
 }: {
   title: ReactNode
@@ -53,6 +55,8 @@ export const Modal = ({
   className?: string
   /** 内容区的 class */
   mainClassName?: string
+  /** Called once when dismissal begins, before the visual exit finishes. */
+  onDismissStart?: () => void
   onClose: () => void
 }) => {
   const t = useTranslate()
@@ -61,6 +65,8 @@ export const Modal = ({
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const closingRef = useRef(false)
+  const closeTimer = useRef<number>()
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
 
   /** 播放退出动画后真正卸载；重复调用只生效一次 */
   const requestCloseRef = useRef(() => {})
@@ -69,8 +75,13 @@ export const Modal = ({
       return
     }
     closingRef.current = true
+    onDismissStart?.()
     setClosing(true)
-    window.setTimeout(() => onCloseRef.current(), EXIT_MS)
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onCloseRef.current()
+    } else {
+      closeTimer.current = window.setTimeout(() => onCloseRef.current(), EXIT_MS)
+    }
   }
 
   /** 打开前的焦点，关闭后还回去；键盘与读屏用户不会丢掉位置 */
@@ -104,10 +115,11 @@ export const Modal = ({
     const entry = { close: () => requestCloseRef.current() }
     openModals.push(entry)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (openModals.at(-1) !== entry) {
+      if (openModals.at(-1) !== entry || hasTransientPanel()) {
         return
       }
       if (event.key === 'Escape') {
+        event.preventDefault()
         requestCloseRef.current()
         return
       }
@@ -178,6 +190,7 @@ export const Modal = ({
             <IconButton
               className={styles.close}
               hitArea
+              disabled={!dismissible}
               tone="primary"
               icon={<IconCloseOutline16 />}
               aria-label={t('close')}

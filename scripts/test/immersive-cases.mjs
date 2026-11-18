@@ -71,12 +71,20 @@ export const runImmersiveCases = async ({ run }) => {
     }
   )
   await run(
-    'compact composer expands on attachment clicks and keeps every action usable with large text',
+    'attachment chooser preserves compact composer height and keeps every action usable with large text',
     async (page) => {
       await page.evaluate(() => window.__audit.settings.setApiKey('fixture'))
-      await page.getByRole('button', { name: '添加附件', exact: true }).click()
-      await page.getByRole('button', { name: '拍照', exact: true }).waitFor()
-      await page.locator('[data-testid="chat-composer"] button[aria-expanded="true"]').click()
+      const idleHeight = (await page.getByTestId('chat-composer').boundingBox()).height
+      const trigger = page.getByRole('button', { name: '添加附件', exact: true })
+      await trigger.click()
+      const panel = page.getByTestId('option-panel')
+      assert.equal(await panel.getByRole('button').count(), 3)
+      assert.equal((await page.getByTestId('chat-composer').boundingBox()).height, idleHeight)
+      const chooser = page.waitForEvent('filechooser')
+      await panel.getByRole('button', { name: '拍照', exact: true }).click()
+      assert.equal(await (await chooser).element().getAttribute('capture'), 'environment')
+      await panel.waitFor({ state: 'hidden' })
+      assert.ok(await trigger.evaluate((el) => document.activeElement === el))
       await page.setViewportSize({ width: 320, height: 720 })
       await page.evaluate(() => window.__audit.settings.setFontScale(1.25))
       await page.locator('textarea').fill('大字号输入测试')

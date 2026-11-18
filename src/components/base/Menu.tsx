@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useAnchoredPosition, useDismiss } from './anchored.js'
 import styles from './Menu.module.css'
+import { useTransientPanel } from './transientPanel.js'
 
 export type MenuOption = {
   key: string
@@ -13,15 +14,6 @@ export type MenuOption = {
 }
 
 /** 点击触发，向下展开；点外部或 Esc 关闭 */
-let dismissMenu: (() => void) | null = null
-export const closeActiveMenu = () => {
-  if (!dismissMenu) {
-    return false
-  }
-  dismissMenu()
-  return true
-}
-
 export const Menu = ({
   options,
   children,
@@ -40,27 +32,15 @@ export const Menu = ({
     close()
     anchorRef.current?.querySelector('button')?.focus({ preventScroll: true })
   }
-  useDismiss(open, [anchorRef, floatingRef], close)
+  useDismiss(open, [anchorRef, floatingRef], close, { captureEscape: true, onEscape: returnFocus })
+  useTransientPanel(open, (restore) => (restore ? returnFocus() : close()))
   useEffect(() => {
-    if (!open) {
-      return
+    if (open) {
+      floatingRef.current
+        ?.querySelector<HTMLElement>('[role="menuitem"]')
+        ?.focus({ preventScroll: true })
     }
-    const previous = dismissMenu
-    previous?.()
-    const dismiss = () => {
-      setOpen(false)
-      anchorRef.current?.querySelector('button')?.focus({ preventScroll: true })
-    }
-    dismissMenu = dismiss
-    floatingRef.current
-      ?.querySelector<HTMLElement>('[role="menuitem"]')
-      ?.focus({ preventScroll: true })
-    return () => {
-      if (dismissMenu === dismiss) {
-        dismissMenu = null
-      }
-    }
-  }, [open, anchorRef, floatingRef])
+  }, [open, floatingRef])
 
   return (
     <>

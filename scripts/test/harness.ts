@@ -108,6 +108,7 @@ import * as update from '../../src/services/update.js'
 import * as client from '../../src/services/api/client.js'
 import * as sse from '../../src/services/api/sse.js'
 import * as readAloud from '../../src/services/speech/readAloud.js'
+import * as searchPanel from '../../src/components/search/searchPanelState.js'
 import * as settingsDialog from '../../src/components/settings/settingsDialogState.js'
 import { toSessionFile } from '../../src/services/chat/history/toArchive.js'
 import { toLocalSession } from '../../src/services/chat/history/toLocal.js'
@@ -132,6 +133,7 @@ Object.assign(window, {
     sse,
     readAloud,
     settingsDialog,
+    searchPanel,
     toSessionFile,
     toLocalSession,
     exportArchive,

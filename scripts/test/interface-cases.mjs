@@ -156,4 +156,170 @@ export const runInterfaceCases = async ({ run }) => {
       assert.ok(heading.y >= 41)
     }
   )
+
+  await run(
+    'settings stays opaque throughout mobile enter and exit, including a quick reversal and reduced motion',
+    async (page) => {
+      const frames = await page.evaluate(async () => {
+        const state = window.__audit.settingsDialog
+        const capture = async (n) => {
+          const result = []
+          for (let i = 0; i < n; i++) {
+            await new Promise(requestAnimationFrame)
+            const body = document.querySelector('[data-settings-page]')
+            if (body) {
+              const shell = body.closest('[role=dialog]')
+              result.push({
+                x: shell.getBoundingClientRect().x,
+                alpha: [shell, body, shell.parentElement].map((el) => getComputedStyle(el).opacity),
+                scrim: getComputedStyle(shell.previousElementSibling).display,
+              })
+            }
+          }
+          return result
+        }
+        state.openSettings('home')
+        const enter = await capture(18)
+        state.closeSettings()
+        const exit = await capture(3)
+        state.openSettings('home')
+        const reverse = await capture(20)
+        return { enter, exit, reverse, open: state.hasSettingsOpen() }
+      })
+      for (const samples of [frames.enter, frames.exit, frames.reverse]) {
+        assert.ok(samples.length > 0)
+        for (const f of samples) {
+          assert.deepEqual(f.alpha, ['1', '1', '1'])
+          assert.equal(f.scrim, 'none')
+        }
+      }
+      assert.ok(frames.open)
+      assert.ok(Math.abs(frames.reverse.at(-1).x) < 1)
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.keyboard.press('Escape')
+      await page.locator('[data-settings-page]').waitFor({ state: 'detached' })
+    }
+  )
+
+  await run(
+    'settings options fit their field, support keyboard selection and close one layer at a time',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      const field = page
+        .locator('[data-settings-page=providers]')
+        .getByRole('button', { name: '接口协议', exact: true })
+      await field.click()
+      const panel = page.getByTestId('option-panel')
+      assert.equal(await panel.getByRole('option').count(), 4)
+      assert.ok((await panel.boundingBox()).height < 265)
+      await page.keyboard.press('End')
+      await page.keyboard.press('Enter')
+      assert.match(await field.textContent(), /Gemini/)
+      await field.click()
+      await page.keyboard.press('Escape')
+      await panel.waitFor({ state: 'detached' })
+      assert.equal(await field.evaluate((el) => document.activeElement === el), true)
+      assert.equal(await page.locator('[data-settings-page=providers]').isVisible(), true)
+    }
+  )
+
+  await run(
+    'donation switches QR in place, waits for explicit action and reports only system handoff',
+    async (page) => {
+      await page.evaluate(() => {
+        window.__payLaunches = []
+        window.open = (url) => {
+          window.__payLaunches.push(String(url))
+          return null
+        }
+      })
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const trigger = page.getByRole('button', { name: '打赏开发者', exact: true })
+      await trigger.click()
+      const donate = page.getByRole('dialog', { name: '打赏开发者', exact: true })
+      const qr = donate.getByRole('img', { name: /收款码$/ })
+      await donate.evaluate((el) =>
+        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished))
+      )
+      const wechat = await qr.getAttribute('src'),
+        box = await qr.boundingBox()
+      await donate.getByRole('radio', { name: '支付宝', exact: true }).check()
+      assert.notEqual(await qr.getAttribute('src'), wechat)
+      const next = await qr.boundingBox()
+      for (const k of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(box[k] - next[k]) < 1)
+      assert.deepEqual(await page.evaluate(() => window.__payLaunches), [])
+      await donate.getByRole('button', { name: '保存收款码并打开支付宝', exact: true }).click()
+      await donate.getByRole('status').getByText('已请求打开支付应用').waitFor()
+      assert.equal(await page.evaluate(() => window.__payLaunches.length), 1)
+      await page.keyboard.press('Escape')
+      await donate.waitFor({ state: 'detached' })
+      assert.ok(await trigger.isVisible())
+    }
+  )
+
+  await run(
+    'short mobile source lists take only their content height and long lists scroll inside the sheet',
+    async (page) => {
+      const open = async (count) =>
+        page.evaluate(
+          (n) =>
+            window.__audit.searchPanel.toggleSearchPanel(
+              'sources-' + n,
+              Array.from({ length: n }, (_, i) => ({
+                url: 'https://example.com/' + i,
+                title: '参考资料 ' + i,
+                siteName: 'Example',
+                publishedAt: null,
+                snippet: '检索到的资料摘要。',
+                siteIcon: null,
+                index: i + 1,
+              }))
+            ),
+          count
+        )
+      await open(1)
+      const sheet = page.getByRole('dialog', { name: '搜索结果', exact: true })
+      await sheet.waitFor()
+      assert.ok((await sheet.boundingBox()).height < 300)
+      await page.keyboard.press('Escape')
+      await sheet.waitFor({ state: 'hidden' })
+      await open(36)
+      await sheet.waitFor()
+      assert.ok((await sheet.boundingBox()).height < 650)
+      assert.ok(
+        await sheet.evaluate((root) =>
+          [...root.querySelectorAll('div')].some(
+            (el) =>
+              el.scrollHeight > el.clientHeight + 100 && getComputedStyle(el).overflowY === 'auto'
+          )
+        )
+      )
+    }
+  )
+
+  await run(
+    'large persona lists filter without resizing the composer or trapping the mobile keyboard',
+    async (page) => {
+      await page.setViewportSize({ width: 320, height: 600 })
+      await page.evaluate(() => {
+        for (let i = 0; i < 20; i++)
+          window.__audit.personas.addPersona('旅行笔记 ' + i, '记录途中看到的风景。')
+      })
+      const trigger = page.getByRole('button', { name: /选择新对话的人设/ })
+      await trigger.click()
+      const chooser = page.getByTestId('option-panel')
+      const full = await chooser.boundingBox()
+      assert.ok(full.height <= 355 && full.x >= 0 && full.x + full.width <= 321)
+      const search = chooser.getByRole('searchbox', { name: '筛选选项' })
+      await search.fill('旅行笔记 19')
+      assert.equal(await chooser.getByRole('option').count(), 1)
+      await search.fill('没有这个人设')
+      await chooser.getByRole('status').waitFor()
+      await search.fill('旅行笔记 19')
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+      await chooser.waitFor({ state: 'detached' })
+      assert.match(await trigger.textContent(), /旅行笔记 19/)
+    }
+  )
 }

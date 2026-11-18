@@ -55,22 +55,17 @@
   }
 }
 
-@media not all and (min-width: 768px) {
-  .panel {
-    position: fixed;
-    inset: 0;
-    z-index: 700;
-    width: auto;
-    max-width: none;
-    border-left: none;
-    /* 全屏面板：从右侧滑入，与抽屉的入场节奏一致 */
-    animation: panelIn var(--fs-duration-slow) var(--fs-ease-out) both;
-  }
+.mobileSources {
+  --search-view-card-secondary-color: var(--fs-secondary-text);
+  --search-view-card-title-font: 500 14px/22px var(--dsw-font-family);
+  max-height: 58vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-
-@keyframes panelIn {
-  from {
-    opacity: 0.4;
-    transform: translateX(20px);
-  }
+.mobileSources .item {
+  display: block;
+  margin: 0;
+  padding: 13px 0;
+  border-top: 1px solid var(--fs-line);
+  border-radius: 0;
 }

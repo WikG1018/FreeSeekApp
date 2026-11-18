@@ -178,10 +178,6 @@
   margin-top: 2px;
 }
 
-.donateHeart {
-  color: var(--fs-accent-pink);
-}
-
 .settings {
   display: flex;
   align-items: center;
@@ -404,13 +400,68 @@
 [data-ds-dark-theme] .mobile .sectionHeader {
   background: var(--dsw-static-neutral-bluish-900);
 }
-.mobile .donateHeart {
-  color: #c34268;
-}
-[data-ds-dark-theme] .mobile .donateHeart {
-  color: #f394b4;
-}
 
 :global([data-legacy-spacing]) .searchIcon {
   margin-right: 8px;
+}
+
+.bottom .support {
+  --support-ink: #a64046;
+  --support-wash: #fbe9e5;
+  background: var(--support-wash);
+  color: var(--support-ink);
+  padding-right: 12px;
+  transition:
+    background-color 0.15s,
+    transform 0.15s;
+}
+[data-ds-dark-theme] .bottom .support {
+  --support-ink: #ffb0a4;
+  --support-wash: #412b2d;
+}
+.support .settingsLabel,
+.support .donateHeart {
+  color: var(--support-ink);
+}
+.support .donateHeart svg {
+  width: 21px;
+  height: 21px;
+}
+.supportArrow {
+  display: flex;
+  margin-left: auto;
+  padding-left: 8px;
+  transition: transform 160ms var(--fs-ease-out);
+}
+.support:active {
+  transform: translateY(1px);
+}
+.support:active .donateHeart,
+.support:focus-visible .donateHeart {
+  animation: sendLove 330ms var(--fs-ease-out);
+}
+@media (hover: hover) {
+  .support:hover .donateHeart {
+    animation: sendLove 330ms var(--fs-ease-out);
+  }
+  .support:hover .supportArrow {
+    transform: translateX(2px);
+  }
+}
+@keyframes sendLove {
+  40% {
+    transform: translateY(-2px) rotate(-10deg) scale(1.1);
+  }
+  75% {
+    transform: rotate(3deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bottom .support,
+  .support .supportArrow,
+  .support .donateHeart {
+    animation: none !important;
+    transform: none !important;
+    transition: none;
+  }
 }

@@ -1,4 +1,3 @@
-import clsx from 'clsx'
 import {
   useEffect,
   useLayoutEffect,
@@ -15,6 +14,7 @@ import { useMobileViewport } from '../../app/viewport.js'
 import { listenMediaQuery } from '../../utils/mediaQuery.js'
 import { IconChevronLeftOutline16, IconCloseOutline16 } from '../base/icons.js'
 import { closeTopModal, hasOpenModal } from '../base/Modal.js'
+import { closeTransientPanel, hasTransientPanel } from '../base/transientPanel.js'
 import { useDialogFocus } from '../base/useDialogFocus.js'
 import {
   closeSettings,
@@ -30,7 +30,7 @@ import styles from './Settings.module.css'
 
 const wide = matchMedia('(min-width: 900px) and (min-height: 540px)')
 const subscribe = (notify: () => void) => listenMediaQuery(wide, notify)
-type Direction = 'forward' | 'back' | 'switch'
+type Direction = 'initial' | 'forward' | 'back' | 'switch'
 
 export const SettingsShell = ({
   children,
@@ -60,8 +60,15 @@ export const SettingsShell = ({
   const guard = useRef<((after: () => void) => void) | null>(null)
   const positions = useRef(new Map<SettingsPageId, number>())
   const restore = useRef<{ top: number; target?: SettingsPageId } | null>(null)
-  const [direction, setDirection] = useState<Direction>('forward')
-  useDialogFocus(dialog, () => !hasOpenModal())
+  const [direction, setDirection] = useState<Direction>('initial')
+  const [presented, setPresented] = useState(false)
+  useLayoutEffect(() => {
+    // 先确定屏外位置，下一帧由同一条 transition 进出，快速返回也从当前位置反向。
+    dialog.current?.getBoundingClientRect()
+    const frame = requestAnimationFrame(() => setPresented(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  useDialogFocus(dialog, () => !hasOpenModal() && !hasTransientPanel())
 
   const leave = (action: () => void) => {
     if (guard.current) {
@@ -111,7 +118,7 @@ export const SettingsShell = ({
   }, [page, wideLayout])
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && !hasOpenModal()) {
+      if (e.key === 'Escape' && !e.defaultPrevented && !hasOpenModal() && !hasTransientPanel()) {
         e.preventDefault()
         backRef.current()
       }
@@ -119,7 +126,7 @@ export const SettingsShell = ({
     document.addEventListener('keydown', key)
     const sub = Capacitor.isNativePlatform()
       ? NativeApp.addListener('backButton', () => {
-          if (!closeTopModal()) {
+          if (!closeTransientPanel() && !closeTopModal()) {
             backRef.current()
           }
         })
@@ -133,6 +140,10 @@ export const SettingsShell = ({
     if (!closing) {
       return
     }
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      finishCloseSettings()
+      return
+    }
     // 动画被系统关闭或窗口进入后台时也要完成卸载。
     const id = setTimeout(finishCloseSettings, 220)
     return () => clearTimeout(id)
@@ -140,18 +151,23 @@ export const SettingsShell = ({
   const home = page === 'home'
   return (
     <SettingsLeaveContext.Provider value={guard}>
-      <div ref={layer} className={styles.layer}>
+      <div
+        ref={layer}
+        className={styles.layer}
+        data-presented={presented && !closing}
+        data-closing={closing}
+      >
         <div className={styles.scrim} aria-hidden onClick={close} />
         <div
           ref={dialog}
-          className={clsx(styles.page, closing && styles.pageClosing)}
+          className={styles.page}
           role="dialog"
           aria-modal="true"
           aria-label={t(pageTitles[page])}
           tabIndex={-1}
           data-split={wideLayout}
-          onAnimationEnd={(e) => {
-            if (closing && e.target === e.currentTarget) {
+          onTransitionEnd={(e) => {
+            if (closing && e.target === e.currentTarget && e.propertyName === 'transform') {
               finishCloseSettings()
             }
           }}

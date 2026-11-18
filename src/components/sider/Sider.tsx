@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
-  IconHeartOutline16,
+  IconChevronRightOutline14,
   IconPanelLeftOutline16,
   IconSearchOutline16,
   IconSettingsOutline16,
@@ -17,6 +17,7 @@ import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
+import { SupportMark } from '../donate/SupportMark.js'
 import { DonateDialog } from '../donate/DonateDialog.js'
 import { SidebarUpdate } from '../update/Update.js'
 import { closeMobileSider } from './mobileSiderState.js'
@@ -168,14 +169,17 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </button>
         <button
           type="button"
-          className={styles.settings}
+          className={clsx(styles.settings, styles.support)}
           onClick={() => setDonateOpen(true)}
           aria-label={t('donateTitle')}
         >
           <span className={clsx(styles.settingsIcon, styles.donateHeart)}>
-            <IconHeartOutline16 />
+            <SupportMark />
           </span>
           <span className={styles.settingsLabel}>{t('donateTitle')}</span>
+          <span aria-hidden className={styles.supportArrow}>
+            <IconChevronRightOutline14 />
+          </span>
         </button>
       </div>
       {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}

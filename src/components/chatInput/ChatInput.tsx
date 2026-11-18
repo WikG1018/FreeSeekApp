@@ -27,6 +27,8 @@ import {
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { openAppPermissionSettings } from '../../services/speech/micPermission.js'
 import { Button } from '../base/Button.js'
+import { useOptionPanel } from '../base/OptionPanel.js'
+import optionStyles from '../base/OptionPanel.module.css'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { Tooltip } from '../base/Tooltip.js'
@@ -67,27 +69,18 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
-  const wrapperRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
   const textareaWrapperRef = useRef<HTMLDivElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
   /** 附件面板展开状态：点 + 展开拍照/相册/文件，选完或点外部收起 */
-  const [attachOpen, setAttachOpen] = useState(false)
+  const attachmentPanel = useOptionPanel(t('attachPanelLabel'), {
+    side: 'top',
+    kind: 'actions',
+    align: 'end',
+  })
+  const attachOpen = attachmentPanel.open
   const [editing, setEditing] = useState(false)
-
-  useEffect(() => {
-    if (!attachOpen) {
-      return
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) {
-        setAttachOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [attachOpen])
 
   // 输入框高度变化时平滑展开/收起（镜像层测量高度，外层过渡）
   useEffect(() => {
@@ -188,7 +181,6 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     !editing &&
     !text &&
     !attachments.length &&
-    !attachOpen &&
     !showModelSwitcher &&
     voice.status === 'idle' &&
     (custom || (!thinking && !search))
@@ -216,7 +208,6 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   return (
     <div
-      ref={wrapperRef}
       data-testid="chat-composer"
       className={clsx(
         styles.wrapper,
@@ -281,13 +272,14 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           {`${text}\n`}
         </div>
       </div>
-      {attachOpen ? (
-        <div className={styles.attachPanel} role="group" aria-label={t('attachPanelLabel')}>
+      {attachmentPanel.render(
+        <>
           <button
             type="button"
-            className={styles.attachOption}
+            className={optionStyles.option}
+            data-panel-item=""
             onClick={() => {
-              setAttachOpen(false)
+              attachmentPanel.close(true)
               if (ensureApiKey()) {
                 cameraInputRef.current?.click()
               }
@@ -298,9 +290,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           </button>
           <button
             type="button"
-            className={styles.attachOption}
+            className={optionStyles.option}
+            data-panel-item=""
             onClick={() => {
-              setAttachOpen(false)
+              attachmentPanel.close(true)
               if (ensureApiKey()) {
                 imageInputRef.current?.click()
               }
@@ -311,9 +304,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           </button>
           <button
             type="button"
-            className={styles.attachOption}
+            className={optionStyles.option}
+            data-panel-item=""
             onClick={() => {
-              setAttachOpen(false)
+              attachmentPanel.close(true)
               if (ensureApiKey()) {
                 fileInputRef.current?.click()
               }
@@ -322,8 +316,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             <IconFileOutline16 />
             <span>{t('attachFiles')}</span>
           </button>
-        </div>
-      ) : null}
+        </>
+      )}
       <div className={styles.functionRow}>
         {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
         <div ref={togglesRef} className={styles.toggles}>
@@ -380,9 +374,9 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             hitArea
             icon={attachOpen ? <IconCloseOutline16 /> : <IconAddOutline16 />}
             tooltip={attachOpen ? t('close') : t('attachPanelLabel')}
-            aria-expanded={attachOpen}
+            buttonRef={attachmentPanel.anchorRef}
+            {...attachmentPanel.trigger}
             disabled={importingHistory}
-            onClick={() => setAttachOpen((value) => !value)}
           />
           <input
             ref={fileInputRef}

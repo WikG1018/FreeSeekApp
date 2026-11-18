@@ -1,0 +1,1341 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1,viewport-fit=cover"
+  />
+  <title>FreeSeek · 输入框与模型切换</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    :root {
+      color-scheme: light;
+      --board: #eff1f3;
+      --line: #d2d8dd;
+      --ink: #182532;
+      --sub: #465566;
+      --blue: #315bba;
+      --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+    }
+    body {
+      margin: 0;
+      background: var(--board);
+      color: var(--ink);
+      font:
+        15px/1.5 system-ui,
+        'Microsoft YaHei',
+        sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid #507bd8;
+      outline-offset: 2px;
+    }
+    button {
+      touch-action: manipulation;
+    }
+    main {
+      max-width: 1000px;
+      margin: auto;
+      padding: 28px 34px 35px;
+    }
+    .project {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #465468;
+      font-weight: 620;
+      letter-spacing: 0.015em;
+      font-size: 14px;
+    }
+    .project .emblem {
+      display: grid;
+      place-items: center;
+      background: #2d56af;
+      color: white;
+      width: 28px;
+      height: 28px;
+      border-radius: 9px;
+    }
+    .project svg {
+      width: 21px;
+      height: 21px;
+    }
+    h1 {
+      font-size: 32px;
+      font-size: clamp(26px, 3.1vw, 38px);
+      letter-spacing: -0.045em;
+      line-height: 1.22;
+      margin: 12px 0 8px;
+      font-weight: 700;
+    }
+    .lede {
+      margin: 0;
+      color: var(--sub);
+      font-size: 15px;
+    }
+    .controls {
+      margin: 19px 0 18px;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 18px;
+      padding: 10px 0;
+      border-block: 1px solid var(--line);
+    }
+    .controls label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 33px;
+      gap: 7px;
+      color: #334354;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .controls input {
+      appearance: none;
+      position: relative;
+      width: 28px;
+      height: 17px;
+      border-radius: 15px;
+      background: #768290;
+      margin: 0;
+      cursor: pointer;
+    }
+    .controls input::before {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 11px;
+      height: 11px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 130ms;
+    }
+    .controls input:checked {
+      background: #315bba;
+    }
+    .controls input:checked::before {
+      transform: translateX(11px);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(24px, 4.4vw, 65px);
+    }
+    .design {
+      min-width: 0;
+    }
+    .design-head {
+      margin: 0 auto 10px;
+      max-width: 390px;
+    }
+    .design-head h2 {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 20px;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+    .design-head b {
+      display: inline-grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      border-radius: 7px;
+      background: #dae4f4;
+      color: #284675;
+      font:
+        650 15px/1 ui-monospace,
+        monospace;
+    }
+    .design-head p {
+      margin: 4px 0 0;
+      color: var(--sub);
+      font-size: 13px;
+    }
+    .phone {
+      --paper: #fcfcfd;
+      --card: #fff;
+      --text: #1a2029;
+      --secondary: #586371;
+      --faint: #e1e5eb;
+      --surface: #f0f2f5;
+      --blue: #2855ae;
+      --bluefill: #375fc5;
+      --wash: #edf2fc;
+      --shadow: 0 5px 21px rgba(20, 31, 51, 0.1);
+      --clear: rgba(252, 252, 253, 0);
+      --keys: #e2e5ec;
+      --key: #fff;
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      margin: 0 auto;
+      max-width: 390px;
+      height: 645px;
+      min-width: 0;
+      border: 1px solid #bac3cb;
+      border-radius: 27px;
+      background: var(--paper);
+      color: var(--text);
+      box-shadow: 0 8px 22px rgba(31, 44, 59, 0.07);
+      color-scheme: light;
+    }
+    body.dark .phone {
+      color-scheme: dark;
+      --paper: #15171a;
+      --card: #24272c;
+      --text: #f2f3f5;
+      --secondary: #b3bac4;
+      --faint: #383d45;
+      --surface: #262a30;
+      --blue: #b1c9ff;
+      --bluefill: #96b7ff;
+      --wash: #26344f;
+      --shadow: 0 5px 22px rgba(0, 0, 0, 0.27);
+      --clear: rgba(21, 23, 26, 0);
+      --keys: #23262c;
+      --key: #383c43;
+    }
+    .phone button {
+      border: 0;
+      background: none;
+      color: inherit;
+    }
+    .ico {
+      width: 20px;
+      height: 20px;
+      display: block;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .system {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 19px 0;
+      height: 29px;
+      flex: none;
+      z-index: 2;
+      font-size: 12px;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+    .system svg {
+      width: 47px;
+      height: 13px;
+    }
+    .app {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+    }
+    .head {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px 19px;
+      pointer-events: none;
+      background: linear-gradient(to bottom, var(--paper) 62%, var(--clear));
+    }
+    .head > * {
+      pointer-events: auto;
+    }
+    .chrome,
+    .model-top,
+    .titlebar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      background: var(--card) !important;
+      box-shadow: 0 1px 6px rgba(20, 29, 43, 0.06);
+      border: 1px solid var(--faint) !important;
+      border-radius: 22px;
+    }
+    .chrome {
+      width: 42px;
+      height: 42px;
+      flex: none;
+    }
+    .titlebar {
+      font-size: 14px;
+      font-weight: 580;
+      padding: 0 14px;
+      height: 40px;
+      max-width: 58%;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .model-top {
+      padding: 3px 10px 3px 15px;
+      gap: 8px;
+      min-height: 44px;
+      max-width: 61%;
+      line-height: 1.3;
+    }
+    .model-top > span {
+      min-width: 0;
+      text-align: left;
+    }
+    .model-top strong,
+    .model-top small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .model-top strong {
+      font-size: 13px;
+      font-weight: 580;
+    }
+    .model-top small {
+      margin-top: 1px;
+      font-size: 11px;
+      color: var(--blue);
+    }
+    .model-top > .ico,
+    .model-low .ico {
+      width: 14px;
+      height: 14px;
+      transition: transform 140ms;
+    }
+    .modelBtn[aria-expanded='true'] > .ico {
+      transform: rotate(180deg);
+    }
+    .thread {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      padding: 65px 18px 132px;
+      scrollbar-width: thin;
+    }
+    .bubble {
+      width: fit-content;
+      max-width: 90%;
+      padding: 9px 13px;
+      margin: 0 0 24px auto;
+      border-radius: 16px 16px 5px 16px;
+      background: var(--surface);
+      font-size: 14px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .reply {
+      font-size: 14px;
+      line-height: 1.83;
+      margin-bottom: 14px;
+    }
+    .reply h3 {
+      font-size: 19px;
+      letter-spacing: -0.025em;
+      line-height: 1.37;
+      margin: 5px 0 9px;
+    }
+    .reply p {
+      margin: 0 0 9px;
+    }
+    .reply strong {
+      font-weight: 650;
+    }
+    .route {
+      border-left: 2px solid var(--faint);
+      padding-left: 14px;
+      margin: 12px 0 13px;
+    }
+    .route p {
+      margin: 0 0 8px;
+    }
+    .route time {
+      margin-right: 7px;
+      font-size: 12px;
+      color: var(--blue);
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+    .reply-icons {
+      display: flex;
+      gap: 14px;
+      color: var(--secondary);
+      margin: 10px 0 24px;
+    }
+    .reply-icons .ico {
+      width: 15px;
+      height: 15px;
+    }
+    .dock {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 3;
+      padding: 17px 12px 7px;
+      background: linear-gradient(to bottom, var(--clear), var(--paper) 27px);
+      pointer-events: none;
+    }
+    .dock > * {
+      pointer-events: auto;
+    }
+    .context {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      margin: 0 0 2px 2px;
+      column-gap: 5px;
+    }
+    .model-low {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      max-width: 64%;
+      height: 44px;
+      padding: 0 3px !important;
+      color: var(--blue) !important;
+      gap: 4px;
+      font-size: 13px;
+      font-weight: 620;
+    }
+    .model-low .model-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .active-tool,
+    .filetag {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: var(--wash) !important;
+      color: var(--blue) !important;
+      border-radius: 10px;
+      font-size: 11px;
+      padding: 4px 7px !important;
+    }
+    .tagline {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .tagline:empty {
+      display: none;
+    }
+    .context:has(.model-low[hidden]):has(.tagline:empty) {
+      display: none;
+    }
+    .composer {
+      display: flex;
+      align-items: flex-end;
+      gap: 1px;
+      padding: 3px;
+      min-height: 52px;
+      background: var(--card);
+      border: 1px solid var(--faint);
+      border-radius: 25px;
+      box-shadow: var(--shadow);
+    }
+    .composer:focus-within {
+      border-color: var(--blue);
+    }
+    .round {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      flex: none;
+      padding: 0;
+      border-radius: 50%;
+    }
+    .round:active,
+    .modelBtn:active {
+      background: var(--surface) !important;
+    }
+    .round[aria-expanded='true'] {
+      color: var(--blue);
+      background: var(--wash);
+    }
+    .composer textarea {
+      align-self: center;
+      display: block;
+      flex: 1;
+      width: 0;
+      min-width: 0;
+      height: 25px;
+      max-height: 99px;
+      resize: none;
+      overflow-y: auto;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+      line-height: 24px;
+      padding: 0 1px;
+      outline: 0;
+      transition: height 110ms var(--ease);
+    }
+    .composer textarea::placeholder {
+      color: var(--secondary);
+    }
+    .send .core {
+      display: grid;
+      place-items: center;
+      width: 33px;
+      height: 33px;
+      border-radius: 50%;
+      transition: background 120ms;
+    }
+    .send[data-mode='send'] .core,
+    .send[data-mode='stop'] .core {
+      background: var(--bluefill);
+      color: white;
+    }
+    body.dark .send[data-mode='send'] .core,
+    body.dark .send[data-mode='stop'] .core {
+      color: #102746;
+    }
+    .send[data-mode='voice'] .core {
+      color: var(--text);
+    }
+    .modelBtn:disabled {
+      opacity: 0.55;
+    }
+    .nav {
+      flex: none;
+      display: grid;
+      place-items: center;
+      height: 17px;
+      background: var(--paper);
+    }
+    .nav:after {
+      content: '';
+      width: 96px;
+      height: 4px;
+      border-radius: 4px;
+      background: var(--text);
+      opacity: 0.7;
+    }
+    .pop {
+      position: absolute;
+      z-index: 6;
+      min-width: 0;
+      max-width: calc(100% - 24px);
+      width: 278px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 6px;
+      border: 1px solid var(--faint);
+      border-radius: 17px;
+      background: var(--card);
+      box-shadow: 0 8px 28px rgba(10, 19, 37, 0.16);
+      animation: pop 140ms var(--ease) both;
+    }
+    .pop[data-location='bottom'] {
+      transform-origin: bottom left;
+      --move: 4px;
+    }
+    .pop[data-location='top'] {
+      transform-origin: top center;
+      --move: -4px;
+    }
+    @keyframes pop {
+      from {
+        transform: translateY(var(--move, 3px));
+      }
+    }
+    .scroll {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      min-height: 0;
+      scrollbar-width: thin;
+    }
+    .pop h4 {
+      font-size: 11px;
+      letter-spacing: 0.035em;
+      color: var(--secondary);
+      font-weight: 650;
+      margin: 7px 9px 3px;
+    }
+    .pop button.item {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      text-align: left;
+      min-height: 44px;
+      border-radius: 9px;
+      padding: 7px 9px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .pop button.item:disabled {
+      opacity: 0.62;
+      cursor: default;
+    }
+    .item.selected {
+      background: var(--wash);
+      color: var(--blue);
+    }
+    .item:hover {
+      background: var(--surface);
+    }
+    .item-text {
+      min-width: 0;
+      flex: 1;
+      overflow-wrap: anywhere;
+    }
+    .item-text b {
+      display: block;
+      font-weight: 590;
+    }
+    .item-text small {
+      display: block;
+      color: var(--secondary);
+      font-size: 11px;
+      margin-top: 1px;
+    }
+    .item .ico {
+      width: 16px;
+      height: 16px;
+    }
+    .option-glyph {
+      display: grid;
+      place-items: center;
+      align-self: center;
+      width: 29px;
+      height: 29px;
+      flex: none;
+      color: var(--blue);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .filter {
+      width: 100%;
+      flex: none;
+      padding: 7px 9px;
+      color: var(--text);
+      background: var(--surface);
+      border: 0;
+      border-radius: 8px;
+      min-height: 38px;
+      font-size: 14px;
+    }
+    .empty {
+      padding: 8px;
+      color: var(--secondary);
+      font-size: 13px;
+    }
+    .keyboard {
+      position: relative;
+      display: flex;
+      flex: none;
+      flex-direction: column;
+      gap: 4px;
+      background: var(--keys);
+      padding: 7px 4px 6px;
+      color: var(--text);
+    }
+    .keyrow {
+      display: flex;
+      justify-content: center;
+      gap: 3px;
+    }
+    .keyboard button {
+      display: grid;
+      place-items: center;
+      width: 9.3%;
+      min-width: 0;
+      height: 30px;
+      border-radius: 5px;
+      background: var(--key);
+      font-size: 12px;
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+    }
+    .keyboard .wide {
+      width: 19%;
+      font-size: 11px;
+    }
+    .keyboard .space {
+      width: 48%;
+    }
+    .keyboard:not([hidden]) + .nav {
+      background: var(--keys);
+    }
+    .tabs {
+      display: none;
+    }
+    .design-head p,
+    .lede,
+    .controls {
+      line-height: 1.6;
+    }
+    @media (max-width: 680px) {
+      main {
+        padding: 16px 12px 24px;
+      }
+      .project {
+        font-size: 12px;
+      }
+      .project .emblem {
+        width: 24px;
+        height: 24px;
+      }
+      .controls {
+        gap: 2px 12px;
+        margin: 12px 0;
+        padding: 5px 0;
+      }
+      .controls label {
+        font-size: 12px;
+        min-height: 36px;
+      }
+      .lede {
+        font-size: 13px;
+      }
+      .tabs {
+        display: flex;
+        gap: 5px;
+        margin: 8px 0 12px;
+      }
+      .tabs button {
+        min-height: 40px;
+        border: 1px solid var(--line);
+        padding: 5px 12px;
+        background: transparent;
+        color: var(--sub);
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      .tabs button[aria-pressed='true'] {
+        background: #283d5b;
+        color: white;
+        border-color: #283d5b;
+      }
+      .grid {
+        display: block;
+      }
+      .design:not(.shown) {
+        display: none;
+      }
+      .design-head {
+        max-width: 420px;
+      }
+      .design-head h2 {
+        font-size: 17px;
+      }
+      .design-head p {
+        font-size: 12px;
+      }
+      .phone {
+        max-width: 420px;
+        height: 74vh;
+        min-height: 460px;
+        max-height: 690px;
+        height: clamp(460px, 76svh, 690px);
+        border-radius: 22px;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+  <body>
+    <main>
+      <div class="project">
+        <span class="emblem" aria-hidden="true"
+          ><svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          >
+            <path d="M5 8h15M5 12h11M5 16h6" /></svg></span
+        >FreeSeek
+      </div>
+      <h1>输入框与模型切换</h1>
+      <p class="lede">写一段草稿，再点当前模型。两套方案都可以切换模型、添加附件和模拟发送。</p>
+      <div class="controls" aria-label="预览条件">
+        <label><input id="switch" type="checkbox" checked />显示模型入口</label
+        ><label><input id="ime" type="checkbox" />模拟键盘</label
+        ><label><input id="more" type="checkbox" />多模型列表</label
+        ><label><input id="night" type="checkbox" />深色外观</label>
+      </div>
+      <div class="tabs" aria-label="选择预览方案">
+        <button data-tab="a" aria-pressed="true">A · 输入区</button
+        ><button data-tab="b" aria-pressed="false">B · 顶栏</button>
+      </div>
+      <div class="grid">
+        <section class="design shown" id="design-a">
+          <div class="design-head">
+            <h2><b>A</b>拇指旁切换</h2>
+            <p>当前模型贴近输入框，适合边写边切换。</p>
+          </div>
+          <div class="phone" data-design="a"></div>
+        </section>
+        <section class="design" id="design-b">
+          <div class="design-head">
+            <h2><b>B</b>顶栏切换</h2>
+            <p>当前模型跟随对话标题，给底部多留一行正文。</p>
+          </div>
+          <div class="phone" data-design="b"></div>
+        </section>
+      </div>
+    </main>
+    <script id="prototype">
+      const paths = {
+        menu: 'M3 6h17M3 11h12M3 16h7',
+        new: 'M12 5v14m-7-7h14',
+        down: 'm6 9 6 6 6-6',
+        plus: 'M12 4v16M4 12h16',
+        mic: 'M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0z M6 11v1a6 6 0 0 0 12 0v-1m-6 7v3m-3 0h6',
+        send: 'M12 19V5m-6 6 6-6 6 6',
+        stop: 'M7 7h10v10H7z',
+        check: 'm4 12 5 5L20 6',
+        flash: 'm13 2-9 12h7l-1 8 10-13h-8z',
+        pro: 'm12 2 2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5z',
+        custom: 'm12 3 8 4v10l-8 4-8-4V7z M4 7l8 4 8-4m-8 4v10',
+        copy: 'M8 8h11v12H8z M5 16H4V4h11v1',
+        speaker: 'm3 10 4 0 5-5v14l-5-5H3z m13-1a5 5 0 0 1 0 6',
+        redo: 'M4 11a8 8 0 1 1 2 7 M4 4v7h7',
+        file: 'M6 2h8l4 4v15H6z M14 2v5h4',
+        camera: 'M3 7h4l2-3h6l2 3h4v13H3z M9 13a3 3 0 1 0 6 0 3 3 0 0 0-6 0',
+        gallery: 'M3 4h18v16H3z M3 17l6-6 4 4 3-3 5 5',
+        globe:
+          'M2.5 12a9.5 9.5 0 1 0 19 0 9.5 9.5 0 1 0-19 0 M3 12h18 M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18',
+        think: 'M8 15a6 6 0 1 1 8 0l-1 4H9z M10 22h4',
+      }
+      function icon(key) {
+        return (
+          '<svg class="ico" aria-hidden="true" viewBox="0 0 24 24"><path d="' +
+          paths[key] +
+          '"/></svg>'
+        )
+      }
+      const systemIcons =
+        '<svg viewBox="0 0 49 14" aria-hidden="true"><g fill="currentColor"><path d="M0 11h2V9H0zm4 0h2V7H4zm4 0h2V5H8zm4 0h2V3h-2z"/><path d="M17 5q6-6 12 0l-6 7z"/><rect x="32" y="3" width="13" height="8" rx="2" fill="none" stroke="currentColor"/><rect x="34" y="5" width="9" height="4" rx="1"/><path d="M46 5h2v4h-2z"/></g></svg>'
+      const stock = [
+        {
+          id: 'flash',
+          name: 'DeepSeek Flash',
+          short: 'Flash',
+          group: 'DeepSeek 官方',
+          note: '日常对话与快速回复',
+          icon: 'flash',
+        },
+        {
+          id: 'pro',
+          name: 'DeepSeek V4 Pro',
+          short: 'V4 Pro',
+          group: 'DeepSeek 官方',
+          note: '适合复杂问题与长文',
+          icon: 'pro',
+        },
+        {
+          id: 'long',
+          name: 'Qwen3-235B-A22B-Instruct-2507',
+          short: 'Qwen3-235B-A22B-Instruct-2507',
+          group: '我的服务',
+          note: '个人网关',
+          icon: 'custom',
+        },
+      ]
+      const extended = Array.from({ length: 10 }, (_, i) => ({
+        id: 'studio' + i,
+        name:
+          'Studio / ' +
+          [
+            'Notes',
+            'Research',
+            'Translate',
+            'Writing',
+            'Code',
+            'Vision',
+            'Archive',
+            'Review',
+            'Search',
+            'Long Context',
+          ][i],
+        short: 'Studio ' + (i + 1),
+        group: '我的服务',
+        note: '工作室网关',
+        icon: 'custom',
+      }))
+      const controls = Object.fromEntries(
+        ['switch', 'ime', 'more', 'night'].map((key) => [key, document.getElementById(key)])
+      )
+      const modelButton = (place, top) =>
+        '<button type="button" class="modelBtn ' +
+        place +
+        '" aria-haspopup="listbox" aria-expanded="false" aria-label="选择模型">' +
+        (top
+          ? '<span><strong>傍晚的散步计划</strong><small class="model-name">Flash</small></span>'
+          : '<span class="model-name">Flash</span>') +
+        icon('down') +
+        '</button>'
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+        )
+      const instances = []
+      function mount(phone) {
+        const isA = phone.dataset.design === 'a'
+        phone.setAttribute('role', 'group')
+        phone.setAttribute('aria-label', '方案 ' + phone.dataset.design.toUpperCase())
+        phone.innerHTML =
+          '<div class="system" aria-hidden="true"><span>18:42</span>' +
+          systemIcons +
+          '</div><div class="app"><div class="head"><span class="chrome" aria-hidden="true">' +
+          icon('menu') +
+          '</span><span class="titlebar">傍晚的散步计划</span>' +
+          (!isA ? modelButton('model-top', true) : '') +
+          '<span class="chrome" aria-hidden="true">' +
+          icon('new') +
+          '</span></div>' +
+          '<div class="thread"><div class="bubble">下班后有一个小时，想沿河走走。<br>帮我排一条轻松的路线吧。</div><div class="reply"><h3>沿河走，刚好赶上日落</h3><p>从桥头出发，沿西岸往回走。把时间留给最后那段河堤，傍晚的光线最好。</p><div class="route"><p><time>18:10</time><strong>老桥下</strong>　从石阶下到亲水步道。</p><p><time>18:30</time><strong>柳树湾</strong>　在长椅上停一会儿。</p><p><time>18:55</time><strong>河堤</strong>　看完日落，再慢慢往回走。</p></div><p>如果临时起风，就从第二处折返，沿途也有地方可以坐。</p></div><div aria-hidden="true" class="reply-icons">' +
+          icon('copy') +
+          icon('speaker') +
+          icon('redo') +
+          '</div></div>' +
+          '<div class="dock"><div class="context">' +
+          (isA ? modelButton('model-low', false) : '') +
+          '<div class="tagline"></div></div><div class="composer"><button type="button" class="round add" aria-label="添加附件或工具" aria-haspopup="dialog" aria-expanded="false">' +
+          icon('plus') +
+          '</button><textarea rows="1" aria-label="消息草稿" placeholder="发消息"></textarea><button type="button" class="round send" data-mode="voice" aria-label="预览语音输入"><span class="core">' +
+          icon('mic') +
+          '</span></button></div></div>' +
+          '<div class="pop" hidden></div></div><div class="keyboard" hidden aria-label="模拟键盘"></div><div class="nav" aria-hidden="true"></div>'
+        const $ = (s) => phone.querySelector(s),
+          app = $('.app'),
+          thread = $('.thread'),
+          draft = $('textarea'),
+          modelBtn = $('.modelBtn'),
+          add = $('.add'),
+          pop = $('.pop'),
+          send = $('.send'),
+          keyboard = $('.keyboard')
+        let current = stock[0],
+          opened = null,
+          activeTrigger = null,
+          previous = null,
+          selection = null,
+          running = false,
+          timer = null,
+          attachment = '',
+          toolFlags = new Set(),
+          restoreDraft = false
+        function available() {
+          return controls.more.checked
+            ? stock.concat(extended)
+            : stock.some((item) => item.id === current.id)
+              ? stock
+              : stock.concat(current)
+        }
+        function caret() {
+          return [draft.selectionStart, draft.selectionEnd]
+        }
+        function focusDraft() {
+          draft.focus({ preventScroll: true })
+          if (selection) draft.setSelectionRange(...selection)
+        }
+        function position() {
+          if (!opened) return
+          const r = app.getBoundingClientRect(),
+            a = activeTrigger.getBoundingClientRect(),
+            below = opened === 'models' && !isA,
+            span = below
+              ? $('.composer').getBoundingClientRect().top - a.bottom - 14
+              : a.top - $('.chrome').getBoundingClientRect().bottom - 13
+          pop.dataset.location = below ? 'top' : 'bottom'
+          pop.style.maxHeight = Math.max(72, Math.min(340, span)) + 'px'
+          pop.style.left =
+            Math.max(
+              8,
+              Math.min(
+                below ? a.left + a.width / 2 - r.left - pop.offsetWidth / 2 : a.left - r.left,
+                app.clientWidth - pop.offsetWidth - 8
+              )
+            ) + 'px'
+          pop.style.top = below ? a.bottom - r.top + 5 + 'px' : 'auto'
+          pop.style.bottom = below ? 'auto' : r.bottom - a.top + 4 + 'px'
+        }
+        function close(restore = true) {
+          if (!opened) return
+          opened = null
+          pop.hidden = true
+          pop.replaceChildren()
+          activeTrigger.setAttribute('aria-expanded', 'false')
+          if (restore) {
+            if (restoreDraft) focusDraft()
+            else activeTrigger.focus({ preventScroll: true })
+          }
+          activeTrigger = null
+          restoreDraft = false
+        }
+        function models(q = '') {
+          const list = $('.scroll')
+          list.replaceChildren()
+          let prev = ''
+          const entries = available().filter((item) =>
+            (item.name + ' ' + item.note).toLowerCase().includes(q.trim().toLowerCase())
+          )
+          for (const m of entries) {
+            if (prev !== m.group) {
+              const group = document.createElement('h4')
+              group.textContent = m.group
+              list.append(group)
+              prev = m.group
+            }
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.className = 'item' + (current.id === m.id ? ' selected' : '')
+            b.dataset.model = m.id
+            b.setAttribute('role', 'option')
+            b.setAttribute('aria-selected', String(current.id === m.id))
+            b.innerHTML =
+              '<span class="option-glyph">' +
+              icon(m.icon) +
+              '</span><span class="item-text"><b>' +
+              esc(m.name) +
+              '</b><small>' +
+              esc(m.note) +
+              '</small></span>' +
+              (current.id === m.id ? icon('check') : '')
+            if (attachment.endsWith('.jpg') && m.id === 'pro') {
+              b.disabled = true
+              b.setAttribute('aria-disabled', 'true')
+              b.querySelector('small').textContent = '当前草稿含图片，此模型仅支持文本'
+            }
+            b.onclick = () => {
+              current = m
+              refresh()
+              close()
+            }
+            list.append(b)
+          }
+          if (!entries.length) {
+            const empty = document.createElement('div')
+            empty.className = 'empty'
+            empty.setAttribute('role', 'status')
+            empty.textContent = '没有匹配的模型'
+            list.append(empty)
+          }
+        }
+        const actions = [
+          ['camera', '拍照'],
+          ['gallery', '从相册添加'],
+          ['file', '添加文件'],
+          ['think', '深度思考'],
+          ['globe', '智能搜索'],
+        ]
+        const toggleTool = (id) => (toolFlags.has(id) ? toolFlags.delete(id) : toolFlags.add(id))
+        function open(kind, trigger) {
+          if (opened === kind) {
+            close()
+            return
+          }
+          close(false)
+          opened = kind
+          activeTrigger = trigger
+          restoreDraft = previous === draft
+          selection = caret()
+          pop.hidden = false
+          trigger.setAttribute('aria-expanded', 'true')
+          pop.setAttribute('role', kind === 'models' ? 'listbox' : 'dialog')
+          pop.setAttribute('aria-label', kind === 'models' ? '选择模型' : '附件和工具')
+          if (kind === 'models') {
+            if (controls.more.checked) {
+              const input = document.createElement('input')
+              input.type = 'search'
+              input.placeholder = '筛选模型'
+              input.setAttribute('aria-label', '筛选模型')
+              input.className = 'filter'
+              pop.append(input)
+              input.oninput = () => {
+                models(input.value)
+                position()
+              }
+            }
+            const list = document.createElement('div')
+            list.className = 'scroll'
+            pop.append(list)
+            models()
+          } else {
+            const list = document.createElement('div')
+            list.className = 'scroll'
+            pop.append(list)
+            for (const [id, name] of actions) {
+              if ((id === 'think' || id === 'globe') && current.group !== 'DeepSeek 官方') continue
+              if ((id === 'camera' || id === 'gallery') && current.id === 'pro') continue
+              const b = document.createElement('button')
+              b.type = 'button'
+              b.className = 'item'
+              b.innerHTML =
+                icon(id) +
+                '<span class="item-text">' +
+                name +
+                '</span>' +
+                (toolFlags.has(id) ? icon('check') : '')
+              b.onclick = () => {
+                if (id === 'think' || id === 'globe') toggleTool(id)
+                else attachment = id === 'file' ? '散步清单.txt' : '河岸照片.jpg'
+                close()
+                refresh()
+              }
+              list.append(b)
+            }
+          }
+          position()
+          const selectedRow = pop.querySelector('[aria-selected="true"]')
+          if (selectedRow) {
+            const list = pop.querySelector('.scroll')
+            const overflow =
+              selectedRow.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom
+            if (overflow > 0) list.scrollTop += overflow
+          }
+          if (!restoreDraft) {
+            const selected =
+              pop.querySelector('[aria-selected="true"]') || pop.querySelector('.item')
+            if (selected) selected.focus({ preventScroll: true })
+          }
+        }
+        // Keep the Android IME connected when the user was typing before tapping a model.
+        for (const trigger of [modelBtn, add]) {
+          trigger.onpointerdown = (e) => {
+            previous = document.activeElement
+            if (previous === draft && e.button === 0) e.preventDefault()
+          }
+          trigger.onclick = (e) => {
+            if (e.detail === 0) previous = document.activeElement
+            open(trigger === add ? 'actions' : 'models', trigger)
+          }
+        }
+        pop.onpointerdown = (e) => {
+          if (restoreDraft && e.target.closest('button')) e.preventDefault()
+        }
+        document.addEventListener('pointerdown', (e) => {
+          if (opened && !pop.contains(e.target) && !activeTrigger.contains(e.target)) close(false)
+        })
+        phone.addEventListener('keydown', (e) => {
+          if (!opened) return
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            close()
+            return
+          }
+          const opts = Array.from(pop.querySelectorAll('.item:not(:disabled)')),
+            i = opts.indexOf(document.activeElement)
+          if (['ArrowDown', 'ArrowUp'].includes(e.key) && opts.length) {
+            e.preventDefault()
+            opts[(i + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length].focus()
+          }
+          if (e.key === 'Tab') close(false)
+        })
+        function fit() {
+          draft.style.height = 'auto'
+          draft.style.height = Math.min(99, Math.max(25, draft.scrollHeight)) + 'px'
+          thread.style.paddingBottom = $('.dock').offsetHeight + 12 + 'px'
+          position()
+        }
+        function refresh() {
+          modelBtn.hidden = !controls.switch.checked
+          modelBtn.disabled = running
+          modelBtn.querySelector('.model-name').textContent = current.short
+          modelBtn.title = current.name
+          modelBtn.setAttribute('aria-label', '选择模型，当前 ' + current.name)
+          $('.titlebar').hidden = !isA && controls.switch.checked
+          keyboard.hidden = !controls.ime.checked || nativeImeVisible()
+          const tags = $('.tagline')
+          tags.replaceChildren()
+          const addTag = (name, remove) => {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.className = 'active-tool'
+            b.textContent = name + ' ×'
+            b.setAttribute('aria-label', '移除' + name)
+            b.onclick = () => {
+              remove()
+              refresh()
+            }
+            tags.append(b)
+          }
+          if (attachment)
+            addTag(attachment, () => {
+              attachment = ''
+            })
+          if (current.group === 'DeepSeek 官方')
+            for (const flag of toolFlags)
+              addTag(flag === 'think' ? '深度思考' : '智能搜索', () => toolFlags.delete(flag))
+          $('.context').hidden = (!isA || modelBtn.hidden) && !tags.children.length
+          const mode = running ? 'stop' : draft.value.trim() || attachment ? 'send' : 'voice'
+          send.dataset.mode = mode
+          send.setAttribute(
+            'aria-label',
+            mode === 'stop' ? '停止生成' : mode === 'send' ? '发送示例消息' : '预览语音输入'
+          )
+          send.firstElementChild.innerHTML = icon(mode === 'voice' ? 'mic' : mode)
+          fit()
+        }
+        function finish() {
+          clearTimeout(timer)
+          if (!running) return
+          running = false
+          const reply = document.createElement('p')
+          reply.className = 'reply'
+          reply.textContent = '可以，我们把返程留得再宽松一些。'
+          thread.append(reply)
+          refresh()
+          thread.scrollTop = thread.scrollHeight
+        }
+        send.onclick = () => {
+          if (running) {
+            clearTimeout(timer)
+            running = false
+            refresh()
+            return
+          }
+          if (send.dataset.mode === 'voice') {
+            draft.value = '我想在河边多停一会儿'
+            draft.focus()
+            refresh()
+            return
+          }
+          const line = document.createElement('div')
+          line.className = 'bubble'
+          line.textContent = [draft.value.trim(), attachment].filter(Boolean).join('\n')
+          thread.append(line)
+          draft.value = ''
+          attachment = ''
+          running = true
+          refresh()
+          thread.scrollTop = thread.scrollHeight
+          timer = setTimeout(finish, 2400)
+        }
+        draft.oninput = refresh
+        draft.onkeydown = (e) => {
+          if (
+            !e.isComposing &&
+            e.key === 'Enter' &&
+            !e.shiftKey &&
+            !opened &&
+            send.dataset.mode === 'send'
+          ) {
+            e.preventDefault()
+            send.click()
+          }
+        }
+        function typeKey(key) {
+          const [start, end] = caret()
+          draft.setRangeText(
+            key === '⌫' ? '' : key === '空格' ? ' ' : key === '换行' ? '\n' : key,
+            key === '⌫' && start === end ? Math.max(0, start - 1) : start,
+            end,
+            'end'
+          )
+          draft.focus({ preventScroll: true })
+          refresh()
+        }
+        for (const keys of [
+          'QWERTYUIOP'.split(''),
+          'ASDFGHJKL'.split(''),
+          'ZXCVBNM'.split(''),
+          ['⌫', '空格', '换行'],
+        ]) {
+          const row = document.createElement('div')
+          row.className = 'keyrow'
+          keyboard.append(row)
+          for (const key of keys) {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.textContent = key
+            b.className = key === '空格' ? 'space' : key === '⌫' || key === '换行' ? 'wide' : ''
+            b.onpointerdown = (e) => e.preventDefault()
+            b.onclick = () => typeKey(key)
+            row.append(b)
+          }
+        }
+        return {
+          refresh,
+          position,
+          close,
+          openDefault() {
+            open('models', modelBtn)
+          },
+        }
+      }
+      function nativeImeVisible() {
+        return Boolean(
+          window.visualViewport && window.innerHeight - window.visualViewport.height > 135
+        )
+      }
+      document.querySelectorAll('.phone').forEach((phone) => instances.push(mount(phone)))
+      function update() {
+        document.body.classList.toggle('dark', controls.night.checked)
+        for (const view of instances) {
+          view.close(false)
+          view.refresh()
+        }
+      }
+      for (const input of Object.values(controls)) input.addEventListener('change', update)
+      document.querySelectorAll('[data-tab]').forEach(
+        (tab) =>
+          (tab.onclick = () => {
+            document
+              .querySelectorAll('[data-tab]')
+              .forEach((other) => other.setAttribute('aria-pressed', String(other === tab)))
+            document
+              .querySelectorAll('.design')
+              .forEach((d) => d.classList.toggle('shown', d.id === 'design-' + tab.dataset.tab))
+            update()
+          })
+      )
+      window.addEventListener('resize', () => instances.forEach((i) => i.refresh()))
+      if (window.visualViewport)
+        window.visualViewport.addEventListener('resize', () =>
+          instances.forEach((i) => i.refresh())
+        )
+      update()
+    </script>
+  </body>
+</html>

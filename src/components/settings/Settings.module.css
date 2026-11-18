@@ -9,8 +9,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  --settings-motion: 210ms;
+}
+.layer[data-closing='true'] {
+  --settings-motion: 175ms;
 }
 .scrim {
+  display: none;
   position: absolute;
   inset: 0;
   background: rgba(12, 17, 26, 0.32);
@@ -24,25 +30,46 @@
   overflow: hidden;
   background: var(--fs-settings-canvas);
   color: var(--dsw-alias-label-primary);
-  animation: enterSurface 190ms var(--fs-ease-out) backwards;
+  transform: translateX(100%);
+  transition: transform var(--settings-motion) cubic-bezier(0.22, 0.74, 0.22, 1);
 }
 .page:focus {
   outline: none;
 }
-.pageClosing {
-  animation: exitSurface 150ms ease-in both;
+.layer[data-presented='true'] .page {
+  transform: translateX(0);
+}
+.layer[data-closing='true'] .page {
   pointer-events: none;
 }
-@keyframes enterSurface {
-  from {
-    opacity: 0.5;
+@media (min-width: 768px) and (min-height: 540px) {
+  .layer {
+    opacity: 0;
+    transition: opacity var(--settings-motion) ease;
+  }
+  .layer[data-presented='true'] {
+    opacity: 1;
+  }
+  .scrim {
+    display: block;
+  }
+  .page {
     transform: translateY(8px);
   }
+  .layer[data-presented='true'] .page {
+    transform: translateY(0);
+  }
 }
-@keyframes exitSurface {
-  to {
-    opacity: 0;
-    transform: translateY(6px);
+@media (prefers-reduced-motion: reduce) {
+  .layer,
+  .layer .page {
+    transition: none;
+  }
+  .layer {
+    opacity: 1;
+  }
+  .layer .page {
+    transform: none;
   }
 }
 .detail {
@@ -121,29 +148,21 @@
   margin: 0 auto;
   width: 100%;
   max-width: 640px;
-  animation: forward 180ms var(--fs-ease-out) backwards;
+}
+.pageBody[data-direction='forward'] {
+  animation: forward 145ms var(--fs-ease-out);
 }
 .pageBody[data-direction='back'] {
-  animation-name: backward;
-}
-.pageBody[data-direction='switch'] {
-  animation-name: fade;
+  animation: backward 125ms var(--fs-ease-out);
 }
 @keyframes forward {
   from {
-    opacity: 0.45;
-    transform: translateX(14px);
+    transform: translateX(8px);
   }
 }
 @keyframes backward {
   from {
-    opacity: 0.6;
-    transform: translateX(-10px);
-  }
-}
-@keyframes fade {
-  from {
-    opacity: 0.65;
+    transform: translateX(-6px);
   }
 }
 .section {

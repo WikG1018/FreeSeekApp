@@ -1,165 +1,102 @@
 .overlay {
-  --overlay-opacity: 0.36;
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, var(--overlay-opacity));
-  backdrop-filter: blur(2px);
-  animation: overlayIn var(--fs-duration-base) var(--fs-ease-out) both;
-
-  [data-ds-dark-theme] & {
-    --overlay-opacity: 0.6;
-  }
+  isolation: isolate;
+  --modal-scrim: rgba(18, 21, 30, 0.32);
 }
-
-@keyframes overlayIn {
+[data-ds-dark-theme] .overlay {
+  --modal-scrim: rgba(0, 0, 0, 0.55);
+}
+.overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--modal-scrim);
+  animation: scrimIn 150ms ease-out both;
+}
+.overlayClosing::before {
+  animation: scrimOut 140ms ease-in both;
+}
+@keyframes scrimIn {
   from {
     opacity: 0;
   }
 }
-
-/* 退出：遮罩淡出与内容退出同时进行 */
-.overlayClosing {
-  animation: overlayOut var(--fs-duration-base) var(--fs-ease-in-out) both;
-  pointer-events: none;
-}
-
-@keyframes overlayOut {
+@keyframes scrimOut {
   to {
     opacity: 0;
   }
 }
-
 .content {
+  --surface-travel: 7px;
   display: flex;
   flex-direction: column;
+  position: relative;
   box-sizing: border-box;
   width: 380px;
   max-width: calc(100vw - 32px - var(--fs-safe-left) - var(--fs-safe-right));
   max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - var(--fs-safe-bottom) - 24px);
-  padding: 22px 24px;
-  border-radius: 24px;
+  padding: 20px 22px;
+  border-radius: 20px;
+  outline: none;
+  background: var(--fs-settings-surface);
+  color: var(--dsw-alias-label-primary);
   font-size: 14px;
   line-height: 22px;
-  color: var(--dsw-alias-label-primary);
-  background-color: var(--dsw-alias-bg-layer-2);
-  box-shadow:
-    inset 0 0 0 1px var(--dsw-alias-border-inverted),
-    0 0 1px 0 rgba(0, 0, 0, 0.2),
-    0 0 4px 0 rgba(0, 0, 0, 0.02),
-    0 12px 32px 0 rgba(0, 0, 0, 0.08);
-  animation: dialogIn var(--fs-duration-slow) var(--fs-ease-out) both;
+  box-shadow: 0 12px 40px rgba(16, 23, 39, 0.15);
+  animation: surfaceIn 170ms var(--fs-ease-out) both;
 }
-
-@keyframes dialogIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.97);
-  }
-}
-
 .contentClosing {
-  animation: dialogOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+  animation: surfaceOut 140ms ease-in both;
+  pointer-events: none;
 }
-
-@keyframes dialogOut {
-  to {
-    opacity: 0;
-    transform: translateY(6px) scale(0.97);
+@keyframes surfaceIn {
+  from {
+    transform: translateY(var(--surface-travel));
   }
 }
-
-/* 移动端：弹窗改为底部 Sheet，从下往上滑入 */
+@keyframes surfaceOut {
+  to {
+    transform: translateY(var(--surface-travel));
+  }
+}
 @media not all and (min-width: 768px) {
   .overlay {
     align-items: flex-end;
   }
-
   .content {
+    --surface-travel: 18px;
     width: 100%;
     max-width: none;
-    max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - 24px);
-    padding: 14px calc(20px + var(--fs-safe-right)) calc(20px + var(--fs-safe-bottom))
+    max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - 16px);
+    border-radius: 22px 22px 0 0;
+    padding: 16px calc(20px + var(--fs-safe-right)) calc(18px + var(--fs-safe-bottom))
       calc(20px + var(--fs-safe-left));
-    border-radius: 24px 24px 0 0;
-    animation: sheetIn var(--fs-duration-slow) var(--fs-ease-out) both;
   }
-
-  /* Sheet 顶部抓手：示意可下滑关闭（视觉件，不做手势） */
-  .content::before {
-    content: '';
-    flex-shrink: 0;
-    width: 36px;
-    height: 4px;
-    margin: 0 auto 10px;
-    border-radius: 2px;
-    background: var(--dsw-alias-border-l3);
-  }
-
-  .contentClosing {
-    animation: sheetOut var(--fs-duration-base) var(--fs-ease-in-out) both;
-  }
-
-  .main {
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-
-  /* 居中对话框：危险确认与许可证全文，覆盖 Sheet 样式 */
   .overlayCentered {
     align-items: center;
     padding: var(--fs-safe-top) var(--fs-safe-right) var(--fs-safe-bottom) var(--fs-safe-left);
   }
-
   .centered {
-    width: min(400px, calc(100vw - 32px));
-    max-width: none;
-    max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - 32px);
-    padding: 22px 24px 20px;
-    border-radius: 24px;
-    animation: dialogCenteredIn var(--fs-duration-slow) var(--fs-ease-out) both;
-  }
-
-  .centered::before {
-    display: none;
-  }
-
-  .centered.contentClosing {
-    animation: dialogCenteredOut var(--fs-duration-base) var(--fs-ease-in-out) both;
+    --surface-travel: 7px;
+    width: calc(100% - 32px);
+    max-width: 400px;
+    max-height: calc(var(--fs-viewport-height) - var(--fs-safe-top) - var(--fs-safe-bottom) - 32px);
+    padding: 20px 22px;
+    border-radius: 20px;
   }
 }
-
-@keyframes sheetIn {
-  from {
-    transform: translateY(48px);
-    opacity: 0.4;
+@media (prefers-reduced-motion: reduce) {
+  .overlay::before,
+  .content {
+    animation: none;
   }
 }
-
-@keyframes sheetOut {
-  to {
-    transform: translateY(48px);
-    opacity: 0.4;
-  }
-}
-
-@keyframes dialogCenteredIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-}
-
-@keyframes dialogCenteredOut {
-  to {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-}
-
 .header {
   display: flex;
   align-items: center;

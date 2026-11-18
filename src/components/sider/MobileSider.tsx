@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { hasTransientPanel } from '../base/transientPanel.js'
 import { hasOpenModal } from '../base/Modal.js'
 import { hasSettingsOpen } from '../settings/settingsDialogState.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
@@ -29,7 +30,7 @@ export const MobileSider = () => {
     const element = drawer.current
     element?.focus({ preventScroll: true })
     const keydown = (event: KeyboardEvent) => {
-      if (hasSettingsOpen() || hasOpenModal() || document.querySelector('[role="menu"]')) {
+      if (event.defaultPrevented || hasSettingsOpen() || hasOpenModal() || hasTransientPanel()) {
         return
       }
       if (event.key === 'Escape') {

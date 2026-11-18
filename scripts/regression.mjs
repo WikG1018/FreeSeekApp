@@ -180,7 +180,7 @@ try {
   await run('current mobile UI and persona picker', async (page) => {
     assert.equal(await page.title(), 'FreeSeek')
     await page.getByRole('button', { name: /选择新对话的人设/ }).click()
-    await page.getByRole('radio', { name: /^写作助手/ }).click()
+    await page.getByRole('option', { name: /^写作助手/ }).click()
     assert.equal(
       await page.evaluate(() => localStorage.getItem('freeseek:default-persona')),
       'builtin-writer'

@@ -10,6 +10,9 @@ declare const styles: {
   readonly sectionHeader: string
   readonly bottom: string
   readonly settings: string
+  readonly support: string
+  readonly supportArrow: string
+  readonly donateHeart: string
   readonly settingsIcon: string
   readonly settingsLabel: string
   readonly collapsed: string

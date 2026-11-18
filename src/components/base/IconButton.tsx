@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
 import { Tooltip, type TooltipPlacement } from './Tooltip.js'
 import styles from './IconButton.module.css'
 
@@ -15,6 +15,7 @@ export const IconButton = ({
   tooltipPlacement,
   className,
   hitArea,
+  buttonRef,
   ...props
 }: {
   icon: ReactNode
@@ -23,12 +24,20 @@ export const IconButton = ({
   tooltip?: string
   tooltipPlacement?: TooltipPlacement
   /** 视觉尺寸不变，把可点区域撑到 44px（小图标按钮放在窄栏里时用） */
+  buttonRef?: Ref<HTMLButtonElement>
   hitArea?: boolean
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title'>) => {
   const button = (
     <button
+      ref={buttonRef}
       type="button"
-      className={clsx(styles.button, styles[size], styles[tone], hitArea && styles.hitArea, className)}
+      className={clsx(
+        styles.button,
+        styles[size],
+        styles[tone],
+        hitArea && styles.hitArea,
+        className
+      )}
       aria-label={tooltip}
       {...props}
     >

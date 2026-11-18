@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from 'react'
+import { hasTransientPanel } from '../base/transientPanel.js'
 import { hasOpenModal } from '../base/Modal.js'
 import { hasSettingsOpen } from '../settings/settingsDialogState.js'
 import { useMobileSider } from './mobileSiderState.js'
@@ -68,7 +69,7 @@ export const useSiderGesture = (frameRef: RefObject<HTMLDivElement>, enabled: bo
         event.touches.length !== 1 ||
         hasSettingsOpen() ||
         hasOpenModal() ||
-        document.querySelector('[role="menu"]')
+        hasTransientPanel()
       ) {
         return
       }

@@ -14,6 +14,7 @@ import {
   type ProviderProfile,
   type ProviderProtocol,
 } from '../../services/providers.js'
+import { Select } from '../base/Select.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
@@ -62,30 +63,26 @@ export const ConnectionSelector = ({
   return (
     <div className={styles.fields}>
       {(layout === 'picker' || profiles.length > 0) && (
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span>{t('providerSelectService')}</span>
-          <select
-            aria-label={t('providerSelectService')}
+          <Select
+            ariaLabel={t('providerSelectService')}
             value={selection.providerId}
             disabled={disabled}
-            onChange={(event) => {
-              const id = event.target.value
+            options={[
+              { value: 'deepseek', label: t('providerOfficial') },
+              ...profiles.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+            onChange={(id) =>
               choose(
                 id,
                 id === 'deepseek'
                   ? 'deepseek-flash'
                   : (profiles.find((p) => p.id === id)?.model ?? '')
               )
-            }}
-          >
-            <option value="deepseek">{t('providerOfficial')}</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+            }
+          />
+        </div>
       )}
       {layout === 'settings' && !profile ? (
         <div
@@ -114,21 +111,16 @@ export const ConnectionSelector = ({
           ))}
         </div>
       ) : (
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span>{t('providerModel')}</span>
-          <select
-            aria-label={t('providerModel')}
+          <Select
+            ariaLabel={t('providerModel')}
             value={selection.model}
             disabled={disabled}
-            onChange={(event) => choose(selection.providerId, event.target.value)}
-          >
-            {models.map((model) => (
-              <option key={model} value={model}>
-                {modelLabel(model)}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={models.map((model) => ({ value: model, label: modelLabel(model) }))}
+            onChange={(model) => choose(selection.providerId, model)}
+          />
+        </div>
       )}
       <p className={styles.hint}>
         {layout === 'settings' && !profile
@@ -313,19 +305,21 @@ export const ProviderSettingsPage = () => {
             onChange={(e) => patch({ name: e.target.value })}
           />
         </label>
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span>{t('providerProtocol')}</span>
-          <select
-            aria-label={t('providerProtocol')}
+          <Select<ProviderProtocol>
+            ariaLabel={t('providerProtocol')}
             value={form.protocol}
-            onChange={(e) => patch({ protocol: e.target.value as ProviderProtocol, models: [] })}
-          >
-            <option value="openai">OpenAI Chat Completions</option>
-            <option value="responses">OpenAI Responses</option>
-            <option value="anthropic">Anthropic Messages</option>
-            <option value="gemini">Google Gemini</option>
-          </select>
-        </label>
+            disabled={Boolean(busy)}
+            options={[
+              { value: 'openai', label: 'OpenAI Chat Completions' },
+              { value: 'responses', label: 'OpenAI Responses' },
+              { value: 'anthropic', label: 'Anthropic Messages' },
+              { value: 'gemini', label: 'Google Gemini' },
+            ]}
+            onChange={(protocol) => patch({ protocol, models: [] })}
+          />
+        </div>
         <label className={styles.field}>
           <span>{t('providerUrl')}</span>
           <input
@@ -375,20 +369,14 @@ export const ProviderSettingsPage = () => {
           />
         </label>
         {form.models.length ? (
-          <select
-            aria-label={t('providerChooseFetched')}
-            value=""
-            onChange={(e) => patch({ model: e.target.value })}
-          >
-            <option value="" disabled>
-              {t('providerChooseFetched')}
-            </option>
-            {form.models.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
+          <Select
+            ariaLabel={t('providerChooseFetched')}
+            placeholder={t('providerChooseFetched')}
+            value={form.model}
+            disabled={Boolean(busy)}
+            options={form.models.map((model) => ({ value: model, label: model }))}
+            onChange={(model) => patch({ model })}
+          />
         ) : null}
         <div className={styles.actions}>
           <Button variant="outlined" disabled={!form.url.trim()} onClick={() => void run('models')}>
@@ -452,18 +440,19 @@ export const ProviderSettingsPage = () => {
               />
             </label>
             {form.protocol === 'openai' ? (
-              <label className={styles.field}>
+              <div className={styles.field}>
                 <span>{t('providerTokenParameter')}</span>
-                <select
+                <Select<ProviderProfile['tokenParameter']>
+                  ariaLabel={t('providerTokenParameter')}
                   value={form.tokenParameter}
-                  onChange={(e) =>
-                    patch({ tokenParameter: e.target.value as ProviderProfile['tokenParameter'] })
-                  }
-                >
-                  <option>max_tokens</option>
-                  <option>max_completion_tokens</option>
-                </select>
-              </label>
+                  disabled={Boolean(busy)}
+                  options={[
+                    { value: 'max_tokens', label: 'max_tokens' },
+                    { value: 'max_completion_tokens', label: 'max_completion_tokens' },
+                  ]}
+                  onChange={(tokenParameter) => patch({ tokenParameter })}
+                />
+              </div>
             ) : null}
             {(['stream', 'streamUsage', 'vision', 'pdf'] as const).map((key, index) => (
               <label key={key} className={styles.check}>
