@@ -2,10 +2,10 @@ import { ContextSummaryDialog } from '../components/messages/ContextSummaryDialo
 import { Onboarding } from '../components/onboarding/Onboarding.js'
 import { initialOnboardingStep } from '../services/onboarding.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
-import { hasSettingsOpen } from '../components/settings/settingsDialogState.js'
+import { hasSettingsOpen, useSettingsDialog } from '../components/settings/settingsDialogState.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Capacitor,
   registerPlugin,
@@ -16,6 +16,9 @@ import {
 import { App as CapacitorApp } from '@capacitor/app'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
+import { setScreenTimeChat } from '../services/screenTime.js'
+import { useScreenTimeMilestones } from '../services/screenTimeMilestones.js'
+import { useAutomaticScreenTimeMilestones } from './useScreenTimeMilestones.js'
 import { useTheme } from './theme.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
@@ -41,6 +44,8 @@ import { closeMobileSider, useMobileSider } from '../components/sider/mobileSide
 import { Sider } from '../components/sider/Sider.js'
 import { MobileSider } from '../components/sider/MobileSider.js'
 import { useSiderGesture } from '../components/sider/useSiderGesture.js'
+import { DonateDialog } from '../components/donate/DonateDialog.js'
+import { UsageMilestoneDialog } from '../components/milestones/UsageMilestone.js'
 import styles from './App.module.css'
 import { hasChatConnection } from '../services/providers.js'
 
@@ -63,6 +68,10 @@ export const App = () => {
   const [onboarding, setOnboarding] = useState(() =>
     initialOnboardingStep(Boolean(hasChatConnection() || useSettings.getState().apiKey))
   )
+  const [donationOpen, setDonationOpen] = useState(false)
+  const [donationFullscreen, setDonationFullscreen] = useState(false)
+  const openDonation = () => setDonationOpen(true)
+  const milestone = useScreenTimeMilestones((state) => state.playing)
   const initError = useChatStore((state) => state.initError)
   const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
   const importingHistory = useChatStore((state) => state.importingHistory)
@@ -77,11 +86,27 @@ export const App = () => {
   const fontScale = useSettings((state) => state.fontScale)
   const frameRef = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : fontScale)
   const siderOpen = useMobileSider((state) => state.open) && isMobile
+  const settingsOpen = useSettingsDialog((state) => state.open)
   useSiderGesture(frameRef, isMobile)
   const streaming = useChatStore((state) =>
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
+  useAutomaticScreenTimeMilestones(
+    ready && activeId === null && !siderOpen && !settingsOpen && !donationOpen && !onboarding
+  )
+  const visibleChat =
+    ready &&
+    !importingHistory &&
+    !sessionLoadError &&
+    !siderOpen &&
+    !settingsOpen &&
+    !donationOpen &&
+    !onboarding
+      ? (session?.id ?? null)
+      : null
+
+  useLayoutEffect(() => setScreenTimeChat(visibleChat), [visibleChat])
 
   usePreventPageScroll(isMobile || Capacitor.getPlatform() === 'android')
 
@@ -123,31 +148,44 @@ export const App = () => {
     void initChat()
   }, [])
 
-  // 沉浸式：系统栏图标颜色跟随应用主题（浅色主题用深色图标，深色主题反之）
+  // 系统栏图标跟随当前覆盖层。应用配色单独持久化，打开弹窗时无需重设。
   const theme = useTheme()
+  const nativeTheme = useRef<{ dark: boolean; ready: Promise<void> }>()
+  const appDark = theme === 'dark'
+  const darkMilestone = milestone !== null && milestone > 100
+  const darkStatus = appDark || (darkMilestone && !donationFullscreen)
+  const darkNavigation = appDark || (darkMilestone && !donationOpen)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return
     }
-    const style = theme === 'dark' ? SystemBarsStyle.Dark : SystemBarsStyle.Light
     let stale = false
     void (async () => {
       if (Capacitor.getPlatform() === 'android') {
-        await Appearance.setTheme({ dark: theme === 'dark' })
+        if (nativeTheme.current?.dark !== appDark) {
+          nativeTheme.current = { dark: appDark, ready: Appearance.setTheme({ dark: appDark }) }
+        }
+        await nativeTheme.current.ready
       }
       if (stale) {
         return
       }
-      await SystemBars.setStyle({ style })
+      await SystemBars.setStyle({
+        style: darkStatus ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+        bar: SystemBarType.StatusBar,
+      })
       if (stale) {
         return
       }
-      await SystemBars.setStyle({ style, bar: SystemBarType.NavigationBar })
+      await SystemBars.setStyle({
+        style: darkNavigation ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+        bar: SystemBarType.NavigationBar,
+      })
     })().catch(() => {})
     return () => {
       stale = true
     }
-  }, [theme])
+  }, [appDark, darkStatus, darkNavigation])
 
   // Android 返回键：设置/弹窗 → 搜索面板 → 侧边抽屉 → 退出确认（双击），不吞掉任务栈返回
   useEffect(() => {
@@ -193,7 +231,11 @@ export const App = () => {
   return (
     <>
       <div ref={frameRef} className={styles.frame} data-sider-open={siderOpen ? '' : undefined}>
-        {isMobile ? <MobileSider /> : siderCollapsed ? null : <Sider />}
+        {isMobile ? (
+          <MobileSider donationOpen={donationOpen} onDonate={openDonation} />
+        ) : siderCollapsed ? null : (
+          <Sider donationOpen={donationOpen} onDonate={openDonation} />
+        )}
         <main className={styles.main} aria-hidden={siderOpen || undefined}>
           {saveError ? (
             <div className={styles.saveError} role="alert">
@@ -243,12 +285,28 @@ export const App = () => {
                 siderCollapsed={siderCollapsed}
               />
             ) : (
-              <Welcome />
+              <Welcome
+                motionActive={
+                  !siderOpen && !settingsOpen && !donationOpen && !onboarding && milestone === null
+                }
+              />
             )}
           </div>
         </main>
         <SearchPanel />
       </div>
+      {milestone !== null && (
+        <UsageMilestoneDialog hours={milestone} covered={donationOpen} onDonate={openDonation} />
+      )}
+      {donationOpen && (
+        <DonateDialog
+          onFullscreenChange={setDonationFullscreen}
+          onClose={() => {
+            setDonationFullscreen(false)
+            setDonationOpen(false)
+          }}
+        />
+      )}
       <ContextSummaryDialog />
       <SettingsDialog />
       {onboarding ? (

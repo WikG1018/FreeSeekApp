@@ -1,4 +1,3 @@
-import logo from '../../assets/logo.png'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getContextRounds } from '../../services/chat/reply.js'
@@ -9,11 +8,12 @@ import { IconCloseFill14 } from '../base/icons.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { MobileHeader } from './MobileHeader.js'
 import { PersonaPicker } from './PersonaPicker.js'
+import { WelcomeWhales } from './WelcomeWhales.js'
 import styles from './Welcome.module.css'
 import { useProviders } from '../../services/providers.js'
 
 /** 新对话：品牌标识 + 问候语 + 人设选择（收起为一行，点开选项栏）+ 输入框 */
-export const Welcome = () => {
+export const Welcome = ({ motionActive }: { motionActive: boolean }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   const inherit = useChatStore((state) => state.inheritFrom)
@@ -25,8 +25,7 @@ export const Welcome = () => {
       {isMobile ? <MobileHeader /> : null}
       <div className={styles.welcome}>
         <div className={styles.brand}>
-          <img className={styles.logo} src={logo} alt="" draggable={false} />
-          <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>
+          <WelcomeWhales active={motionActive} />
           {apiKey || custom ? null : (
             <button
               type="button"

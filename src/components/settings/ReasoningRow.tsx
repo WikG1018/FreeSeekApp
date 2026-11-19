@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import type { ReasoningControl, ReasoningLevel } from '../../services/reasoning.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
@@ -16,19 +17,24 @@ export const ReasoningRow = ({
 }) => {
   const t = useTranslate()
   const title = t('reasoningDefault')
+  const levelId = useId()
   const panel = useOptionPanel(title, { kind: 'reasoning', align: 'end', disabled })
   return (
     <>
       <button
         type="button"
         ref={panel.anchorRef}
-        className={styles.reasoningRow}
+        className={styles.parameterRow}
+        data-reasoning=""
         aria-label={title}
+        aria-describedby={levelId}
         disabled={disabled}
         {...panel.trigger}
       >
         <span>{title}</span>
-        <span>{t(reasoningLabels[control.defaultLevel])}</span>
+        <span id={levelId} className={styles.parameterValue}>
+          {t(reasoningLabels[control.defaultLevel])}
+        </span>
         <IconChevronDownOutline14 />
       </button>
       {panel.render(

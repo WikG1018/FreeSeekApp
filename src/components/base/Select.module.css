@@ -84,3 +84,48 @@
 .trigger[aria-expanded='true'] .indicator {
   background: var(--fs-settings-surface);
 }
+.trigger.settingRow {
+  box-sizing: border-box;
+  min-height: 54px;
+  padding: 10px 14px;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.trigger.settingRow[aria-expanded='true'] {
+  color: var(--fs-accent-text);
+  background: var(--fs-accent-wash);
+}
+.trigger.settingRow[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+.trigger.settingRow:focus-visible {
+  outline-offset: -3px;
+}
+.trigger .settingCopy {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}
+.settingCopy strong,
+.settingCopy small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.settingCopy strong {
+  font-weight: 600;
+}
+.settingCopy small,
+.settingValue {
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  font-weight: 400;
+}
+.settingCopy small {
+  margin-top: 3px;
+}
+.settingValue {
+  max-width: 54%;
+  text-align: right;
+}

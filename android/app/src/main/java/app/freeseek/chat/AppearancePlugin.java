@@ -13,7 +13,9 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class AppearancePlugin extends Plugin {
     private boolean dark;
     @Override public void load() {
-        dark = getContext().getSharedPreferences("freeseek-appearance", 0).getBoolean("dark", false);
+        int nightMode = getContext().getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        dark = getContext().getSharedPreferences("freeseek-appearance", 0)
+            .getBoolean("dark", nightMode == Configuration.UI_MODE_NIGHT_YES);
         getActivity().runOnUiThread(this::apply);
     }
     @PluginMethod public void setTheme(PluginCall call) {
@@ -35,6 +37,7 @@ public class AppearancePlugin extends Plugin {
         getActivity().getTheme().applyStyle(dark ? R.style.FreeSeekWindowDark : R.style.FreeSeekWindowLight, true);
         var window = getActivity().getWindow();
         window.getDecorView().setBackgroundColor(color);
+        if (getBridge().getWebView() != null) getBridge().getWebView().setBackgroundColor(color);
         var controller = WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(!dark);
         controller.setAppearanceLightNavigationBars(!dark);

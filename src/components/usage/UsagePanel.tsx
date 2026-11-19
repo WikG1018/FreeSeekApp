@@ -29,7 +29,13 @@ const compactTokens = (value: number) =>
 type Stats = UsageStats
 
 /** 统计内容：设置页与抽屉弹窗共用；价格编辑统一收进「价格设置」二级页 */
-export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) => {
+export const UsageContent = ({
+  onOpenPricing,
+  onOpenModels,
+}: {
+  onOpenPricing?: () => void
+  onOpenModels?: () => void
+}) => {
   const t = useTranslate()
   const pricing = usePricing((state) => state.pricing)
   const [stats, setStats] = useState<Stats | null>(null)
@@ -38,30 +44,39 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
     [retry, setRetry] = useState(0)
 
   useEffect(() => {
-    let alive = true
+    const controller = new AbortController()
     setLoading(true)
     setFailed(false)
-    collectUsage()
+    void collectUsage(controller.signal)
       .then((result) => {
-        if (alive) {
+        if (!controller.signal.aborted) {
           setStats(result)
           setLoading(false)
         }
       })
       .catch(() => {
-        if (alive) {
+        if (!controller.signal.aborted) {
           setFailed(true)
           setLoading(false)
         }
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [pricing, retry])
 
   const days = stats ? recentDays(stats, 14) : []
   const maxCost = Math.max(0.000001, ...days.map((day) => day.costCny))
   const today = stats?.days.find((day) => day.date === todayKey())
+  const modelLink = onOpenModels ? (
+    <button
+      type="button"
+      className={styles.pricingRow}
+      data-settings-target="usageModels"
+      onClick={onOpenModels}
+    >
+      <span className={styles.pricingRowLabel}>{t('usageModelsTitle')}</span>
+      <IconChevronRightOutline14 />
+    </button>
+  ) : null
 
   const pricingLink = onOpenPricing ? (
     <button
@@ -80,6 +95,7 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
   if (failed) {
     return (
       <div className={styles.content}>
+        {modelLink}
         <div role="alert" className={styles.empty}>
           {t('usageLoadError')}{' '}
           <Button variant="outlined" onClick={() => setRetry((v) => v + 1)}>
@@ -91,11 +107,17 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
     )
   }
   if (loading) {
-    return <div className={styles.loading}>{t('sessionLoading')}</div>
+    return (
+      <div className={styles.content}>
+        {modelLink}
+        <div className={styles.loading}>{t('sessionLoading')}</div>
+      </div>
+    )
   }
   if (!stats || stats.total.requests === 0) {
     return (
       <div className={styles.content}>
+        {modelLink}
         <p className={styles.empty}>{t('usageEmpty')}</p>
         {pricingLink}
       </div>
@@ -108,6 +130,7 @@ export const UsageContent = ({ onOpenPricing }: { onOpenPricing?: () => void }) 
 
   return (
     <div className={styles.content}>
+      {modelLink}
       {/* 主数字：总花费 + 今天 */}
       <div className={styles.hero}>
         <div className={styles.heroTop}>
@@ -217,6 +240,10 @@ export const UsagePanel = ({ onClose }: { onClose: () => void }) => {
   return (
     <Modal title={t('usageTitle')} closable onClose={onClose} className={styles.dialog}>
       <UsageContent
+        onOpenModels={() => {
+          onClose()
+          openSettings('usageModels')
+        }}
         onOpenPricing={() => {
           onClose()
           openSettings('usagePricing')

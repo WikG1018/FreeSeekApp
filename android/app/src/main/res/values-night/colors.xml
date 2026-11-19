@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="freeseek_launch_surface">#151517</color>
+    <color name="freeseek_launch_ink">#E3E3E3</color>
+    <bool name="freeseek_launch_light_bars">false</bool>
 </resources>

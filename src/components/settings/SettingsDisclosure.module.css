@@ -31,6 +31,18 @@
   font-weight: 600;
   cursor: pointer;
 }
+.triggerCopy {
+  min-width: 0;
+  padding-block: 3px;
+  overflow-wrap: break-word;
+}
+.triggerCopy small {
+  display: block;
+  margin-top: 3px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  font-weight: 400;
+}
 .symbol,
 .arrow {
   display: inline-flex;

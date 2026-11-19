@@ -609,12 +609,13 @@ export const runProviderCases = async ({ run }) => {
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
       await page.getByRole('button', { name: '添加连接', exact: true }).click()
       await page.getByRole('button', { name: '手动配置', exact: true }).click()
-      await page.getByLabel('配置名称', { exact: true }).fill('My gateway')
-      await page.getByLabel('API 地址', { exact: true }).fill('https://custom.example.test/v1')
+      await page.getByLabel('连接名称', { exact: true }).fill('My gateway')
+      await page.getByLabel('服务地址', { exact: true }).fill('https://custom.example.test/v1')
       await page.getByLabel('API 密钥', { exact: true }).fill('KEY_UI_PRIVATE')
       await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
       await page.getByRole('button', { name: '手动添加', exact: true }).click()
       await page.getByLabel('模型名称 / ID', { exact: true }).fill('custom-model')
+      await page.getByRole('button', { name: '更多保存方式', exact: true }).click()
       await page.getByRole('button', { name: '保存并启用', exact: true }).click()
       await page.evaluate(() => {
         window.__audit.settings.setShowModelSwitcher(true)
@@ -638,20 +639,30 @@ export const runProviderCases = async ({ run }) => {
     'provider templates keep pay-as-you-go and subscription connections independent',
     async (page) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
-      const add = async (route, expectedUrl, key) => {
+      const add = async (route, expectedUrl, keyLabel, key) => {
         await page.getByRole('button', { name: '添加连接', exact: true }).click()
         await page.getByRole('button', { name: '小米 MiMo', exact: true }).click()
         await page.getByRole('radio', { name: new RegExp(route) }).check()
-        await page.getByRole('button', { name: '继续', exact: true }).click()
-        assert.equal(await page.getByLabel('API 地址', { exact: true }).inputValue(), expectedUrl)
-        assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '')
-        await page.getByLabel('API 密钥', { exact: true }).fill(key)
+        const next = page.getByRole('button', { name: '继续', exact: true })
+        const scroll = await page.getByTestId('settings-scroll').boundingBox()
+        const action = await next.boundingBox()
+        assert.ok(Math.abs(scroll.y + scroll.height - action.y - action.height) <= 32)
+        await next.click()
+        assert.equal(await page.getByLabel('服务地址', { exact: true }).inputValue(), expectedUrl)
+        const keyInput = page.getByLabel(keyLabel, { exact: true })
+        assert.equal(await keyInput.inputValue(), '')
+        await keyInput.fill(key)
         await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
         await page.getByRole('heading', { name: '管理模型', exact: true }).waitFor()
         await page.getByRole('button', { name: '返回', exact: true }).click()
       }
-      await add('按量 API', 'https://api.xiaomimimo.com/v1', 'fixture-usage')
-      await add('Token Plan 订阅', 'https://token-plan-cn.xiaomimimo.com/v1', 'fixture-plan')
+      await add('按量 API', 'https://api.xiaomimimo.com/v1', 'API 密钥', 'fixture-usage')
+      await add(
+        'Token Plan 订阅',
+        'https://token-plan-cn.xiaomimimo.com/v1',
+        '套餐密钥',
+        'fixture-plan'
+      )
       const profiles = await page.evaluate(
         () => window.__audit.providers.useProviders.getState().profiles
       )
@@ -662,6 +673,61 @@ export const runProviderCases = async ({ run }) => {
         profiles.map((profile) => profile.model),
         ['', '']
       )
+    }
+  )
+  await run(
+    'API settings keep model search, compact parameter editing and equal footer actions',
+    async (page) => {
+      const button = (name) => page.getByRole('button', { name, exact: true })
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name: 'Gemini fixture',
+          url: 'https://gemini.example.test/v1beta',
+          protocol: 'gemini',
+          model: 'gemini-3.6-flash',
+          models: ['gemini-3.6-flash', 'gemini-3.6-pro'],
+        })
+        a.settingsDialog.openSettings('providers')
+      })
+      await button('Gemini fixture').click()
+      const search = page.getByRole('searchbox', { name: '搜索模型名称或 ID' })
+      await search.fill('flash')
+      assert.equal(await button('gemini-3.6-pro').count(), 0)
+      await button('gemini-3.6-flash').click()
+      await button('显示名称').click()
+      const editor = page.getByRole('dialog', { name: '显示名称', exact: true })
+      const input = editor.getByRole('textbox', { name: '显示名称' })
+      await page.waitForFunction(() => document.activeElement.matches('[data-panel-input]'))
+      await input.fill('Gemini 自定义显示名')
+      await input.press('Enter')
+      await editor.waitFor({ state: 'detached' })
+      assert.match(await button('显示名称').textContent(), /Gemini 自定义显示名/)
+
+      const effort = button('默认思考强度')
+      const initialHeight = await page
+        .getByTestId('settings-scroll')
+        .evaluate((el) => el.scrollHeight)
+      await effort.click()
+      const options = page.getByRole('dialog', { name: '默认思考强度', exact: true })
+      await options.waitFor()
+      assert.ok(await options.getAttribute('data-pointer-side'))
+      assert.equal(
+        await page.getByTestId('settings-scroll').evaluate((el) => el.scrollHeight),
+        initialHeight
+      )
+      await options.getByRole('option', { name: '高', exact: true }).click()
+      await options.waitFor({ state: 'detached' })
+
+      const testButton = await button('测试模型').boundingBox()
+      const saveButton = await button('保存').boundingBox()
+      const moreButton = await button('更多保存方式').boundingBox()
+      assert.ok(Math.abs(testButton.width - saveButton.width - moreButton.width) <= 1)
+      assert.ok(Math.abs(testButton.y - saveButton.y) <= 1)
+      await button('保存').click()
+      await button('Gemini 自定义显示名').waitFor()
     }
   )
   await run(

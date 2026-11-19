@@ -1,6 +1,7 @@
 import { createId } from '../../utils/id.js'
 import { openDB, type DBSchema } from 'idb'
 import { apiLimitCounts, describeKnownApiError } from '../api/knownErrors.js'
+import { zh } from '../../i18n/zh.js'
 
 export type LogScope =
   | 'app'
@@ -30,6 +31,8 @@ interface LogDB extends DBSchema {
 export const LOG_LIMIT = 2000
 export const LOG_RETENTION_MS = 7 * 24 * 3600_000
 const runId = createId()
+const encoder = new TextEncoder()
+const DETAIL_BYTE_LIMIT = 3000
 const secrets = new Set<string>()
 const recent: DiagnosticEvent[] = []
 const pending: DiagnosticEvent[] = []
@@ -64,6 +67,7 @@ const redactString = (value: string): string => {
   return result
     .replace(/Bearer\s+[^\s,;)]+/gi, 'Bearer [REDACTED]')
     .replace(/\bsk[-_][A-Za-z0-9_-]{8,}/gi, '[REDACTED]')
+    .replace(/\bhttps?:\/\/[^\s<>"')]+/gi, '[URL]')
     .replace(/(?:[A-Za-z]:[\\/]|\/data\/user\/|\/storage\/)[^\s)]+/g, '[PATH]')
     .slice(0, 800)
 }
@@ -81,11 +85,90 @@ const privateKeys = new Set([
   'prompt',
   'text',
   'filename',
+  'filepath',
+  'title',
+  'sessiontitle',
+  'conversationtitle',
+  'requesturl',
+  'baseurl',
+  'url',
+  'endpoint',
+  'payload',
+  'errormessage',
   'transcript',
   'audio',
   'base64',
   'blob',
 ])
+const errorNames = new Set([
+  'Error',
+  'TypeError',
+  'SyntaxError',
+  'ReferenceError',
+  'RangeError',
+  'AbortError',
+  'TimeoutError',
+  'QuotaExceededError',
+  'NetworkError',
+  'NotAllowedError',
+  'NotFoundError',
+  'InvalidStateError',
+  'NotSupportedError',
+  'SecurityError',
+  'DataError',
+  'ConstraintError',
+  'UnknownError',
+  'TransactionInactiveError',
+  'EncodingError',
+  'ApiError',
+  'BackupError',
+  'ArchiveError',
+  'ArchiveLimitError',
+  'StreamIdleTimeoutError',
+])
+const errorKinds = new Set(['http', 'stream', 'network', 'interrupted', 'protocol'])
+const messageField =
+  /\bmessages\.\d{1,7}(?:\.(?:content|role|type|source|file_id|\d{1,7})){0,7}(?![\w.])/
+
+const safeFrames = (frames: unknown[]) =>
+  frames.slice(0, 12).flatMap((value) => {
+    if (typeof value !== 'string' || value.length > 1024) {
+      return []
+    }
+    const frame = value.trim()
+    const script = /(?:^|\/)([\w-]{1,64}\.[a-f0-9]{8}\.js:\d{1,7}:\d{1,7})\)?$/.exec(frame)
+    if (script) {
+      return [script[1]]
+    }
+    return /^(?:app\.freeseek\.chat\.|com\.getcapacitor\.|androidx?\.|javax?\.|dalvik\.)[\w.$]{1,180}\([\w.$-]{1,80}\.java:\d{1,7}\)$/.test(
+      frame
+    )
+      ? [frame]
+      : []
+  })
+
+const sanitizeField = (key: string, item: unknown, depth: number): unknown => {
+  if (privateKeys.has(key.toLowerCase().replace(/[^a-z]/g, ''))) {
+    return '[REDACTED]'
+  }
+  if (key === 'frames') {
+    return Array.isArray(item) ? safeFrames(item) : []
+  }
+  if (key === 'name' && typeof item === 'string') {
+    return errorNames.has(item) ? item : 'Error'
+  }
+  if (key === 'kind' && typeof item === 'string') {
+    return errorKinds.has(item) ? item : undefined
+  }
+  if (key === 'localKey') {
+    return typeof item === 'string' && Object.hasOwn(zh, item) ? item : undefined
+  }
+  if (key === 'field') {
+    return typeof item === 'string' && item.length <= 200 ? messageField.exec(item)?.[0] : undefined
+  }
+  return sanitizeDetails(item, depth + 1)
+}
+
 export const sanitizeDetails = (value: unknown, depth = 0): unknown => {
   if (depth > 6) {
     return '[DEPTH_LIMIT]'
@@ -106,15 +189,20 @@ export const sanitizeDetails = (value: unknown, depth = 0): unknown => {
     return Object.fromEntries(
       Object.entries(value)
         .slice(0, 40)
-        .map(([key, item]) => [
-          key,
-          privateKeys.has(key.toLowerCase().replace(/[^a-z]/g, ''))
-            ? '[REDACTED]'
-            : sanitizeDetails(item, depth + 1),
-        ])
+        .filter(([key]) => /^[A-Za-z][\w-]{0,63}$/.test(key))
+        .map(([key, item]) => [key, sanitizeField(key, item, depth)])
     )
   }
   return undefined
+}
+
+export const boundedLogDetails = (value: unknown): Record<string, unknown> => {
+  const safe = sanitizeDetails(value)
+  if (!safe || typeof safe !== 'object' || Array.isArray(safe)) {
+    return {}
+  }
+  const byteLength = encoder.encode(JSON.stringify(safe)).length
+  return byteLength <= DETAIL_BYTE_LIMIT ? (safe as Record<string, unknown>) : { truncated: true }
 }
 
 /** 错误仅记录类型、协议状态、已知原因和栈帧，不记录可能回显正文的原始 error.message。 */
@@ -135,12 +223,12 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
       : {}
   const limitKey = describeKnownApiError(message)?.key
   return {
-    name: typeof item.name === 'string' && /^[\w.]{1,100}$/.test(item.name) ? item.name : 'Error',
+    name: typeof item.name === 'string' && errorNames.has(item.name) ? item.name : 'Error',
     ...(typeof item.status === 'number' ? { status: item.status } : {}),
-    ...(typeof item.kind === 'string' && /^[\w-]{1,30}$/.test(item.kind)
-      ? { kind: item.kind }
+    ...(typeof item.kind === 'string' && errorKinds.has(item.kind) ? { kind: item.kind } : {}),
+    ...(typeof local.key === 'string' && Object.hasOwn(zh, local.key)
+      ? { localKey: local.key }
       : {}),
-    ...(typeof local.key === 'string' ? { localKey: local.key } : {}),
     reason:
       limitKey === 'replyContextTooLong'
         ? 'context-limit'
@@ -148,22 +236,15 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
           ? 'output-limit'
           : (reasons.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unclassified'),
     ...(limitKey ? { limits: apiLimitCounts(message) } : {}),
-    field: /\bmessages\.\d+(?:\.[\w]+|\.\d+)*/.exec(message)?.[0],
+    field: messageField.exec(message)?.[0],
     frames:
       typeof item.stack === 'string'
-        ? item.stack
-            .split('\n')
-            .slice(1, 7)
-            .map((line) =>
-              line.replace(/https?:\/\/[^\s)]+/g, (value) => {
-                try {
-                  const url = new URL(value)
-                  return url.origin + '/' + url.pathname.split('/').at(-1)
-                } catch {
-                  return '[URL]'
-                }
-              })
-            )
+        ? safeFrames(
+            item.stack
+              .slice(0, 12_000)
+              .split('\n')
+              .filter((line) => /^\s*at /.test(line))
+          )
         : [],
   }
 }
@@ -174,7 +255,6 @@ export const logEvent = (
   details: Record<string, unknown> = {},
   level: LogLevel = 'info'
 ) => {
-  const safe = sanitizeDetails(details) as Record<string, unknown>
   const entry: DiagnosticEvent = {
     id: createId(),
     timestamp: Date.now(),
@@ -183,7 +263,7 @@ export const logEvent = (
     scope,
     event,
     level,
-    details: JSON.stringify(safe).length <= 3000 ? safe : { truncated: true },
+    details: boundedLogDetails(details),
   }
   recent.push(entry)
   if (recent.length > LOG_LIMIT) {
@@ -241,19 +321,41 @@ export const flushDiagnosticLogs = (): Promise<void> => {
 export const readDiagnosticLogs = async (): Promise<{
   events: DiagnosticEvent[]
   unavailableWrites: number
+  storageAvailable: boolean
 }> => {
   let stored: DiagnosticEvent[] = []
+  let storageAvailable = false
   try {
     await Promise.race([
       flushDiagnosticLogs(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Log timeout')), 2000)),
     ])
     stored = await Promise.race([
-      db().then((database) => database.getAll('events')),
+      db().then(async (database) => {
+        const tx = database.transaction('events')
+        const range = IDBKeyRange.lowerBound(Date.now() - LOG_RETENTION_MS, true)
+        const entries: DiagnosticEvent[] = []
+        for (
+          let cursor = await tx.store.index('timestamp').openCursor(range, 'prev');
+          cursor;
+          cursor = await cursor.continue()
+        ) {
+          const entry = cursor.value
+          if (entry && typeof entry.id === 'string' && Number.isFinite(entry.timestamp)) {
+            entries.push(entry)
+            if (entries.length === LOG_LIMIT) {
+              break
+            }
+          }
+        }
+        await tx.done
+        return entries
+      }),
       new Promise<DiagnosticEvent[]>((_, reject) =>
         setTimeout(() => reject(new Error('Log timeout')), 2000)
       ),
     ])
+    storageAvailable = true
   } catch {
     /* 日志存储不可用时仍能导出内存记录。 */
   }
@@ -264,6 +366,7 @@ export const readDiagnosticLogs = async (): Promise<{
       .sort((a, b) => a.timestamp - b.timestamp)
       .slice(-LOG_LIMIT),
     unavailableWrites,
+    storageAvailable,
   }
 }
 

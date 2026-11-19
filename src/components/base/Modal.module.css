@@ -132,5 +132,5 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: var(--modal-footer-gap, 20px);
 }

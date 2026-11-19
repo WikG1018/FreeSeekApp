@@ -19,8 +19,12 @@ export type SettingsPageId =
   | 'data'
   | 'usage'
   | 'usagePricing'
+  | 'usageModels'
+  | 'usageModel'
+  | 'screenTime'
   | 'about'
   | 'aboutInfo'
+  | 'easterEggs'
   | 'disclaimer'
   | 'guide'
 
@@ -41,10 +45,13 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   if (page === 'providerModel') {
     return 'providerModels'
   }
-  if (page === 'usagePricing') {
+  if (page === 'usageModel') {
+    return 'usageModels'
+  }
+  if (page === 'usagePricing' || page === 'usageModels') {
     return 'usage'
   }
-  if (page === 'aboutInfo' || page === 'disclaimer' || page === 'guide') {
+  if (page === 'aboutInfo' || page === 'easterEggs' || page === 'disclaimer' || page === 'guide') {
     return 'about'
   }
   return 'home'

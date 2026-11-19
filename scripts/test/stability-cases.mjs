@@ -695,13 +695,19 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
         for (let i = 0; i < 2100; i++) {
           d.logEvent('upload', 'retention.check', { index: i })
         }
+        const failure = new Error('Request failed\nMULTILINE_PRIVATE_CANARY')
+        failure.name = 'CUSTOM_ERROR_NAME_CANARY'
+        failure.stack +=
+          '\n    at recover (https://private-endpoint.example/static/js/main.a1b2c3d4.js:12:34)'
         d.logEvent('api', 'privacy.retained', {
           apiKey: 'sk-privacy-canary-12345678',
           text: 'CHAT_CONTENT_CANARY',
           filename: 'PRIVATE_FILENAME',
           content: 'ATTACHMENT_CONTENT_CANARY',
+          title: 'PRIVATE_TITLE_CANARY',
+          url: 'https://private-endpoint.example/request?apikey=QUERY_CANARY',
           detail: 'Bearer fake-secret-token sk-privacy-canary-12345678',
-          ...d.diagnosticError(new Error('CHAT_CONTENT_CANARY')),
+          ...d.diagnosticError(failure),
         })
         d.logEvent('api', 'persist.canary', { stage: 'after-retention' })
         await d.flushDiagnosticLogs()
@@ -727,11 +733,12 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
       assert.equal(Object.keys(result.texts).length, 6)
       assert.doesNotMatch(
         JSON.stringify(result.texts),
-        /sk-privacy-canary-12345678|CHAT_CONTENT_CANARY|PRIVATE_FILENAME|ATTACHMENT_CONTENT_CANARY|fake-secret-token/
+        /sk-privacy-canary-12345678|CHAT_CONTENT_CANARY|PRIVATE_FILENAME|ATTACHMENT_CONTENT_CANARY|fake-secret-token|MULTILINE_PRIVATE_CANARY|CUSTOM_ERROR_NAME_CANARY|PRIVATE_TITLE_CANARY|private-endpoint\.example|QUERY_CANARY/
       )
       assert.match(result.texts['environment.json'], /apiKeyConfigured/)
       assert.match(result.texts['client-events.jsonl'], /privacy.retained/)
       assert.match(result.texts['client-events.jsonl'], /REDACTED/)
+      assert.match(result.texts['client-events.jsonl'], /main\.a1b2c3d4\.js:12:34/)
     }
   )
 
@@ -749,6 +756,12 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
         }
         a.diagnostics.logEvent('storage', 'memory.fallback')
         await a.diagnostics.flushDiagnosticLogs()
+        Object.defineProperty(navigator.storage, 'estimate', {
+          configurable: true,
+          value: () => {
+            throw new DOMException('Estimate unavailable', 'SecurityError')
+          },
+        })
         const pack = await a.diagnosticBundle.createDiagnosticBundle(),
           texts = {}
         for await (const entry of a.readArchive(new File([pack.blob], pack.name))) {
@@ -759,6 +772,8 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
       })
       assert.match(result['client-events.jsonl'], /memory.fallback/)
       assert.equal(Object.keys(result).length, 6)
+      assert.equal(JSON.parse(result['summary.json']).clientStorageAvailable, false)
+      assert.deepEqual(JSON.parse(result['environment.json']).browserStorage, { unavailable: true })
     },
     async (context) => {
       await context.addInitScript(() => {

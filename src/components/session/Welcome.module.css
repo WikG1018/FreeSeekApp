@@ -22,26 +22,121 @@
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  animation: fadeUp var(--fs-duration-slow) var(--fs-ease-out) both;
 }
 
-.logo {
+.whales {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.whaleButton {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
   width: 56px;
   height: 56px;
-  border-radius: 0;
+  border-radius: 13px;
+  background: transparent;
+  cursor: pointer;
   user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.whaleButton:focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 2px;
+}
+.whaleButton:focus:not(:focus-visible) {
+  outline: none;
+}
+.whaleArt {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.whaleArt img,
+.whaleArt [data-whale-ride],
+.whaleArt [data-whale-reply] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+.whaleArt img {
   -webkit-user-drag: none;
+}
+.whaleArt .whaleLeader,
+.whaleArt .whaleFollower {
+  display: none;
+}
+@supports (clip-path: polygon(0 0, 100% 0, 100% 100%)) {
+  .whaleArt .whaleFallback {
+    display: none;
+  }
+  .whaleArt .whaleLeader,
+  .whaleArt .whaleFollower {
+    display: block;
+  }
+}
+.whaleLeader,
+.whaleLeader [data-whale-reply] {
+  transform-origin: 44% 40%;
+}
+.whaleFollower,
+.whaleFollower [data-whale-reply] {
+  transform-origin: 61% 67%;
+}
+.whaleArt [data-whale-bubble] {
+  position: absolute;
+  top: 21%;
+  left: 55%;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--fs-accent-text);
+  border-radius: 50%;
+  opacity: 0;
+}
+.whaleArt [data-whale-bubble]:nth-last-child(2) {
+  top: 17%;
+  left: 66%;
+  width: 7px;
+  height: 7px;
+}
+.whaleArt [data-whale-bubble]:last-child {
+  top: 10%;
+  left: 63%;
+  width: 4px;
+  height: 4px;
 }
 
 .greeting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin-top: 14px;
   font-size: 24px;
   line-height: 32px;
   font-weight: 600;
   text-align: center;
   color: var(--dsw-alias-label-primary);
+}
+.hello {
+  position: relative;
+  display: inline-block;
+}
+.helloAccent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: var(--fs-accent-text);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.helloAccent::before {
+  content: attr(data-text);
 }
 
 /* 继承上下文提示：卡片形态，比胶囊更易读 */
@@ -147,13 +242,6 @@
   }
 }
 
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
 @media (max-width: 439px) {
   .greeting {
     font-size: 20px;
@@ -183,12 +271,15 @@
     gap: 10px;
   }
 
-  .logo {
+  .greeting {
+    margin-top: 10px;
+  }
+  .whaleButton {
     width: 48px;
     height: 48px;
   }
 }
 
-[data-ds-dark-theme] .logo {
+[data-ds-dark-theme] .whaleArt img {
   filter: brightness(0) invert(0.89);
 }

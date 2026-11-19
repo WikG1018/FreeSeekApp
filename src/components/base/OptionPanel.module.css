@@ -22,6 +22,11 @@
 }
 .panel[data-kind='reasoning'] {
   width: 200px;
+  overflow: visible;
+}
+.panel[data-kind='reasoning'] > .list {
+  min-height: 0;
+  overflow-y: auto;
 }
 .reasoningHeading {
   padding: 8px 11px 9px;
@@ -51,6 +56,11 @@
   transform: translateX(-50%) rotate(45deg);
   pointer-events: none;
   content: '';
+}
+.panel[data-pointer-side='top']::after {
+  top: -6px;
+  bottom: auto;
+  transform: translateX(-50%) rotate(225deg);
 }
 /* In landscape the IME can leave room for only one row above the composer. */
 @media (orientation: landscape) and (max-height: 260px) {
@@ -114,10 +124,14 @@
 .option svg {
   flex-shrink: 0;
 }
-.option:focus-visible,
-.manage:focus-visible {
+.option:focus,
+.manage:focus {
   outline: 2px solid var(--fs-focus);
   outline-offset: -2px;
+}
+.option:focus:not(:focus-visible),
+.manage:focus:not(:focus-visible) {
+  outline: none;
 }
 .option:active,
 .manage:active {

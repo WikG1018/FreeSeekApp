@@ -17,7 +17,9 @@ final class ShareFiles {
     static File create(Context context, String name) throws IOException {
         if (name.length() > 180 || !name.matches("freeseek-[A-Za-z0-9_.-]+\\.zip")) throw new IOException("Invalid diagnostic filename");
         File root = new File(context.getCacheDir(), "diagnostic-shares");
-        if (!root.isDirectory() && !root.mkdirs()) throw new IOException("Cannot create share cache");
+        if (!root.isDirectory() && !root.mkdirs() && !root.isDirectory()) {
+            throw new IOException("Cannot create share cache");
+        }
         File[] folders = root.listFiles();
         if (folders != null) {
             Arrays.sort(folders, Comparator.comparingLong(File::lastModified).reversed());
@@ -32,6 +34,11 @@ final class ShareFiles {
         File folder = new File(root, UUID.randomUUID().toString());
         if (!folder.mkdir()) throw new IOException("Cannot create share folder");
         return new File(folder, name);
+    }
+    static void discard(File file) {
+        if (file == null) return;
+        file.delete();
+        file.getParentFile().delete();
     }
     static Intent intent(Context context, File file) {
         Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);

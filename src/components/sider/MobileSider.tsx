@@ -8,7 +8,13 @@ import { Sider } from './Sider.js'
 import styles from './Sider.module.css'
 
 /** 外壳保持挂载以便动画可中断；关闭后释放列表和弹窗状态。 */
-export const MobileSider = () => {
+export const MobileSider = ({
+  donationOpen,
+  onDonate,
+}: {
+  donationOpen: boolean
+  onDonate: () => void
+}) => {
   const t = useTranslate()
   const open = useMobileSider((state) => state.open)
   const dragging = useMobileSider((state) => state.dragging)
@@ -93,7 +99,7 @@ export const MobileSider = () => {
         aria-label={t('sidebarTitle')}
         aria-hidden={!open}
       >
-        {mounted && <Sider mobile />}
+        {mounted && <Sider mobile donationOpen={donationOpen} onDonate={onDonate} />}
       </div>
     </>
   )

@@ -16,9 +16,8 @@ import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
-import { openSettings } from '../settings/settingsDialogState.js'
-import { SupportMark } from '../donate/SupportMark.js'
-import { DonateDialog } from '../donate/DonateDialog.js'
+import { openSettings, useSettingsDialog } from '../settings/settingsDialogState.js'
+import { SupportMark, useDocumentVisible } from '../donate/SupportMark.js'
 import { SidebarUpdate } from '../update/Update.js'
 import { closeMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
@@ -26,7 +25,15 @@ import { useSessionSearch } from './useSessionSearch.js'
 import styles from './Sider.module.css'
 
 /** 展开的会话侧边栏，移动端放在由手势和系统返回控制的抽屉里。 */
-export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
+export const Sider = ({
+  mobile = false,
+  donationOpen,
+  onDonate,
+}: {
+  mobile?: boolean
+  donationOpen: boolean
+  onDonate: () => void
+}) => {
   const t = useTranslate()
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
@@ -57,7 +64,8 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const showMore = () => setVisibleCount((count) => Math.min(count + 80, ordered.length))
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  const [donateOpen, setDonateOpen] = useState(false)
+  const settingsOpen = useSettingsDialog((state) => state.open)
+  const documentVisible = useDocumentVisible()
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>
@@ -186,13 +194,20 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         <button
           type="button"
           className={clsx(styles.settings, styles.support)}
-          onClick={() => setDonateOpen(true)}
+          data-support-motion={
+            documentVisible && !donationOpen && !settingsOpen && !deleting ? '' : undefined
+          }
+          onClick={onDonate}
           aria-label={t('donateTitle')}
         >
           <span className={clsx(styles.settingsIcon, styles.donateHeart)}>
             <SupportMark />
           </span>
-          <span className={styles.settingsLabel}>{t('donateTitle')}</span>
+          <span className={styles.settingsLabel} aria-hidden="true">
+            <span>{t('donateTitle')}</span>
+            <span>{t('donateSmallTip')}</span>
+            <span>{t('donateSupport')}</span>
+          </span>
           <span aria-hidden className={styles.supportArrow}>
             <IconChevronRightOutline14 />
           </span>
@@ -209,7 +224,6 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           </span>
         </button>
       </div>
-      {donateOpen ? <DonateDialog onClose={() => setDonateOpen(false)} /> : null}
       {deleting ? (
         <Modal
           title={t('deleteSessionModalContentTitle')}

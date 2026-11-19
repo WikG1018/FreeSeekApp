@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { useRef, useState } from 'react'
+import { create } from 'zustand'
 import { Capacitor } from '@capacitor/core'
 import logo from '../../assets/logo.png'
 import { LICENSE_TEXT } from '../../assets/licenseText.js'
@@ -30,9 +31,19 @@ import { saveNativeDiagnostics } from '../../services/diagnostics/native.js'
 import { shareDiagnostics } from '../../services/shareDiagnostics.js'
 import { UsageContent } from '../usage/UsagePanel.js'
 import { PricingForm } from '../usage/PricingForm.js'
+import {
+  ModelUsageDetail,
+  ModelUsagePage,
+  initialModelUsageFilters,
+  useModelUsage,
+} from '../usage/ModelUsagePage.js'
+import { ScreenTimePage } from './ScreenTimePage.js'
+import { EasterEggsPage } from '../milestones/UsageMilestone.js'
+import { useScreenTimeMilestones } from '../../services/screenTimeMilestones.js'
 import { checkForUpdate, currentVersion, isNewer, useUpdate } from '../../services/update.js'
 import { UpdateDialog, useUpdateStatusText } from '../update/Update.js'
 import { GettingStarted, UsageNotice } from '../onboarding/Onboarding.js'
+import { useSettings } from '../../services/settings.js'
 import { closeSettings, useSettingsDialog, type SettingsPageId } from './settingsDialogState.js'
 import styles from './Settings.module.css'
 import {
@@ -61,20 +72,25 @@ import { PersonaEditor, PersonaLibrary } from '../personas/PersonaLibrary.js'
 /** 构建期注入的应用版本（rspack HtmlRspackPlugin 的 application-version meta） */
 const APP_VERSION =
   document.querySelector('meta[name="application-version"]')?.getAttribute('content') ?? '—'
+const useDiagnosticExport = create(() => ({ busy: false }))
 
 /** 目录、返回及跨屏布局由 SettingsShell 管理，导入中的文件随弹窗保留。 */
 export const SettingsDialog = () =>
   useSettingsDialog((state) => state.open) ? <SettingsRoot /> : null
 
 const SettingsRoot = () => {
-  const t = useTranslate()
-  const [guideOpen, setGuideOpen] = useState(true)
+  const [guideOpen, setGuideOpen] = useState(
+    () => !useSettings.getState().apiKey || useSettingsDialog.getState().showTutorial
+  )
   const [persona, setPersona] = useState<Persona>({ id: '', name: '', prompt: '' })
   const historyImport = useHistoryImport(),
     historyDelete = useHistoryDelete()
   const ready = useChatStore((state) => state.ready)
   const replacing = useChatStore((state) => state.importingHistory)
   const pageId = useSettingsDialog((state) => state.page)
+  const modelUsage = useModelUsage(pageId === 'usageModels' || pageId === 'usageModel')
+  const [modelUsageFilters, setModelUsageFilters] = useState(initialModelUsageFilters)
+  const [usageModelKey, setUsageModelKey] = useState<string | null>(null)
   const [preset, setPreset] = useState<ProviderPreset>()
   const [connection, setConnection] = useState(emptyProfile)
   const [connectionId, setConnectionId] = useState('')
@@ -123,9 +139,7 @@ const SettingsRoot = () => {
                     if (value.access.length > 1) {
                       open('providerAccess')
                     } else {
-                      setConnection(
-                        newProviderConnection(value, value.access[0], t('providerAccessTokenPlan'))
-                      )
+                      setConnection(newProviderConnection(value, value.access[0]))
                       open('providerConnection')
                     }
                   }}
@@ -141,9 +155,7 @@ const SettingsRoot = () => {
                   <ProviderAccessPage
                     preset={preset}
                     choose={(access) => {
-                      setConnection(
-                        newProviderConnection(preset, access, t('providerAccessTokenPlan'))
-                      )
+                      setConnection(newProviderConnection(preset, access))
                       open('providerConnection')
                     }}
                   />
@@ -216,11 +228,41 @@ const SettingsRoot = () => {
                 />
               )
             case 'usage':
-              return <UsageContent onOpenPricing={() => open('usagePricing')} />
+              return (
+                <UsageContent
+                  onOpenPricing={() => open('usagePricing')}
+                  onOpenModels={() => open('usageModels')}
+                />
+              )
             case 'usagePricing':
               return <PricingForm />
+            case 'usageModels':
+              return (
+                <ModelUsagePage
+                  source={modelUsage}
+                  filters={modelUsageFilters}
+                  change={setModelUsageFilters}
+                  selected={usageModelKey}
+                  openModel={(key) => {
+                    setUsageModelKey(key)
+                    open('usageModel')
+                  }}
+                />
+              )
+            case 'usageModel':
+              return (
+                <ModelUsageDetail
+                  source={modelUsage}
+                  modelKey={usageModelKey}
+                  period={modelUsageFilters.period}
+                />
+              )
+            case 'screenTime':
+              return <ScreenTimePage />
             case 'about':
               return <AboutPage open={open} />
+            case 'easterEggs':
+              return <EasterEggsPage />
             case 'disclaimer':
               return (
                 <Section>
@@ -303,13 +345,14 @@ const DataPage = ({
 /** 二级页：关于（完全本地，不跳转私有仓库） */
 const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
+  const hasEasterEggs = useScreenTimeMilestones((state) => state.triggered.length > 0)
   const [notes, setNotes] = useState<'installed' | 'incoming' | null>(null)
-  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
+  const diagnosticsBusy = useDiagnosticExport((state) => state.busy)
   const exportDiagnostics = async (share = true) => {
-    if (diagnosticsBusy) {
+    if (useDiagnosticExport.getState().busy) {
       return
     }
-    setDiagnosticsBusy(true)
+    useDiagnosticExport.setState({ busy: true })
     let bundleReady = false
     try {
       const { createDiagnosticBundle } = await import('../../services/diagnostics/export.js')
@@ -329,8 +372,13 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
         showToast({ key: saved === 'shared' ? 'diagnosticsShareOpened' : 'diagnosticsExported' })
       }
     } catch (error) {
-      logEvent('diagnostics', 'export.failed', diagnosticError(error), 'error')
-      if (Capacitor.getPlatform() === 'android' && !bundleReady) {
+      logEvent(
+        'diagnostics',
+        'export.failed',
+        { stage: bundleReady ? (share ? 'share' : 'save') : 'generate', ...diagnosticError(error) },
+        'error'
+      )
+      if (Capacitor.getPlatform() === 'android' && (!bundleReady || share)) {
         showToast({ key: 'diagnosticsFallback' })
         try {
           if (await saveNativeDiagnostics(error, share)) {
@@ -343,7 +391,10 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
             diagnosticError(fallbackError),
             'error'
           )
-          showToast({ key: 'diagnosticsExportFailed', type: 'error' })
+          showToast({
+            key: share ? 'diagnosticsShareFailed' : 'diagnosticsExportFailed',
+            type: 'error',
+          })
         }
       } else {
         showToast({
@@ -352,7 +403,7 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
         })
       }
     } finally {
-      setDiagnosticsBusy(false)
+      useDiagnosticExport.setState({ busy: false })
     }
   }
   const updateStatus = useUpdate((state) => state.status)
@@ -420,6 +471,13 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
       <Section>
         <Row label={t('guideTitle')} onClick={() => open('guide')} target="guide" />
         <Row label={t('disclaimerTitle')} onClick={() => open('disclaimer')} target="disclaimer" />
+        {hasEasterEggs && (
+          <Row
+            label={t('milestoneEasterEggs')}
+            onClick={() => open('easterEggs')}
+            target="easterEggs"
+          />
+        )}
         <Row
           label={t('settingsPrivacyLicenses')}
           onClick={() => open('aboutInfo')}

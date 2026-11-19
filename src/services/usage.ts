@@ -1,7 +1,8 @@
 import { create } from 'zustand'
+import { localDayKey as dayKey } from '../utils/localDate.js'
 import type { MessageUsage } from './api/types.js'
-import { loadAllSessions } from './chat/db.js'
-import type { AssistantMessage } from './chat/types.js'
+import { visitStoredSessions } from './chat/db.js'
+import type { AssistantMessage, Session } from './chat/types.js'
 import { usageEntries } from './chat/usage.js'
 import { THIRD_PARTY_SEARCH_RATE } from './api/search.js'
 
@@ -69,12 +70,8 @@ const UNPRICED: FlashPricing = {
   searchPer1k: 0,
 }
 type PricedModel = Pick<AssistantMessage, 'model' | 'responseModel' | 'connection'>
-const pricedModels = [
-  'deepseek-flash',
-  'deepseek-v4-flash',
-  'deepseek-v4-flash-vision-exp',
-  'deepseek-v4-pro',
-]
+const flashAliases = ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']
+const pricedModels = [...flashAliases, 'deepseek-v4-pro']
 export const hasKnownPricing = (
   message: PricedModel,
   model = message.responseModel ?? message.model
@@ -176,13 +173,6 @@ const addUsage = (totals: UsageTotals, detail: MessageUsageDetail, priced: boole
   totals.costCny += detail.costCny
 }
 
-const dayKey = (timestamp: number): string => {
-  const date = new Date(timestamp)
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
-}
-
 export type SessionUsage = UsageTotals & { id: string; title: string }
 
 export type UsageStats = {
@@ -237,19 +227,34 @@ export const computeMessageUsage = (
   }
 }
 
+type UsageEntry = { createdAt: number; usage: MessageUsage; model?: string }
+
+const visitUsageEntries = (
+  session: Session,
+  visit: (message: PricedModel, entry: UsageEntry) => void
+) => {
+  // Inherited messages are snapshots. Their original requests belong to the source chat.
+  for (const message of session.messages) {
+    if (message.role === 'assistant') {
+      for (const entry of usageEntries(message)) {
+        visit(message, entry)
+      }
+    }
+  }
+  for (const charge of session.compressionUsage ?? []) {
+    visit(charge, charge)
+  }
+}
+
 /** 遍历本地会话聚合用量；按消息时间所在时段计价 */
-export const collectUsage = async (): Promise<UsageStats> => {
+export const collectUsage = async (signal?: AbortSignal): Promise<UsageStats> => {
   const pricing = usePricing.getState().pricing
   const days = new Map<string, UsageTotals>()
   const total = emptyTotals()
   const sessions: SessionUsage[] = []
-  const allSessions = await loadAllSessions().catch(() => [])
-  for (const session of allSessions) {
+  await visitStoredSessions((session) => {
     const sessionTotals = emptyTotals()
-    const addEntry = (
-      message: PricedModel,
-      entry: { createdAt: number; usage: MessageUsage; model?: string }
-    ) => {
+    visitUsageEntries(session, (message, entry) => {
       const effectivePricing = messagePricing(message, pricing, entry.model),
         priced =
           Boolean(entry.usage.standalone_search_requests) || hasKnownPricing(message, entry.model)
@@ -260,21 +265,11 @@ export const collectUsage = async (): Promise<UsageStats> => {
       days.set(key, day)
       addUsage(total, detail, priced)
       addUsage(sessionTotals, detail, priced)
-    }
-    for (const message of session.messages) {
-      if (message.role === 'assistant' && message.usage) {
-        for (const entry of usageEntries(message)) {
-          addEntry(message, entry)
-        }
-      }
-    }
-    for (const charge of session.compressionUsage ?? []) {
-      addEntry(charge, charge)
-    }
+    })
     if (sessionTotals.requests > 0) {
       sessions.push({ ...sessionTotals, id: session.id, title: session.title || '' })
     }
-  }
+  }, signal)
   return {
     days: [...days.entries()]
       .map(([date, totals]) => ({ date, ...totals }))
@@ -288,6 +283,70 @@ export const collectUsage = async (): Promise<UsageStats> => {
         (a.cacheReadTokens + a.cacheMissTokens + a.outputTokens)
     ),
   }
+}
+
+export type ModelUsage = {
+  key: string
+  providerId: string | null
+  model: string | null
+  days: DayUsage[]
+}
+
+/** Read one request at a time, grouped by the saved connection and that request's model. */
+export const collectModelUsage = async (signal?: AbortSignal): Promise<ModelUsage[]> => {
+  const pricing = usePricing.getState().pricing
+  const groups = new Map<
+    string,
+    { providerId: string | null; model: string | null; days: Map<string, UsageTotals> }
+  >()
+  await visitStoredSessions(
+    (session) =>
+      visitUsageEntries(session, (message, entry) => {
+        const recorded = entry.model ?? null
+        const providerId =
+          message.connection?.providerId ??
+          (recorded && pricedModels.includes(recorded) ? 'deepseek' : null)
+        const model =
+          providerId === 'deepseek' && recorded && flashAliases.includes(recorded)
+            ? 'deepseek-flash'
+            : recorded
+        const key = JSON.stringify([providerId, model])
+        let group = groups.get(key)
+        if (!group) {
+          group = { providerId, model, days: new Map() }
+          groups.set(key, group)
+        }
+        const date = dayKey(entry.createdAt)
+        const day = group.days.get(date) ?? emptyTotals()
+        const priced = Boolean(recorded && hasKnownPricing(message, recorded))
+        const rate = priced ? messagePricing(message, pricing, entry.model) : UNPRICED
+        addUsage(day, computeMessageUsage(entry.usage, entry.createdAt, rate), priced)
+        group.days.set(date, day)
+      }),
+    signal
+  )
+  return [...groups].map(([key, group]) => ({
+    key,
+    providerId: group.providerId,
+    model: group.model,
+    days: [...group.days.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, totals]) => ({ date, ...totals })),
+  }))
+}
+
+export const usageTokenCount = (value: UsageTotals) =>
+  value.cacheReadTokens + value.cacheMissTokens + value.outputTokens
+
+export const sumUsage = (items: UsageTotals[]) => {
+  const total = emptyTotals()
+  const fields = Object.keys(total) as (keyof UsageTotals)[]
+  for (const item of items) {
+    for (const field of fields) {
+      total[field] += item[field]
+    }
+  }
+  return total
 }
 
 /** 近 N 天（含今天）的日序列，缺失补零；用于图表 */

@@ -16,14 +16,16 @@
         <item name="android:windowBackground">@color/freeseek_launch_surface</item>
     </style>
 
-    <!-- Use the same density-aware artwork as the adaptive launcher icon. -->
-    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen.IconBackground">
+    <style name="AppTheme.LaunchBase" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/freeseek_launch_surface</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
-        <item name="windowSplashScreenIconBackgroundColor">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/freeseek_launch_mark</item>
+        <item name="android:windowLightStatusBar">@bool/freeseek_launch_light_bars</item>
         <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
+    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme.LaunchBase" />
     <color name="freeseek_launch_surface">#FFFFFF</color>
+    <color name="freeseek_launch_ink">#172B45</color>
+    <bool name="freeseek_launch_light_bars">true</bool>
 
     <style name="FreeSeekWindowDark">
         <item name="android:windowBackground">#151517</item>

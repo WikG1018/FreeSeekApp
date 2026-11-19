@@ -4,9 +4,25 @@ import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
 import styles from './Settings.module.css'
 
-export const Section = ({ title, children }: { title?: string; children: ReactNode }) => (
+export const Section = ({
+  title,
+  action,
+  children,
+}: {
+  title?: string
+  action?: ReactNode
+  children: ReactNode
+}) => (
   <section className={styles.section}>
-    {title && <h2 className={styles.sectionTitle}>{title}</h2>}
+    {title &&
+      (action ? (
+        <div className={styles.sectionHeading}>
+          <h2 className={styles.sectionTitle}>{title}</h2>
+          {action}
+        </div>
+      ) : (
+        <h2 className={styles.sectionTitle}>{title}</h2>
+      ))}
     <div className={styles.card}>{children}</div>
   </section>
 )
@@ -32,6 +48,10 @@ type RowProps = {
   icon?: ReactNode
   value?: string
   description?: string
+  detail?: string
+  badge?: string
+  prominent?: boolean
+  className?: string
   danger?: boolean
   disabled?: boolean
   onClick?: () => void
@@ -44,6 +64,10 @@ export const Row = ({
   icon,
   value,
   description,
+  detail,
+  badge,
+  prominent,
+  className,
   danger,
   disabled,
   onClick,
@@ -51,6 +75,7 @@ export const Row = ({
   current,
 }: RowProps) => {
   const descriptionId = useId()
+  const detailId = useId()
   const body = (
     <>
       {icon && (
@@ -59,10 +84,30 @@ export const Row = ({
         </span>
       )}
       <span className={styles.rowCopy}>
-        <span className={clsx(styles.rowLabel, danger && styles.rowDanger)}>{label}</span>
+        {badge ? (
+          <span className={styles.rowHeadline}>
+            <span className={clsx(styles.rowLabel, prominent && styles.rowStrong)}>{label}</span>
+            <span className={styles.rowBadge}>{badge}</span>
+          </span>
+        ) : (
+          <span
+            className={clsx(
+              styles.rowLabel,
+              danger && styles.rowDanger,
+              prominent && styles.rowStrong
+            )}
+          >
+            {label}
+          </span>
+        )}
         {description && (
           <span className={styles.rowDescription} id={descriptionId}>
             {description}
+          </span>
+        )}
+        {detail && (
+          <span className={styles.rowDescription} id={detailId}>
+            {detail}
           </span>
         )}
       </span>
@@ -77,10 +122,12 @@ export const Row = ({
   return onClick ? (
     <button
       type="button"
-      className={clsx(styles.row, styles.rowInteractive)}
+      className={clsx(styles.row, styles.rowInteractive, className)}
       disabled={disabled}
-      aria-label={description ? label : undefined}
-      aria-describedby={description ? descriptionId : undefined}
+      aria-label={description || detail || badge ? label : undefined}
+      aria-describedby={
+        [description && descriptionId, detail && detailId].filter(Boolean).join(' ') || undefined
+      }
       data-settings-target={target}
       aria-current={current ? 'page' : undefined}
       onClick={onClick}
@@ -88,7 +135,7 @@ export const Row = ({
       {body}
     </button>
   ) : (
-    <div className={styles.row}>{body}</div>
+    <div className={clsx(styles.row, className)}>{body}</div>
   )
 }
 
@@ -96,21 +143,37 @@ export const SwitchRow = ({
   label,
   checked,
   change,
+  description,
 }: {
   label: string
   checked: boolean
   change: (enabled: boolean) => void
-}) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
-    onClick={() => change(!checked)}
-  >
-    <span className={styles.rowLabel}>{label}</span>
-    <span className={styles.toggleTrack} aria-hidden>
-      <span className={styles.toggleThumb} />
-    </span>
-  </button>
-)
+  description?: string
+}) => {
+  const descriptionId = useId()
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={description ? label : undefined}
+      aria-describedby={description ? descriptionId : undefined}
+      className={clsx(styles.row, styles.rowInteractive, styles.usageToggle)}
+      onClick={() => change(!checked)}
+    >
+      {description ? (
+        <span className={styles.rowCopy}>
+          <span className={styles.rowStrong}>{label}</span>
+          <span className={styles.rowDescription} id={descriptionId}>
+            {description}
+          </span>
+        </span>
+      ) : (
+        <span className={styles.rowLabel}>{label}</span>
+      )}
+      <span className={styles.toggleTrack} aria-hidden>
+        <span className={styles.toggleThumb} />
+      </span>
+    </button>
+  )
+}

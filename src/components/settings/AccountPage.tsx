@@ -9,12 +9,15 @@ import { Button } from '../base/Button.js'
 import {
   IconBookOutline16,
   IconCheckOutline16,
+  IconChevronRightOutline14,
   IconEyeOffOutline16,
   IconEyeOutline16,
   IconRightUpOutline14,
   IconSettingsOutline16,
 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
+import { useOptionPanel } from '../base/OptionPanel.js'
+import optionStyles from '../base/OptionPanel.module.css'
 import { showToast } from '../base/toastState.js'
 import { ConnectionSelector } from './ProviderSettings.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
@@ -82,6 +85,11 @@ export const AccountPage = ({
     [visible, setVisible] = useState(false),
     [clearing, setClearing] = useState(false)
   const [ready, setReady] = useState(false)
+  const keyMenu = useOptionPanel(t('settingsApiKey'), {
+    kind: 'actions',
+    align: 'end',
+    disabled: !apiKey || editing,
+  })
   const customName = useProviders(({ profiles, selection }) =>
     selection.providerId === 'deepseek'
       ? null
@@ -115,32 +123,65 @@ export const AccountPage = ({
     <>
       <ApiTutorial open={guideOpen} toggle={toggleGuide} />
       <Section title={t('providerOfficial')}>
-        <div className={styles.accountBlock}>
-          <div className={styles.accountStatus}>
-            <label className={styles.accountStatusLabel} htmlFor={id}>
-              {t('settingsApiKey')}
-            </label>
-            <span className={styles.accountStatusValue} data-configured={Boolean(apiKey)}>
-              {t(apiKey ? 'settingsApiKeyConfigured' : 'settingsApiKeyMissing')}
-            </span>
-          </div>
-          {apiKey && !editing ? (
-            <div className={styles.maskRow}>
-              <span className={styles.keyMask}>
-                {apiKey.length > 10 ? apiKey.slice(0, 4) + '••••' + apiKey.slice(-4) : '••••••'}
+        {apiKey && !editing ? (
+          <>
+            <button
+              ref={keyMenu.anchorRef}
+              type="button"
+              className={styles.row}
+              aria-label={t('settingsApiKey')}
+              {...keyMenu.trigger}
+            >
+              <span className={styles.rowCopy}>
+                <span className={styles.rowStrong}>{t('settingsApiKey')}</span>
+                <span className={styles.rowDescription} aria-hidden>
+                  ••••••••••••••••
+                </span>
               </span>
-              <button type="button" className={styles.textButton} onClick={() => setEditing(true)}>
-                {t('changeApiKey')}
-              </button>
-              <button
-                type="button"
-                className={styles.quietAction}
-                onClick={() => setClearing(true)}
-              >
-                {t('settingsApiKeyClear')}
-              </button>
+              <span className={styles.accountStatusValue} data-configured>
+                {t('settingsApiKeyConfigured')}
+              </span>
+              <span className={styles.rowChevron} aria-hidden>
+                <IconChevronRightOutline14 />
+              </span>
+            </button>
+            {keyMenu.render(
+              <>
+                <button
+                  type="button"
+                  data-panel-item=""
+                  className={optionStyles.option}
+                  onClick={() => {
+                    keyMenu.close()
+                    setEditing(true)
+                  }}
+                >
+                  {t('changeApiKey')}
+                </button>
+                <button
+                  type="button"
+                  data-panel-item=""
+                  className={optionStyles.option}
+                  onClick={() => {
+                    keyMenu.close(true)
+                    setClearing(true)
+                  }}
+                >
+                  {t('settingsApiKeyClear')}
+                </button>
+              </>
+            )}
+          </>
+        ) : (
+          <div className={styles.accountBlock}>
+            <div className={styles.accountStatus}>
+              <label className={styles.accountStatusLabel} htmlFor={id}>
+                {t('settingsApiKey')}
+              </label>
+              <span className={styles.accountStatusValue} data-configured={Boolean(apiKey)}>
+                {t(apiKey ? 'settingsApiKeyConfigured' : 'settingsApiKeyMissing')}
+              </span>
             </div>
-          ) : (
             <form
               className={styles.apiKeyEditor}
               onSubmit={(event) => {
@@ -193,20 +234,19 @@ export const AccountPage = ({
                 </button>
               </div>
             </form>
-          )}
-          <p className={styles.fieldHint}>{t('settingsApiKeyHint')}</p>
-        </div>
+            <p className={styles.fieldHint}>{t('settingsApiKeyHint')}</p>
+          </div>
+        )}
       </Section>
       <Section title={t('providerDefaultModel')}>
-        <div className={styles.accountBlock}>
-          <ConnectionSelector />
-        </div>
+        <ConnectionSelector />
       </Section>
       <Section title={t('settingsAdvancedGroup')}>
         <Row
           label={t('providerAdvanced')}
           description={t('settingsAdvancedHint')}
           icon={<IconSettingsOutline16 />}
+          prominent
           target="providers"
           onClick={openAdvanced}
         />

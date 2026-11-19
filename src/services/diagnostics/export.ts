@@ -5,6 +5,7 @@ import {
   logEvent,
   registerLogSecret,
   sanitizeDetails,
+  boundedLogDetails,
   diagnosticError,
 } from './log.js'
 import { getStorageSummary } from '../chat/db.js'
@@ -17,13 +18,13 @@ import { writeArchive } from '../chat/history/zipWriter.js'
 import { useProviders } from '../providers.js'
 
 const bounded = async <T>(
-  task: Promise<T>,
+  task: () => Promise<T>,
   timeoutMs = 4000
 ): Promise<T | { unavailable: true }> => {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      task,
+      Promise.resolve().then(task),
       new Promise<{ unavailable: true }>((resolve) => {
         timer = setTimeout(() => resolve({ unavailable: true }), timeoutMs)
       }),
@@ -41,6 +42,41 @@ const jsonl = (entries: unknown[]) =>
     type: 'application/x-ndjson',
   })
 
+const logIdentifier = (value: unknown) =>
+  typeof value === 'string' && /^(?:[0-9a-f-]{16,45}|[0-9a-z]{5,12}-[0-9a-z]{1,20})$/i.test(value)
+    ? value
+    : undefined
+
+const eventFields = (entry: unknown, source: 'client' | 'native') => {
+  if (!entry || typeof entry !== 'object') {
+    return []
+  }
+  const event = entry as Record<string, unknown>
+  const { timestamp, event: name, scope, level } = event
+  if (
+    typeof timestamp !== 'number' ||
+    !Number.isFinite(timestamp) ||
+    typeof name !== 'string' ||
+    !/^[\w.-]{1,90}$/.test(name) ||
+    typeof scope !== 'string' ||
+    !/^[\w-]{1,32}$/.test(scope)
+  ) {
+    return []
+  }
+  return [
+    {
+      source,
+      timestamp,
+      id: logIdentifier(event.id),
+      runId: logIdentifier(event.runId),
+      scope,
+      event: name,
+      level: level === 'warn' || level === 'error' ? level : 'info',
+      details: boundedLogDetails(event.details),
+    },
+  ]
+}
+
 /** 诊断包与会话备份独立：只采集运行元信息，不读取或打包正文、Key 和附件字节。 */
 export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Blob }> => {
   const started = performance.now(),
@@ -54,19 +90,19 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   logEvent('diagnostics', 'export.started')
   const [client, storage, browserStorage, native] = await Promise.all([
     readDiagnosticLogs(),
-    bounded(getStorageSummary()),
-    bounded(navigator.storage?.estimate?.() ?? Promise.resolve({})),
+    bounded(getStorageSummary),
+    bounded(() => navigator.storage?.estimate?.() ?? Promise.resolve({})),
     Capacitor.getPlatform() === 'android'
-      ? bounded(NativeDiagnostics.snapshot())
+      ? bounded(() => NativeDiagnostics.snapshot())
       : Promise.resolve({ unavailable: true as const }),
   ])
   const nativeEvents =
     'events' in native && Array.isArray(native.events)
-      ? native.events.slice(-1000).map((entry) => sanitizeDetails(entry))
+      ? native.events.slice(-1000).flatMap((entry) => eventFields(entry, 'native'))
       : []
   const state = useChatStore.getState()
   const active = state.activeId ? state.sessionCache[state.activeId] : undefined
-  const lastReply = active?.messages.toReversed().find((message) => message.role === 'assistant')
+  const lastReply = active?.messages.findLast((message) => message.role === 'assistant')
   const usage =
     lastReply?.role === 'assistant'
       ? (lastReply.usageHistory?.at(-1)?.usage ?? lastReply.usage)
@@ -149,35 +185,18 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     browserStorage,
     native: 'environment' in native ? native.environment : native,
   })
-  const events = client.events.map((entry) => ({
-    ...entry,
-    details: sanitizeDetails(entry.details),
-  }))
+  const events = client.events.flatMap((entry) => eventFields(entry, 'client'))
   const errorEvents = [...events, ...nativeEvents].filter(
-    (entry) =>
-      entry &&
-      typeof entry === 'object' &&
-      'level' in entry &&
-      ['error', 'warn'].includes(String(entry.level))
+    (entry) => entry.level === 'error' || entry.level === 'warn'
   )
   const summary = {
     clientEvents: events.length,
     nativeEvents: nativeEvents.length,
+    clientStorageAvailable: client.storageAvailable,
+    nativeSnapshotAvailable: 'environment' in native,
     unavailableClientWrites: client.unavailableWrites,
     unavailableNativeWrites: 'failedWrites' in native ? native.failedWrites : undefined,
-    recentIssues: errorEvents
-      .sort((a, b) => {
-        const left =
-          a && typeof a === 'object' && 'timestamp' in a && typeof a.timestamp === 'number'
-            ? a.timestamp
-            : 0
-        const right =
-          b && typeof b === 'object' && 'timestamp' in b && typeof b.timestamp === 'number'
-            ? b.timestamp
-            : 0
-        return left - right
-      })
-      .slice(-30),
+    recentIssues: errorEvents.sort((a, b) => a.timestamp - b.timestamp).slice(-30),
     createdInMs: Math.round(performance.now() - started),
   }
   const createdAt = new Date().toISOString()

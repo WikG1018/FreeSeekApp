@@ -125,6 +125,19 @@ export const IconDataOutline16 = () => (
   </svg>
 )
 
+export const IconClockOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <circle cx="8" cy="8" r="5.85" stroke="currentColor" strokeWidth="1.35" />
+    <path
+      d="M8 4.75V8l2.3 1.5"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 export const IconUploadOutline14 = () => (
   <svg width={14} height={14} viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

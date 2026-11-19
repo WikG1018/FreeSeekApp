@@ -8,14 +8,16 @@ import com.getcapacitor.BridgeWebViewClient;
 import com.getcapacitor.JSObject;
 
 public class MainActivity extends BridgeActivity {
+    private StartupSplash startupSplash;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        SplashScreen.installSplashScreen(this);
+        SplashScreen splash = SplashScreen.installSplashScreen(this);
         DiagnosticsLog.installCrashHandler(getApplicationContext());
         DiagnosticsLog.record(getApplicationContext(), "app", "activity.created", new com.getcapacitor.JSObject());
         registerPlugin(FontScalePlugin.class);
         registerPlugin(AppearancePlugin.class);
+        registerPlugin(StartupHandoffPlugin.class);
         registerPlugin(MicPermissionPlugin.class);
         registerPlugin(DonatePlugin.class);
         registerPlugin(UpdatePlugin.class);
@@ -25,7 +27,12 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DiagnosticSharePlugin.class);
         // 插件先登记，super 创建 Bridge 后再安装观察器；无 WebView 时保留框架降级页。
         super.onCreate(savedInstanceState);
-        if (getBridge() != null) new WindowEdges(getWindow(), getBridge()).install();
+        var bridge = getBridge();
+        if (bridge != null && bridge.getWebView() != null) {
+            new WindowEdges(getWindow(), bridge).install();
+            startupSplash = new StartupSplash(splash, bridge.getWebView());
+            bridge.addWebViewListener(startupSplash);
+        }
         if (getBridge() != null) { getBridge().setWebViewClient(new BridgeWebViewClient(getBridge()) {
             @Override
             public void onReceivedError(android.webkit.WebView view, android.webkit.WebResourceRequest request,
@@ -53,6 +60,10 @@ public class MainActivity extends BridgeActivity {
                 return super.onRenderProcessGone(view, detail);
             }
         }); }
+    }
+
+    void markStartupPaintable() {
+        if (startupSplash != null) startupSplash.markPaintable();
     }
     @Override
     public void onTrimMemory(int level) {

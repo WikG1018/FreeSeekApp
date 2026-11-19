@@ -24,9 +24,10 @@ declare module 'core-js/stable' {}
 declare module 'abortcontroller-polyfill/dist/polyfill-patch-fetch' {}
 
 interface Window {
+  __FreeSeekNativeSplashDone?: boolean
   __FreeSeekStartup?: {
     mounted: () => void
-    ready: () => void
+    ready: (handoff?: (reveal: () => void) => void) => void
     fail: (phase: 'bootstrap' | 'render', error: unknown) => void
   }
 }

@@ -42,6 +42,7 @@ export const useOptionPanel = (
     }
   }, [disabled])
   const id = useId()
+  const maxHeight = kind === 'actions' ? 226 : 354
   const { anchorRef, floatingRef, position } = useAnchoredPosition<
     HTMLButtonElement,
     HTMLDivElement
@@ -49,11 +50,11 @@ export const useOptionPanel = (
     side,
     align,
     alignOffset: kind === 'details' ? 12 : 0,
-    offset: 7,
-    maxHeight: kind === 'actions' ? 226 : 354,
+    offset: kind === 'reasoning' ? 10 : 7,
+    maxHeight,
     matchAnchorWidth: kind === 'field',
-    pointToAnchor: kind === 'details',
-    minSpace: 132,
+    pointToAnchor: kind === 'reasoning' ? (align === 'end' ? 'end' : 'center') : kind === 'details',
+    minSpace: kind === 'reasoning' ? maxHeight : 132,
     measureKey,
   })
   const close = (restoreFocus = false) => {
@@ -74,13 +75,17 @@ export const useOptionPanel = (
       return
     }
     const el = floatingRef.current
+    const input = el?.querySelector<HTMLElement>('[data-panel-input]')
     const item =
+      input ??
       el?.querySelector<HTMLElement>('[aria-selected="true"]:not(:disabled)') ??
       el?.querySelector<HTMLElement>('[data-panel-item]:not(:disabled)')
     if (!editing.current) {
       ;(item ?? el)?.focus({ preventScroll: true })
     }
-    item?.scrollIntoView({ block: 'nearest' })
+    if (!input) {
+      item?.scrollIntoView({ block: 'nearest' })
+    }
   }, [open, positioned, floatingRef])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const panel = event.currentTarget
@@ -89,6 +94,9 @@ export const useOptionPanel = (
     )
     const current = items.indexOf(document.activeElement as HTMLElement)
     if (items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      if (document.activeElement?.hasAttribute('data-panel-input')) {
+        return
+      }
       if (document.activeElement?.tagName === 'INPUT' && ['Home', 'End'].includes(event.key)) {
         return
       }
@@ -133,6 +141,7 @@ export const useOptionPanel = (
             className={styles.panel}
             data-kind={kind}
             data-pointer={position?.['--fs-panel-anchor-x'] ? '' : undefined}
+            data-pointer-side={position?.['--fs-panel-pointer-edge']}
             data-testid="option-panel"
             onKeyDown={keyDown}
             onPointerDown={(event) => {
@@ -144,7 +153,7 @@ export const useOptionPanel = (
                 event.preventDefault()
               }
             }}
-            style={position ?? { visibility: 'hidden' }}
+            style={position ?? { opacity: 0, pointerEvents: 'none' }}
           >
             {children}
           </div>,

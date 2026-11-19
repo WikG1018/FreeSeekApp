@@ -14,6 +14,7 @@ import styles from './Select.module.css'
 export type SelectOption<T extends string> = {
   value: T
   label: string
+  shortLabel?: string
   detail?: string
   lang?: string
 }
@@ -26,6 +27,7 @@ export const Select = <T extends string>({
   ariaLabel,
   prefix,
   pill = false,
+  settingRow,
   disabled = false,
   footer,
 }: {
@@ -36,6 +38,7 @@ export const Select = <T extends string>({
   ariaLabel: string
   prefix?: string
   pill?: boolean
+  settingRow?: 'value' | 'detail'
   disabled?: boolean
   footer?: { label: string; onSelect: () => void }
 }) => {
@@ -45,10 +48,12 @@ export const Select = <T extends string>({
   const [limit, setLimit] = useState(48)
   const panel = useOptionPanel(ariaLabel, {
     measureKey: query,
-    kind: pill ? 'choices' : 'field',
+    kind: pill || settingRow ? 'choices' : 'field',
+    align: settingRow ? 'end' : 'start',
     disabled,
   })
   const current = options.find((item) => item.value === value)
+  const displayValue = current?.shortLabel ?? current?.label ?? placeholder
   const filterable = options.length > 8
   const needle = query.trim().toLocaleLowerCase()
   const filtered =
@@ -69,10 +74,11 @@ export const Select = <T extends string>({
       <button
         ref={panel.anchorRef}
         type="button"
-        className={clsx(styles.trigger, pill && styles.pill)}
+        className={clsx(styles.trigger, pill && styles.pill, settingRow && styles.settingRow)}
         disabled={disabled}
         aria-label={prefix ? undefined : ariaLabel}
         aria-describedby={prefix ? undefined : valueId}
+        data-setting-row={settingRow ? '' : undefined}
         {...panel.trigger}
         onClick={toggle}
         onKeyDown={(e) => {
@@ -83,10 +89,24 @@ export const Select = <T extends string>({
         }}
       >
         {prefix && <small>{prefix}</small>}
-        <span id={valueId} lang={current?.lang}>
-          {current?.label ?? placeholder}
-        </span>
-        {pill ? (
+        {settingRow && (
+          <span className={styles.settingCopy}>
+            <strong>{ariaLabel}</strong>
+            {settingRow === 'detail' && <small id={valueId}>{displayValue}</small>}
+          </span>
+        )}
+        {settingRow !== 'detail' && (
+          <span
+            id={valueId}
+            className={settingRow ? styles.settingValue : undefined}
+            lang={current?.lang}
+          >
+            {displayValue}
+          </span>
+        )}
+        {settingRow ? (
+          <IconChevronRightOutline14 />
+        ) : pill ? (
           <IconChevronDownOutline14 />
         ) : (
           <span className={styles.indicator} aria-hidden>

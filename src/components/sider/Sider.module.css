@@ -61,7 +61,11 @@
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-brand-primary);
+  color: var(--fs-accent-fill);
+}
+
+[data-ds-dark-theme] .appName {
+  color: var(--fs-accent-text);
 }
 
 .sider:not(.mobile) .appName {
@@ -447,6 +451,7 @@
 }
 
 .bottom .support {
+  --support-motion-state: paused;
   position: relative;
   min-height: 46px;
   overflow: hidden;
@@ -460,9 +465,55 @@
 [data-ds-dark-theme] .bottom .support {
   background: linear-gradient(105deg, #982047, #b82458);
 }
+.sider:not(.mobile) .support[data-support-motion],
+:global([data-sider-open]) .mobile .support[data-support-motion] {
+  --support-motion-state: running;
+}
 .support .settingsLabel {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
   color: white;
   font-weight: 600;
+}
+.support .settingsLabel > span {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation: supportCaption 12s linear -0.5s infinite both;
+  animation-play-state: var(--support-motion-state);
+}
+.support .settingsLabel > span:nth-child(2) {
+  animation-delay: -8.5s;
+}
+.support .settingsLabel > span:nth-child(3) {
+  animation-delay: -4.5s;
+}
+@supports (-webkit-background-clip: text) {
+  .support .settingsLabel > span {
+    background: linear-gradient(100deg, #fff 24%, #ffeaf2 78%, #fff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+@keyframes supportCaption {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  4%,
+  33% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  37%,
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
 }
 .support .donateHeart {
   position: relative;
@@ -482,7 +533,8 @@
   place-items: center;
   width: 25px;
   height: 25px;
-  margin-left: auto;
+  flex: none;
+  margin-left: 8px;
   border-radius: 50%;
   color: #fff;
   background: rgba(255, 255, 255, 0.12);
@@ -496,57 +548,22 @@
 .support:active {
   transform: translateY(1px);
 }
-.support:active .donateHeart svg,
-.support:focus-visible .donateHeart svg {
-  animation: sendLove 360ms var(--fs-ease-out);
-}
 @media (hover: hover) {
-  .support:hover .donateHeart svg {
-    animation: sendLove 360ms var(--fs-ease-out);
-  }
   .support:hover .supportArrow {
     transform: translateX(2px);
   }
 }
-/* One small pulse when the drawer arrives; the payment code and text are always stationary. */
-:global([data-sider-open]) .support .donateHeart svg {
-  animation: sendLove 440ms var(--fs-ease-out) 120ms backwards;
-}
-:global([data-sider-open]) .support .donateHeart::before {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: 12px;
-  opacity: 0;
-  pointer-events: none;
-  animation: loveRing 420ms ease-out 150ms;
-}
-@keyframes loveRing {
-  from {
-    opacity: 0.68;
-    transform: scale(0.76);
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.15);
-  }
-}
-@keyframes sendLove {
-  38% {
-    transform: translateY(-2px) rotate(-10deg) scale(1.13);
-  }
-  76% {
-    transform: rotate(4deg) scale(0.98);
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .bottom .support,
-  .support .supportArrow,
-  .support .donateHeart svg,
-  .support .donateHeart::before {
-    animation: none !important;
+  .support .supportArrow {
     transform: none !important;
     transition: none;
+  }
+  .support .settingsLabel > span {
+    display: none;
+    animation: none;
+  }
+  .support .settingsLabel > span:first-child {
+    display: block;
   }
 }

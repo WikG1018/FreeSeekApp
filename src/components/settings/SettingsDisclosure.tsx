@@ -6,6 +6,7 @@ import styles from './SettingsDisclosure.module.css'
 export const SettingsDisclosure = ({
   title,
   icon,
+  description,
   open,
   defaultOpen = false,
   onToggle,
@@ -14,7 +15,8 @@ export const SettingsDisclosure = ({
   children,
 }: {
   title: string
-  icon: ReactNode
+  icon?: ReactNode
+  description?: string
   open?: boolean
   defaultOpen?: boolean
   onToggle?: () => void
@@ -72,12 +74,23 @@ export const SettingsDisclosure = ({
           className={styles.trigger}
           aria-expanded={expanded}
           aria-controls={id}
+          aria-label={description ? title : undefined}
+          aria-describedby={description ? id + '-description' : undefined}
           onClick={() => (onToggle ? onToggle() : setLocal((v) => !v))}
         >
-          <span aria-hidden="true" className={styles.symbol}>
-            {icon}
-          </span>
-          <span>{title}</span>
+          {icon && (
+            <span aria-hidden="true" className={styles.symbol}>
+              {icon}
+            </span>
+          )}
+          {description ? (
+            <span className={styles.triggerCopy}>
+              {title}
+              <small id={id + '-description'}>{description}</small>
+            </span>
+          ) : (
+            <span>{title}</span>
+          )}
           <span className={styles.arrow} aria-hidden="true">
             <IconChevronDownOutline14 />
           </span>

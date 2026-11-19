@@ -33,6 +33,7 @@ const EXIT_MS = 145
  */
 export const Modal = ({
   title,
+  ariaLabel,
   children,
   footer,
   closable = false,
@@ -44,6 +45,7 @@ export const Modal = ({
   onClose,
 }: {
   title: ReactNode
+  ariaLabel?: string
   children?: ReactNode
   footer?: ReactNode
   /** 标题栏右侧显示关闭按钮 */
@@ -180,7 +182,8 @@ export const Modal = ({
         )}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabel ? undefined : titleId}
         ref={contentRef}
         tabIndex={-1}
       >

@@ -5,6 +5,7 @@ import { modelLabel, useProviders } from '../../services/providers.js'
 import { usePersonas } from '../../services/personas.js'
 import {
   IconBrowseOutline16,
+  IconClockOutline16,
   IconDataOutline16,
   IconFileOutline16,
   IconInfoOutline16,
@@ -31,9 +32,13 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   appearance: 'settingsAppearanceLanguage',
   usage: 'usageTitle',
   usagePricing: 'usagePricingTitle',
+  usageModels: 'usageModelsTitle',
+  usageModel: 'usageModelTitle',
+  screenTime: 'screenTimeTitle',
   data: 'settingsDataManage',
   about: 'settingsAboutApp',
   aboutInfo: 'settingsPrivacyLicenses',
+  easterEggs: 'milestoneEasterEggs',
   disclaimer: 'disclaimerTitle',
   guide: 'guideTitle',
 }
@@ -51,6 +56,7 @@ const groups = [
     items: [
       ['appearance', IconLightOutline16],
       ['usage', IconDataOutline16],
+      ['screenTime', IconClockOutline16],
       ['data', IconFileOutline16],
       ['about', IconInfoOutline16],
     ],
@@ -102,6 +108,7 @@ export const SettingsDirectory = ({
                 rail &&
                 (active === id ||
                   parentSettingsPage(active) === id ||
+                  (id === 'usage' && active === 'usageModel') ||
                   (id === 'account' && active.startsWith('provider')))
               }
             />

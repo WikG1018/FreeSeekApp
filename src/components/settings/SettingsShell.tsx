@@ -181,7 +181,11 @@ export const SettingsShell = ({
             </aside>
           )}
           <div className={styles.detail}>
-            <header className={styles.header} data-directory={home}>
+            <header
+              className={styles.header}
+              data-directory={home}
+              data-api-settings={page === 'account' || page.startsWith('provider') || undefined}
+            >
               {canGoBack && (
                 <button className={styles.back} aria-label={t('back')} type="button" onClick={back}>
                   <IconChevronLeftOutline16 />
@@ -208,6 +212,13 @@ export const SettingsShell = ({
                 className={styles.pageBody}
                 data-direction={direction}
                 data-settings-page={page}
+                data-provider-footer={
+                  page === 'providerAccess' ||
+                  page === 'providerConnection' ||
+                  page === 'providerModel' ||
+                  page === 'providerSearch' ||
+                  undefined
+                }
               >
                 {home ? (
                   <SettingsDirectory active={page} open={(next) => go(next, 'forward')} />

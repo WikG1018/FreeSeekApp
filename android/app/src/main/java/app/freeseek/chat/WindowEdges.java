@@ -75,12 +75,13 @@ final class WindowEdges {
     private void publish(boolean newDocument) {
         if (safe == null || bridge.getWebView() == null) return;
         float density = bridge.getWebView().getResources().getDisplayMetrics().density;
+        // 导航切换时根节点可能尚未建立，页面提交后会再次同步安全区。
         String script = String.format(Locale.US,
-            "(function(){var s=document.documentElement.style;" +
+            "(function(){var r=document.documentElement;if(!r)return;var s=r.style;" +
             "s.setProperty('--fs-native-top','%.2fpx');s.setProperty('--fs-native-bottom','%.2fpx');" +
             "s.setProperty('--fs-native-left','%.2fpx');s.setProperty('--fs-native-right','%.2fpx');" +
-            "if(%b){document.documentElement.setAttribute('data-ime-open','');}" +
-            "else{document.documentElement.removeAttribute('data-ime-open');}})()",
+            "if(%b){r.setAttribute('data-ime-open','');}" +
+            "else{r.removeAttribute('data-ime-open');}})()",
             safe.top / density, safe.bottom / density, safe.left / density, safe.right / density,
             imeOpen);
         if (newDocument || !script.equals(lastScript)) {

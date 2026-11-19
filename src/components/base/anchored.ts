@@ -21,6 +21,7 @@ export type AnchoredPosition = {
   maxHeight?: number
   width?: number
   '--fs-panel-anchor-x'?: string
+  '--fs-panel-pointer-edge'?: 'top' | 'bottom'
 }
 
 export type AnchoredOptions = {
@@ -50,8 +51,8 @@ export type AnchoredOptions = {
    */
   measureKey?: unknown
   matchAnchorWidth?: boolean
-  /** 在上方且可与触发元素相邻时，提供箭头指向的横坐标。 */
-  pointToAnchor?: boolean
+  /** 贴近触发项时标记箭头位置。字符串指定可在两侧显示的箭头对齐。 */
+  pointToAnchor?: boolean | 'center' | 'end'
 }
 
 const safeViewport = () => {
@@ -132,7 +133,8 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
       previous.right === next.right &&
       previous.maxHeight === next.maxHeight &&
       previous.width === next.width &&
-      previous['--fs-panel-anchor-x'] === next['--fs-panel-anchor-x']
+      previous['--fs-panel-anchor-x'] === next['--fs-panel-anchor-x'] &&
+      previous['--fs-panel-pointer-edge'] === next['--fs-panel-pointer-edge']
         ? previous
         : next
     )
@@ -195,15 +197,18 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     const natural = resolved === 'top' ? rect.top - offset - height : rect.bottom + offset
     const panelWidth = width ?? floating.offsetWidth
     const left = alignLeft(rect, panelWidth, align, alignOffset, bounds)
+    const pointer =
+      pointToAnchor && !overlap && (resolved === 'top' || typeof pointToAnchor === 'string')
+    const pointerTarget = pointToAnchor === 'end' ? rect.right - 20 : rect.left + rect.width / 2
     applyPosition({
       top: Math.max(bounds.top, Math.min(natural, bounds.bottom - height)),
       left,
       width,
       maxHeight: limit,
-      '--fs-panel-anchor-x':
-        pointToAnchor && resolved === 'top' && !overlap
-          ? `${Math.max(16, Math.min(rect.left + rect.width / 2 - left, panelWidth - 16))}px`
-          : undefined,
+      '--fs-panel-anchor-x': pointer
+        ? `${Math.max(16, Math.min(pointerTarget - left, panelWidth - 16))}px`
+        : undefined,
+      '--fs-panel-pointer-edge': pointer ? (resolved === 'top' ? 'bottom' : 'top') : undefined,
     })
   }, [
     align,

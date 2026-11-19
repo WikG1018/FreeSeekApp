@@ -226,6 +226,7 @@ export const runCompatibilityCases = async (run) => {
   await run(
     'missing legacy WebView APIs cannot prevent startup, chat or diagnostic export',
     async (page) => {
+      await page.locator('#fs-startup').waitFor({ state: 'hidden' })
       const result = await page.evaluate(async () => {
         const a = window.__audit,
           f = a.fixtures
@@ -298,7 +299,7 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
-    'startup shows only the local brand mark until the app is ready',
+    'startup shows only the local brand mark and joins the actual home position',
     async (page) => {
       const startup = page.locator('#fs-startup')
       await page.waitForFunction(() => {
@@ -310,6 +311,10 @@ export const runCompatibilityCases = async (run) => {
       assert.equal(await startup.locator('img').isVisible(), true)
       assert.equal((await startup.innerText()).trim(), '')
       assert.equal(await startup.getByRole('button').count(), 0)
+      assert.equal(
+        await startup.evaluate((node) => getComputedStyle(node, '::before').backgroundColor),
+        'rgb(21, 21, 23)'
+      )
       await page.evaluate(() => window.__finishStartup())
       await page.waitForFunction(() => Boolean(document.querySelector('#root > .app-scaler')))
       assert.equal(
@@ -318,11 +323,54 @@ export const runCompatibilityCases = async (run) => {
       )
       assert.equal(await startup.locator('img').isVisible(), true)
       assert.equal((await startup.innerText()).trim(), '')
-      await page.evaluate(() => window.__finishStartupStorage())
+      const movement = await page.evaluate(() => {
+        const panel = document.getElementById('fs-startup')
+        return new Promise((resolve) => {
+          const observer = new MutationObserver(() => {
+            if (panel.dataset.handoff !== 'home') return
+            observer.disconnect()
+            const mark = document.getElementById('fs-startup-mark')
+            const target = document.querySelector('[data-startup-target]')
+            const rect = (element) => {
+              const { top, left, width } = element.getBoundingClientRect()
+              return { top, left, width }
+            }
+            const frames = [rect(mark)]
+            const facts = {
+              landing: rect(target),
+              hiddenTarget: getComputedStyle(target).opacity === '0',
+              sameImage: target.querySelector('img').src === mark.src,
+              interactive: getComputedStyle(panel).pointerEvents === 'none',
+            }
+            const sample = () => {
+              if (panel.style.display === 'none') {
+                resolve({ frames, ...facts })
+              } else {
+                frames.push(rect(mark))
+                requestAnimationFrame(sample)
+              }
+            }
+            requestAnimationFrame(sample)
+          })
+          observer.observe(panel, { attributes: true, attributeFilter: ['data-handoff'] })
+          window.__finishStartupStorage()
+        })
+      })
+      const end = movement.frames.at(-1)
+      assert.ok(movement.frames[0].width > end.width)
+      assert.ok(new Set(movement.frames.map(({ width }) => Math.round(width))).size >= 5)
+      for (const axis of ['left', 'top', 'width']) {
+        assert.ok(Math.abs(end[axis] - movement.landing[axis]) < 0.75, JSON.stringify(movement))
+      }
+      assert.ok(movement.hiddenTarget && movement.sameImage && movement.interactive)
       await startup.waitFor({ state: 'hidden' })
+      const home = page.getByTestId('welcome-whale')
+      assert.equal(await home.evaluate((node) => getComputedStyle(node).opacity), '1')
     },
     async (context) => {
       await context.addInitScript(() => {
+        localStorage.setItem('freeseek:theme-preference', 'dark')
+        localStorage.setItem('freeseek:font-scale', '1.25')
         window.__seedReady = new Promise((resolve) => {
           window.__finishStartup = resolve
         })
@@ -352,6 +400,48 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
+    'restoring a chat reveals that chat directly and reduced motion skips the handoff',
+    async (page) => {
+      await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+      await page.evaluate(async () => {
+        const { seed, fixtures } = window.__audit
+        await seed([
+          fixtures.session({
+            id: 'startup-resume',
+            title: '重启衔接测试',
+            messages: [fixtures.user('startup-message', '继续整理计划')],
+          }),
+        ])
+      })
+      await page.addInitScript(() => {
+        window.__startupRoutes = []
+        new MutationObserver((records) => {
+          for (const { target } of records) {
+            if (target.id === 'fs-startup' && target.dataset.handoff) {
+              window.__startupRoutes.push(target.dataset.handoff)
+            }
+          }
+        }).observe(document, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-handoff'],
+        })
+      })
+      const checkResumed = async () => {
+        await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+        await page.getByTestId('chat-header').getByText('重启衔接测试', { exact: true }).waitFor()
+        assert.equal(await page.getByTestId('welcome-whale').count(), 0)
+        return page.evaluate(() => window.__startupRoutes)
+      }
+      await page.reload()
+      assert.deepEqual(await checkResumed(), ['page'])
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.reload()
+      assert.deepEqual(await checkResumed(), [])
+    }
+  )
+
+  await run(
     'blocked application script shows recovery controls without loading the application',
     async (page) => {
       await page.getByRole('heading', { name: 'FreeSeek 未能启动', exact: true }).waitFor()
@@ -374,12 +464,11 @@ export const runCompatibilityCases = async (run) => {
   await run(
     'startup recovery can export metadata without exposing raw exception content',
     async (page) => {
-      await page.evaluate(() =>
-        window.__FreeSeekStartup.fail(
-          'render',
-          new TypeError('sk-SECRET_STARTUP_CANARY chat content')
-        )
-      )
+      await page.evaluate(() => {
+        const error = new TypeError('sk-SECRET_STARTUP_CANARY chat content')
+        error.name = 'PRIVATE_STARTUP_ERROR_NAME'
+        window.__FreeSeekStartup.fail('render', error)
+      })
       await page.getByRole('heading', { name: 'FreeSeek 未能启动', exact: true }).waitFor()
       const wait = page.waitForEvent('download')
       await page.getByRole('button', { name: '导出启动诊断', exact: true }).click()
@@ -390,8 +479,8 @@ export const runCompatibilityCases = async (run) => {
         chunks.push(chunk)
       }
       const text = Buffer.concat(chunks).toString('utf8')
-      assert.doesNotMatch(text, /SECRET_STARTUP_CANARY|chat content/)
-      assert.equal(JSON.parse(text).report.errorName, 'TypeError')
+      assert.doesNotMatch(text, /SECRET_STARTUP_CANARY|chat content|PRIVATE_STARTUP_ERROR_NAME/)
+      assert.equal(JSON.parse(text).report.errorName, 'Error')
     }
   )
 }

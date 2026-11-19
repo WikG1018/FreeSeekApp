@@ -109,6 +109,12 @@
   transform: scale(0.94);
   background: var(--dsw-alias-interactive-bg-active);
 }
+.header[data-api-settings] .back {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.header[data-api-settings] .back:active {
+  background: var(--dsw-alias-interactive-bg-active);
+}
 .backPlaceholder {
   flex: 0 0 44px;
 }
@@ -149,6 +155,11 @@
   width: 100%;
   max-width: 640px;
 }
+.pageBody[data-provider-footer] {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
 .pageBody[data-direction='forward'] {
   animation: forward 145ms var(--fs-ease-out);
 }
@@ -177,6 +188,17 @@
   font-weight: 600;
   line-height: 1.55;
   color: var(--fs-secondary-text);
+}
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 3px 6px 5px;
+}
+.sectionHeading .sectionTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 15px;
 }
 .card {
   overflow: hidden;
@@ -213,6 +235,9 @@
   height: 1px;
   background: var(--fs-line);
 }
+.card > [data-setting-row]:not(:first-child) {
+  border-top: 1px solid var(--fs-line);
+}
 .rowInteractive,
 button.row,
 .choiceRow {
@@ -244,7 +269,7 @@ button.row:active:not(:disabled),
   justify-content: center;
 }
 .rowIcon {
-  width: 23px;
+  width: var(--fs-settings-row-icon-width, 23px);
   color: var(--fs-secondary-text);
 }
 .rowIcon svg {
@@ -270,6 +295,28 @@ button.row:active:not(:disabled),
 .rowLabel {
   overflow-wrap: break-word;
 }
+.rowHeadline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+}
+.rowHeadline > .rowLabel {
+  min-width: 0;
+}
+.rowStrong {
+  font-weight: 600;
+}
+.rowBadge {
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--fs-accent-text);
+  background: var(--fs-accent-wash);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: nowrap;
+}
 .rowDescription,
 .fieldHint,
 .paragraph,
@@ -281,6 +328,8 @@ button.row:active:not(:disabled),
 }
 .rowDescription {
   font-size: 12px;
+  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 .rowValue {
   min-width: 0;

@@ -104,6 +104,7 @@ import * as uploads from '../../src/services/attachments.js'
 import * as reply from '../../src/services/chat/reply.js'
 import * as backup from '../../src/services/chat/backup.js'
 import * as usage from '../../src/services/usage.js'
+import * as screenTime from '../../src/services/screenTime.js'
 import * as update from '../../src/services/update.js'
 import * as client from '../../src/services/api/client.js'
 import * as sse from '../../src/services/api/sse.js'
@@ -122,12 +123,17 @@ Object.assign(window, {
     db,
     store,
     settings,
-    providers, providerClient, providerContent, providerTransport, diagnosticShare,
+    providers,
+    providerClient,
+    providerContent,
+    providerTransport,
+    diagnosticShare,
     drafts,
     uploads,
     reply,
     backup,
     usage,
+    screenTime,
     update,
     client,
     sse,

@@ -106,6 +106,37 @@ export const loadSession = async (id: string): Promise<Session | undefined> =>
 /** 读取全部会话详情；用于本地用量统计等一次性遍历 */
 export const loadAllSessions = async (): Promise<Session[]> => (await getDB()).getAll('sessions')
 
+/** 用游标逐个处理会话，统计时只保留当前会话的内容。 */
+export const visitStoredSessions = async (
+  visit: (session: Session) => void,
+  signal?: AbortSignal
+): Promise<void> => {
+  const db = await getDB()
+  if (signal?.aborted) {
+    throw new DOMException('Session scan cancelled', 'AbortError')
+  }
+  const tx = db.transaction('sessions', 'readonly')
+  const stop = () => abortTransaction(tx)
+  signal?.addEventListener('abort', stop, { once: true })
+  try {
+    await Promise.all([
+      (async () => {
+        try {
+          for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
+            visit(cursor.value)
+          }
+        } catch (error) {
+          stop()
+          throw error
+        }
+      })(),
+      tx.done,
+    ])
+  } finally {
+    signal?.removeEventListener('abort', stop)
+  }
+}
+
 export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
   const summary = storedSummary(session)
   const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')

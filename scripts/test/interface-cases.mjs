@@ -4,6 +4,44 @@ import { readFile } from 'node:fs/promises'
 const dialog = (page) => page.getByRole('dialog').last()
 const back = (page) => dialog(page).getByRole('button', { name: '返回', exact: true }).click()
 
+const setScreenTimeHours = (page, hours) =>
+  page.evaluate(async (value) => {
+    // Seed the same foreground-time counter that is used by the dashboard.
+    await window.__audit.screenTime.readScreenTime(false)
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('freeseek-screen-time')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('counters', 'readwrite')
+        tx.oncomplete = resolve
+        tx.onabort = () => reject(tx.error)
+        tx.objectStore('counters').put(
+          { totalMs: value * 3_600_000, days: {}, lastUsedAt: Date.now() },
+          'app'
+        )
+      })
+    } finally {
+      db.close()
+    }
+  }, hours)
+
+const mockMilestoneForeground = (context) =>
+  context.addInitScript(() => {
+    let visible = true
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (visible ? 'visible' : 'hidden'),
+    })
+    document.hasFocus = () => visible
+    window.__milestoneForeground = (value) => {
+      visible = value
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+  })
+
 export const runInterfaceCases = async ({ run }) => {
   await run(
     'onboarding, About and Settings share the same key-free import screen',
@@ -113,10 +151,10 @@ export const runInterfaceCases = async ({ run }) => {
       assert.equal(await scroll.evaluate((el) => el.scrollTop), 0)
       await page.getByRole('button', { name: '添加连接', exact: true }).click()
       await page.getByRole('button', { name: '手动配置', exact: true }).click()
-      await page.getByLabel('配置名称', { exact: true }).fill('未保存配置')
+      await page.getByLabel('连接名称', { exact: true }).fill('未保存配置')
       await page.keyboard.press('Escape')
       await page.getByRole('button', { name: '继续编辑', exact: true }).click()
-      assert.equal(await page.getByLabel('配置名称', { exact: true }).inputValue(), '未保存配置')
+      assert.equal(await page.getByLabel('连接名称', { exact: true }).inputValue(), '未保存配置')
       await back(page)
       await page.getByRole('button', { name: '放弃修改', exact: true }).click()
       await page.locator('[data-settings-page="providerCatalog"]').waitFor()
@@ -200,7 +238,7 @@ export const runInterfaceCases = async ({ run }) => {
       assert.equal(rect.y, 0)
       assert.equal(rect.height, 844)
       const first = await drawer.getByRole('searchbox').boundingBox(),
-        last = await drawer.getByRole('button', { name: '打赏开发者' }).boundingBox()
+        last = await drawer.getByRole('button', { name: '感谢开发者' }).boundingBox()
       assert.ok(first.y >= 41 && last.y + last.height <= 811)
       await drawer.getByRole('button', { name: '更多', exact: true }).first().click()
       const options = page.getByRole('menuitem')
@@ -294,18 +332,55 @@ export const runInterfaceCases = async ({ run }) => {
     async (page) => {
       await page.evaluate(() => {
         window.__payLaunches = []
+        let visible = true
+        Object.defineProperty(document, 'visibilityState', {
+          configurable: true,
+          get: () => (visible ? 'visible' : 'hidden'),
+        })
+        window.__setDonationVisible = (state) => {
+          visible = state
+          document.dispatchEvent(new Event('visibilitychange'))
+        }
         window.open = (url) => {
           window.__payLaunches.push(String(url))
           return null
         }
       })
       await page.getByRole('button', { name: '打开边栏', exact: true }).click()
-      const trigger = page.getByRole('button', { name: '打赏开发者', exact: true })
+      const trigger = page.getByRole('button', { name: '感谢开发者', exact: true })
+      assert.match(await trigger.textContent(), /一块也是爱/)
+      assert.equal(
+        await trigger.evaluate(
+          (el) =>
+            el
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.effect.getTiming().iterations === Infinity).length
+        ),
+        5
+      )
       await trigger.click()
-      const donate = page.getByRole('dialog', { name: '打赏开发者', exact: true })
+      const donate = page.getByRole('dialog', { name: '感谢开发者', exact: true })
       const qr = donate.getByRole('img', { name: /收款码$/ })
-      await donate.evaluate((el) =>
-        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished))
+      const settle = () =>
+        donate.evaluate((el) =>
+          Promise.all(
+            el
+              .getAnimations({ subtree: true })
+              .filter((animation) => Number.isFinite(animation.effect.getTiming().iterations))
+              .map((animation) => animation.finished)
+          )
+        )
+      await settle()
+      assert.ok(
+        await donate
+          .getByText('如果 FreeSeek 帮到了你，可以请我喝杯咖啡。', { exact: true })
+          .isVisible()
+      )
+      assert.ok(
+        await donate.getByText('扫码后金额由你填，一块也是爱。', { exact: true }).isVisible()
+      )
+      assert.ok(
+        await donate.getByText('有建议的话，也欢迎写在付款备注里。', { exact: true }).isVisible()
       )
       const wechat = await qr.getAttribute('src'),
         box = await qr.boundingBox()
@@ -323,9 +398,7 @@ export const runInterfaceCases = async ({ run }) => {
       const [green, paleBlue] = await channelColors()
       assert.ok(green[1] > green[0] && green[1] > green[2] && paleBlue[2] > paleBlue[1])
       await donate.getByRole('radio', { name: '支付宝', exact: true }).check()
-      await donate.evaluate((el) =>
-        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished))
-      )
+      await settle()
       const [paleGreen, blue] = await channelColors()
       assert.ok(paleGreen[1] > paleGreen[0] && blue[2] > blue[1] && blue[2] > blue[0])
       assert.notEqual(await qr.getAttribute('src'), wechat)
@@ -335,9 +408,486 @@ export const runInterfaceCases = async ({ run }) => {
       await donate.getByRole('button', { name: '保存收款码并打开支付宝', exact: true }).click()
       await donate.getByRole('status').getByText('已请求打开支付应用').waitFor()
       assert.equal(await page.evaluate(() => window.__payLaunches.length), 1)
-      await page.keyboard.press('Escape')
+      const thanks = page.getByRole('dialog', { name: '谢谢你的心意', exact: true })
+      const foreground = (visible) =>
+        page.evaluate((value) => window.__setDonationVisible(value), visible)
+      await foreground(true)
+      assert.equal(await thanks.count(), 0, 'an active event alone cannot trigger thanks')
+      await foreground(false)
+      assert.equal(await thanks.count(), 0, 'thanks waits for return')
+      await page.setViewportSize({ width: 960, height: 640 })
+      assert.ok(await donate.isVisible(), 'the handoff survives the change from drawer to sidebar')
+      await foreground(true)
+      await thanks.waitFor()
+      const area = await thanks.boundingBox()
+      assert.ok(area.x <= 1 && area.y <= 1 && area.width >= 959 && area.height >= 639)
+      assert.equal(await page.evaluate(() => document.activeElement.textContent), '谢谢你的心意')
       await donate.waitFor({ state: 'detached' })
+      await thanks.getByRole('button', { name: '返回 FreeSeek', exact: true }).click()
+      await thanks.waitFor({ state: 'detached' })
+      await foreground(false)
+      await foreground(true)
+      assert.equal(await thanks.count(), 0)
       assert.ok(await trigger.isVisible())
+    }
+  )
+
+  await run(
+    'donation failures keep recovery controls and reduced motion remains still',
+    async (page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.evaluate(() => {
+        window.open = () => {
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'hidden',
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'visible',
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+          throw new Error('external launch unavailable')
+        }
+      })
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      const trigger = page.getByRole('button', { name: '感谢开发者', exact: true })
+      const looping = (el) =>
+        el
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.effect.getTiming().iterations === Infinity)
+      assert.equal(await trigger.evaluate(looping), false)
+      await trigger.click()
+      const sheet = page.getByRole('dialog', { name: '感谢开发者', exact: true })
+      assert.equal(await sheet.evaluate(looping), false)
+      await sheet.getByRole('button', { name: '保存收款码并打开微信', exact: true }).click()
+      await sheet.getByRole('status').getByText('未能自动打开微信').waitFor()
+      assert.ok(await sheet.getByText('可以打开微信，在「扫一扫」里从相册选取收款码。').isVisible())
+      assert.equal(await page.getByRole('dialog', { name: '谢谢你的心意', exact: true }).count(), 0)
+      await page.keyboard.press('Escape')
+      await sheet.waitFor({ state: 'detached' })
+    }
+  )
+
+  await run(
+    'screen time splits at midnight, pauses in background and ranks chats after reopening',
+    async (page) => {
+      const advance = (ms) => page.evaluate((value) => window.__advanceScreenTime(value), ms)
+      const foreground = (visible) =>
+        page.evaluate((value) => window.__screenTimeVisible(value), visible)
+      const current = () =>
+        page.evaluate(async () => {
+          const time = await window.__audit.screenTime.readScreenTime(true)
+          return { ...time, chats: Object.fromEntries(time.chats) }
+        })
+      await page.evaluate(async () => {
+        const { fixtures, seed } = window.__audit
+        await seed([
+          fixtures.session({ id: 'time-a', title: '写作笔记' }),
+          fixtures.session({ id: 'time-b', title: '旅行清单' }),
+        ])
+      })
+      await page.getByTestId('chat-header').getByText('写作笔记', { exact: true }).waitFor()
+      await advance(18_000)
+      await page.evaluate(() => window.__audit.store.selectSession('time-b'))
+      await page.getByTestId('chat-header').getByText('旅行清单', { exact: true }).waitFor()
+      await advance(5_000)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+      await page.getByTestId('settings-directory').waitFor()
+      await advance(3_000)
+      await page.getByRole('button', { name: '使用时长', exact: true }).click()
+      await page.getByTestId('screen-time-today').waitFor()
+      assert.equal(await page.getByTestId('screen-time-today').textContent(), '21 秒')
+      assert.equal(await page.getByTestId('screen-time-total').textContent(), '26 秒')
+      const ranking = page.getByTestId('screen-time-ranking')
+      assert.match(await ranking.getByRole('button').nth(0).textContent(), /写作笔记.*18 秒/)
+      assert.match(await ranking.getByRole('button').nth(1).textContent(), /旅行清单.*5 秒/)
+      const first = await current()
+      assert.equal(first.durable, true)
+      assert.deepEqual(first.overall.days, { '2026-11-19': 5000, '2026-11-20': 21000 })
+      assert.deepEqual(first.chats['time-a'].days, { '2026-11-19': 5000, '2026-11-20': 13000 })
+
+      await foreground(false)
+      await advance(120_000)
+      assert.deepEqual(await current(), first)
+      await foreground(true)
+      await advance(2_000)
+      const resumed = await current()
+      assert.equal(resumed.overall.totalMs, 28000)
+      assert.deepEqual(resumed.chats, first.chats, 'settings time belongs only to overall time')
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      assert.deepEqual(await current(), resumed)
+
+      await foreground(false)
+      await advance(8 * 86400 * 1000)
+      await foreground(true)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('screenTime'))
+      await page
+        .getByText('打开对话后，停留在对话页的时长会出现在这里。', { exact: true })
+        .waitFor()
+      await page.getByRole('button', { name: '累计', exact: true }).click()
+      await ranking.getByRole('button', { name: /写作笔记/ }).click()
+      await page
+        .getByRole('dialog', { name: '使用时长', exact: true })
+        .waitFor({ state: 'detached' })
+      assert.equal(
+        await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId),
+        'time-a'
+      )
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        const RealDate = Date
+        let wall =
+          Number(sessionStorage.getItem('screen-time-clock')) ||
+          new RealDate(2026, 10, 19, 23, 59, 55).getTime()
+        let tick = 0,
+          visible = true
+        window.Date = new Proxy(RealDate, {
+          construct: (target, args) => new target(...(args.length ? args : [wall])),
+          apply: () => new RealDate(wall).toString(),
+          get: (target, key) => (key === 'now' ? () => wall : Reflect.get(target, key)),
+        })
+        Object.defineProperty(performance, 'now', { configurable: true, value: () => tick })
+        Object.defineProperty(document, 'visibilityState', {
+          configurable: true,
+          get: () => (visible ? 'visible' : 'hidden'),
+        })
+        document.hasFocus = () => visible
+        window.__screenTimeVisible = (value) => {
+          visible = value
+          document.dispatchEvent(new Event('visibilitychange'))
+        }
+        window.__advanceScreenTime = (ms) => {
+          wall += ms
+          tick += ms
+          sessionStorage.setItem('screen-time-clock', String(wall))
+        }
+      })
+    }
+  )
+
+  await run(
+    'screen time milestones wait for idle home, loop, and replay only shown levels after restart',
+    async (page) => {
+      const about = page.getByRole('dialog', { name: '关于 FreeSeek', exact: true })
+      const eggs = page.getByRole('dialog', { name: '彩蛋', exact: true })
+      const entry = about.getByRole('button', { name: '彩蛋', exact: true })
+      const reached = (hours) =>
+        page.getByRole('dialog', { name: '你已使用 ' + hours + ' 小时', exact: true })
+      const openAbout = async () => {
+        await page.evaluate(() => window.__audit.settingsDialog.openSettings('about'))
+        await about.waitFor()
+      }
+      const closeSettings = async () => {
+        await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+        await about.waitFor({ state: 'detached' })
+      }
+
+      await openAbout()
+      assert.equal(await entry.count(), 0)
+      await setScreenTimeHours(page, 100)
+      assert.equal(await reached(100).count(), 0)
+      assert.equal(await entry.count(), 0)
+      await page.evaluate(() => window.__audit.drafts.setDraftText(null, '保留未发送草稿'))
+      await closeSettings()
+      assert.equal(await reached(100).count(), 0)
+      assert.equal(await page.locator('textarea').inputValue(), '保留未发送草稿')
+
+      await page.evaluate(() => {
+        window.__audit.drafts.setDraftText(null, '')
+        window.__milestoneForeground(false)
+        window.__milestoneForeground(true)
+      })
+      const celebration = reached(100)
+      await celebration.waitFor()
+      assert.match(await celebration.getByRole('heading').textContent(), /^你已使用\s*100\s+小时/)
+      const art = celebration.locator('[data-milestone-art]')
+      const whales = art.locator('[data-milestone-swim]')
+      const motion = await whales.evaluateAll((elements) =>
+        elements.map((element) => {
+          const [animation] = element.getAnimations()
+          const frames = animation.effect.getKeyframes()
+          return {
+            iterations: String(animation.effect.getTiming().iterations),
+            joins: frames[0].transform === frames.at(-1).transform,
+          }
+        })
+      )
+      assert.deepEqual(motion, [
+        { iterations: 'Infinity', joins: true },
+        { iterations: 'Infinity', joins: true },
+      ])
+      await celebration.getByRole('button', { name: '感谢开发者', exact: true }).click()
+      const donation = page.getByRole('dialog', { name: '感谢开发者', exact: true })
+      await donation.waitFor()
+      const playback = () =>
+        whales.first().evaluate((node) => getComputedStyle(node).animationPlayState)
+      assert.equal(await playback(), 'paused')
+      await page.keyboard.press('Escape')
+      await donation.waitFor({ state: 'detached' })
+      assert.equal(await playback(), 'running')
+      await page.evaluate(() => window.__milestoneForeground(false))
+      assert.equal(await playback(), 'paused')
+      await page.evaluate(() => window.__milestoneForeground(true))
+      assert.equal(await playback(), 'running')
+      await celebration.getByRole('button', { name: '继续使用', exact: true }).click()
+      await celebration.waitFor({ state: 'detached' })
+
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      await openAbout()
+      assert.equal(await celebration.count(), 0)
+      await entry.click()
+      await eggs.waitFor()
+      const replay = eggs.getByRole('button', { name: '100 小时', exact: true })
+      assert.equal(await replay.count(), 1)
+      assert.equal(await eggs.getByRole('button', { name: /^(500|1,000) 小时$/ }).count(), 0)
+      await replay.click()
+      await celebration.waitFor()
+      await page.keyboard.press('Escape')
+      await celebration.waitFor({ state: 'detached' })
+      assert.equal(await eggs.isVisible(), true)
+      await back(page)
+      await about.waitFor()
+      await setScreenTimeHours(page, 500)
+      await closeSettings()
+      await reached(500).waitFor()
+      await page.keyboard.press('Escape')
+      await reached(500).waitFor({ state: 'detached' })
+      await openAbout()
+      await entry.click()
+      assert.equal(await eggs.getByRole('button', { name: '500 小时', exact: true }).count(), 1)
+      assert.equal(await replay.count(), 1)
+    },
+    mockMilestoneForeground
+  )
+
+  await run(
+    'upgrading with 1000 hours only triggers the highest milestone and supports reduced motion',
+    async (page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.evaluate(() => {
+        window.__audit.settingsDialog.openSettings('about')
+        window.__milestoneForeground(false)
+      })
+      await setScreenTimeHours(page, 1000)
+      await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      const reached = page.getByRole('dialog', { name: '你已使用 1,000 小时', exact: true })
+      assert.equal(await reached.count(), 0)
+      await page.evaluate(() => window.__milestoneForeground(true))
+      await reached.waitFor()
+      assert.equal(
+        await reached
+          .locator('[data-milestone-art]')
+          .evaluate((el) => el.getAnimations({ subtree: true }).length),
+        0
+      )
+      await reached.getByRole('button', { name: '继续使用', exact: true }).click()
+      await reached.waitFor({ state: 'detached' })
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('about'))
+      await page.getByRole('button', { name: '彩蛋', exact: true }).click()
+      const eggs = page.getByRole('dialog', { name: '彩蛋', exact: true })
+      assert.equal(await eggs.getByRole('button', { name: '1,000 小时', exact: true }).count(), 1)
+      assert.equal(await eggs.getByRole('button', { name: /^(100|500) 小时$/ }).count(), 0)
+    },
+    mockMilestoneForeground
+  )
+
+  await run(
+    'model usage groups recorded models and connections and keeps filters when returning from details',
+    async (page) => {
+      const totals = await page.evaluate(async () => {
+        const a = window.__audit
+        const usage = (input, output, cache = 0) => ({
+          input_tokens: input,
+          output_tokens: output,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: cache,
+        })
+        const connection = (name, host) =>
+          a.providers.saveProvider({
+            ...a.providers.emptyProfile(),
+            name,
+            url: `https://${host}.example.test/v1`,
+            model: 'shared-model',
+          })
+        const left = connection('历史连接一', 'usage-one')
+        const right = connection('历史连接二', 'usage-two')
+        const today = Date.now()
+        const day = new Date(today)
+        day.setDate(day.getDate() - 1)
+        const yesterday = day.getTime()
+        day.setDate(day.getDate() - 39)
+        const old = day.getTime()
+        const continued = a.fixtures.assistant('continued', 'Complete', {
+          responseModel: 'deepseek-v4-flash',
+          usage: usage(13000, 1800, 2000),
+          usageHistory: [
+            { model: 'deepseek-v4-flash', createdAt: today, usage: usage(4000, 800, 2000) },
+            { model: 'deepseek-v4-pro', createdAt: yesterday, usage: usage(9000, 1000) },
+          ],
+        })
+        const session = a.fixtures.session({
+          title: '用量记录',
+          messages: [
+            continued,
+            a.fixtures.assistant('left', 'First vendor', {
+              model: 'shared-model',
+              connection: { providerId: left.id },
+              usage: usage(3000, 500),
+            }),
+            a.fixtures.assistant('right', 'Second vendor', {
+              model: 'shared-model',
+              connection: { providerId: right.id },
+              createdAt: old,
+              usage: usage(1700, 300),
+            }),
+            a.fixtures.assistant('legacy', 'Older usage', {
+              model: null,
+              createdAt: old,
+              usage: usage(1000, 100),
+            }),
+          ],
+          compressionUsage: [
+            {
+              model: 'deepseek-v4-pro',
+              connection: { providerId: 'deepseek' },
+              createdAt: yesterday,
+              usage: usage(2000, 500),
+            },
+          ],
+        })
+        await a.seed([
+          session,
+          a.fixtures.session({
+            title: '继承用量记录',
+            inherited: {
+              fromId: session.id,
+              fromTitle: session.title,
+              messages: [continued],
+            },
+          }),
+        ])
+        const rows = await a.usage.collectModelUsage()
+        return rows.map((row) => ({
+          model: row.model,
+          provider: row.providerId,
+          tokens: row.days.reduce((sum, item) => sum + a.usage.usageTokenCount(item), 0),
+          requests: row.days.reduce((sum, item) => sum + item.requests, 0),
+          unpriced: row.days.reduce((sum, item) => sum + item.unpricedRequests, 0),
+        }))
+      })
+      assert.equal(totals.length, 5)
+      assert.deepEqual(
+        totals.find((row) => row.model === 'deepseek-flash'),
+        {
+          model: 'deepseek-flash',
+          provider: 'deepseek',
+          tokens: 6800,
+          requests: 1,
+          unpriced: 0,
+        }
+      )
+      assert.deepEqual(
+        totals.find((row) => row.model === 'deepseek-v4-pro'),
+        {
+          model: 'deepseek-v4-pro',
+          provider: 'deepseek',
+          tokens: 12500,
+          requests: 2,
+          unpriced: 0,
+        }
+      )
+      const custom = totals.filter((row) => row.model === 'shared-model')
+      assert.deepEqual(
+        custom.map((row) => row.tokens).sort((a, b) => a - b),
+        [2000, 3500]
+      )
+      assert.notEqual(custom[0].provider, custom[1].provider)
+      assert.equal(totals.find((row) => row.model === null).unpriced, 1)
+
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('usage'))
+      await page.getByRole('button', { name: '按模型统计', exact: true }).click()
+      const ranking = page.getByTestId('model-usage-ranking')
+      await ranking.waitFor()
+      assert.equal(await ranking.getByRole('button').count(), 3)
+      await page.getByRole('button', { name: '今天', exact: true }).click()
+      assert.equal(await ranking.getByRole('button').count(), 2)
+      await page.getByRole('button', { name: '服务商', exact: true }).click()
+      await page.getByRole('option', { name: '历史连接一', exact: true }).click()
+      await ranking.getByRole('button', { name: /shared-model.*历史连接一/ }).click()
+      await page.getByRole('heading', { name: '模型用量', exact: true }).waitFor()
+      assert.match(
+        await page.getByTestId('model-usage-overview').textContent(),
+        /3\.5k.*1.*暂无单价/
+      )
+      assert.match(await page.getByTestId('model-usage-trend-value').textContent(), /3,500 Tokens/)
+      await page.getByRole('button', { name: '返回', exact: true }).click()
+      assert.equal(
+        await page.getByRole('button', { name: '今天', exact: true }).getAttribute('aria-pressed'),
+        'true'
+      )
+      assert.match(
+        await page.getByRole('button', { name: '服务商', exact: true }).textContent(),
+        /历史连接一/
+      )
+      await page.getByRole('button', { name: '服务商', exact: true }).click()
+      await page.getByRole('option', { name: '全部服务商', exact: true }).click()
+      await page.getByRole('button', { name: '全部', exact: true }).click()
+      assert.equal(await ranking.getByRole('button').count(), 5)
+      assert.ok(await ranking.getByRole('button', { name: /未标注模型/ }).isVisible())
+    }
+  )
+
+  await run(
+    'welcome whales swim while responding and keep reduced-motion feedback',
+    async (page) => {
+      const whale = page.getByTestId('welcome-whale')
+      await whale.waitFor()
+      const current = () =>
+        whale
+          .locator('[data-whale-ride]')
+          .first()
+          .evaluate((el) => el.style.transform)
+      const before = await current()
+      await whale.click()
+      await page.waitForFunction(
+        () => Number(document.querySelector('[data-whale-accent]').style.opacity) > 0.25
+      )
+      assert.notEqual(await current(), before)
+
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+      await page.getByTestId('settings-directory').waitFor()
+      const paused = await current()
+      await page.waitForTimeout(130)
+      assert.equal(await current(), paused)
+      await page.keyboard.press('Escape')
+      await page.getByTestId('settings-directory').waitFor({ state: 'detached' })
+      await page.waitForFunction(
+        (value) => document.querySelector('[data-whale-ride]').style.transform !== value,
+        paused
+      )
+
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.waitForFunction(
+        () => document.querySelector('[data-whale-ride]').style.transform === 'none'
+      )
+      await whale.focus()
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(
+        () => Number(document.querySelector('[data-whale-accent]').style.opacity) > 0.25
+      )
+      assert.equal(await current(), 'none')
+      assert.equal(
+        await whale
+          .locator('[data-whale-reply]')
+          .first()
+          .evaluate((el) => el.style.transform),
+        'none'
+      )
     }
   )
 
@@ -421,7 +971,7 @@ export const runInterfaceCases = async ({ run }) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
       await page.getByRole('button', { name: '添加连接', exact: true }).click()
       await page.getByRole('button', { name: '手动配置', exact: true }).click()
-      const more = page.getByRole('button', { name: '更多参数与输入能力', exact: true }),
+      const more = page.getByRole('button', { name: '连接高级参数', exact: true }),
         shelf = page
           .locator('[data-settings-page=providerConnection]')
           .getByRole('spinbutton')
@@ -558,6 +1108,7 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
       assert.match(await guide.innerText(), /官方 Key 已配置/)
       await official.click()
+      await page.getByRole('button', { name: 'API Key', exact: true }).click()
       await page.getByRole('button', { name: '更换 API Key', exact: true }).click()
       await key.fill('replace-two')
       await page.getByRole('button', { name: '验证并保存', exact: true }).click()
@@ -593,14 +1144,14 @@ export const runInterfaceCases = async ({ run }) => {
           return { name: button.getAttribute('aria-label'), left, right, top, width }
         })
       )
-      assert.deepEqual([support.name, settings.name], ['打赏开发者', '设置'])
+      assert.deepEqual([support.name, settings.name], ['感谢开发者', '设置'])
       assert.equal((await gear.innerText()).trim(), '')
       assert.equal(settings.top, support.top)
       assert.ok(
         settings.width >= 44 && support.right < settings.left,
         JSON.stringify({ support, settings })
       )
-      await footer.getByRole('button', { name: '打赏开发者', exact: true }).focus()
+      await footer.getByRole('button', { name: '感谢开发者', exact: true }).focus()
       await page.keyboard.press('Tab')
       assert.ok(await gear.evaluate((el) => el === document.activeElement))
       await page.keyboard.press('Enter')

@@ -22,9 +22,11 @@ import {
 } from '../../services/providers.js'
 import { useSettings } from '../../services/settings.js'
 import {
+  IconAddOutline16,
   IconBrowseOutline16,
   IconChevronLeftOutline16,
   IconInfoOutline16,
+  IconLinkOutline14,
   IconSearchOutline16,
   IconSettingsOutline16,
 } from '../base/icons.js'
@@ -44,6 +46,7 @@ import geminiIcon from '../../assets/providers/gemini.png'
 import openaiIcon from '../../assets/providers/openai.png'
 import claudeIcon from '../../assets/providers/claude.png'
 import openrouterIcon from '../../assets/providers/openrouter.png'
+import deepseekIcon from '../../assets/providers/deepseek.png'
 
 const icons: Record<string, string> = {
   xiaomimimo: mimoIcon,
@@ -57,6 +60,18 @@ const icons: Record<string, string> = {
   openai: openaiIcon,
   claude: claudeIcon,
   openrouter: openrouterIcon,
+  deepseek: deepseekIcon,
+}
+export const providerPresetDescriptions: Record<string, TranslationKey | undefined> = {
+  zhipu: 'providerCatalogZhipu',
+  kimi: 'providerCatalogKimi',
+  volcengine: 'providerCatalogArk',
+  qwen: 'providerCatalogQwen',
+  siliconcloud: 'providerCatalogMultiModel',
+  gemini: 'providerCatalogGemini',
+  openai: 'providerCatalogOpenAI',
+  claude: 'providerCatalogClaude',
+  openrouter: 'providerCatalogMultiModel',
 }
 export const ProviderMark = ({ id }: { id?: string }) => {
   const src = id && icons[id]
@@ -98,41 +113,37 @@ export const ConnectionSelector = () => {
     }
   }
   return (
-    <div className={styles.fields}>
+    <div className={styles.connectionRows}>
       {usable.length > 0 && (
-        <div className={styles.field}>
-          <span>{t('providerSelectService')}</span>
-          <Select
-            ariaLabel={t('providerSelectService')}
-            value={selection.providerId}
-            options={[
-              { value: 'deepseek', label: t('providerOfficial') },
-              ...usable.map((item) => ({ value: item.id, label: item.name })),
-            ]}
-            onChange={(id) =>
-              change(() =>
-                selectModel({
-                  providerId: id,
-                  model: usable.find((item) => item.id === id)?.model ?? OFFICIAL_MODELS[0],
-                })
-              )
-            }
-          />
-        </div>
+        <Select
+          ariaLabel={t('providerSelectService')}
+          settingRow="value"
+          value={selection.providerId}
+          options={[
+            { value: 'deepseek', label: t('providerOfficial') },
+            ...usable.map((item) => ({ value: item.id, label: item.name })),
+          ]}
+          onChange={(id) =>
+            change(() =>
+              selectModel({
+                providerId: id,
+                model: usable.find((item) => item.id === id)?.model ?? OFFICIAL_MODELS[0],
+              })
+            )
+          }
+        />
       )}
       {profile ? (
-        <div className={styles.field}>
-          <span>{t('providerModel')}</span>
-          <Select
-            ariaLabel={t('providerModel')}
-            value={selection.model}
-            options={models.map((model) => ({
-              value: model,
-              label: providerModelLabel(model, profile),
-            }))}
-            onChange={(model) => change(() => selectModel({ providerId: profile.id, model }))}
-          />
-        </div>
+        <Select
+          ariaLabel={t('providerModel')}
+          settingRow="value"
+          value={selection.model}
+          options={models.map((model) => ({
+            value: model,
+            label: providerModelLabel(model, profile),
+          }))}
+          onChange={(model) => change(() => selectModel({ providerId: profile.id, model }))}
+        />
       ) : (
         <div
           className={styles.modelChoices}
@@ -165,9 +176,8 @@ export const ConnectionSelector = () => {
           onChange={(level) => change(() => setOfficialReasoningDefault(selection.model, level))}
         />
       )}
-      <p className={styles.hint}>{t(profile ? 'providerCustomHint' : 'settingsApiBillingValue')}</p>
       {error && (
-        <p className={styles.error} role="alert">
+        <p className={styles.error + ' ' + styles.insetHint} role="alert">
           {error}
         </p>
       )}
@@ -192,6 +202,58 @@ export const ProviderSettingsPage = ({
   const officialConfigured = useSettings((s) => Boolean(s.apiKey))
   return (
     <>
+      <Section
+        title={t('providerConnections')}
+        action={
+          <button
+            type="button"
+            className={styles.textAction}
+            data-settings-target="providerCatalog"
+            onClick={add}
+          >
+            <IconAddOutline16 />
+            {t('providerAddConnection')}
+          </button>
+        }
+      >
+        {!profiles.length && <p className={styles.insetHint}>{t('providerCustomEmpty')}</p>}
+        {profiles.map((profile) => {
+          const count = t('providerModelsN', { count: modelsInProfile(profile).length })
+          return (
+            <Row
+              key={profile.id}
+              label={profile.name}
+              className={styles.providerRow}
+              description={new URL(profile.url).host}
+              detail={
+                profile.model
+                  ? t('providerDefaultNamed', {
+                      model: providerModelLabel(profile.model, profile),
+                    }) +
+                    ' · ' +
+                    count
+                  : count
+              }
+              icon={<ProviderMark id={profile.preset?.id} />}
+              prominent
+              badge={profile.id === selection.providerId ? t('providerActive') : undefined}
+              onClick={() => edit(profile.id)}
+              target="providerModels"
+            />
+          )
+        })}
+      </Section>
+      <Section title={t('providerChatTools')}>
+        <Row
+          label={t('thirdPartySearchTitle')}
+          className={styles.providerRow}
+          description={configured ? t('providerSearchConfigured') : 'DeepSeek Search'}
+          icon={<ProviderMark id="deepseek" />}
+          prominent
+          onClick={search}
+          target="providerSearch"
+        />
+      </Section>
       <aside
         className={styles.advancedNotice}
         aria-label={t('advancedNoticeTitle')}
@@ -209,39 +271,6 @@ export const ProviderSettingsPage = ({
           </button>
         </div>
       </aside>
-      <Section title={t('providerConnections')}>
-        {profiles.map((profile) => (
-          <Row
-            key={profile.id}
-            label={profile.name}
-            description={
-              new URL(profile.url).host +
-              ' · ' +
-              t('providerModelsN', { count: modelsInProfile(profile).length })
-            }
-            icon={<ProviderMark id={profile.preset?.id} />}
-            value={profile.id === selection.providerId ? t('providerActive') : undefined}
-            onClick={() => edit(profile.id)}
-            target="providerModels"
-          />
-        ))}
-        <Row
-          label={t('providerAddConnection')}
-          description={profiles.length ? undefined : t('providerCustomEmpty')}
-          icon={<IconBrowseOutline16 />}
-          onClick={add}
-          target="providerCatalog"
-        />
-      </Section>
-      <Section title={t('providerChatTools')}>
-        <Row
-          label={t('thirdPartySearchTitle')}
-          value={configured ? 'DeepSeek Search' : undefined}
-          icon={<IconSearchOutline16 />}
-          onClick={search}
-          target="providerSearch"
-        />
-      </Section>
     </>
   )
 }
@@ -257,13 +286,22 @@ export const ProviderCatalogPage = ({
   const [query, setQuery] = useState('')
   const [region, setRegion] = useState<ProviderPreset['region']>('domestic')
   const needle = query.trim().toLocaleLowerCase()
+  const describe = (preset: ProviderPreset) => {
+    const description = providerPresetDescriptions[preset.id]
+    if (preset.access.length > 1) {
+      return t('providerAccessApi') + ' · ' + t('providerAccessTokenPlan')
+    }
+    return description ? t(description) : new URL(preset.access[0].url).hostname
+  }
   const options = PROVIDER_PRESETS.filter((item) =>
     needle
-      ? (item.name + ' ' + item.id).toLocaleLowerCase().includes(needle)
+      ? [item.name, item.id, describe(item)].some((value) =>
+          value.toLocaleLowerCase().includes(needle)
+        )
       : item.region === region
   )
   return (
-    <>
+    <div className={styles.catalog}>
       <label className={styles.searchField}>
         <IconSearchOutline16 />
         <input
@@ -294,12 +332,10 @@ export const ProviderCatalogPage = ({
             <Row
               key={item.id}
               label={item.name}
+              className={styles.providerRow}
               icon={<ProviderMark id={item.id} />}
-              description={
-                item.access.length > 1
-                  ? t('providerAccessApi') + ' · ' + t('providerAccessTokenPlan')
-                  : new URL(item.access[0].url).hostname
-              }
+              prominent
+              description={describe(item)}
               onClick={() => choose(item)}
               target={item.access.length > 1 ? 'providerAccess' : 'providerConnection'}
             />
@@ -313,12 +349,18 @@ export const ProviderCatalogPage = ({
       <Section>
         <Row
           label={t('providerManualConfig')}
-          icon={<IconSettingsOutline16 />}
+          className={styles.providerRow}
+          icon={
+            <span className={styles.iconTile}>
+              <IconSettingsOutline16 />
+            </span>
+          }
+          prominent
           onClick={manual}
           target="providerConnection"
         />
       </Section>
-    </>
+    </div>
   )
 }
 
@@ -327,14 +369,13 @@ export const providerAccessLabel = (access: ProviderAccess) =>
 
 export const newProviderConnection = (
   preset: ProviderPreset,
-  access: ProviderAccess,
-  planLabel: string
+  access: ProviderAccess
 ): ProviderProfile => ({
   ...emptyProfile(),
   preset: { id: preset.id, access: access.id },
   url: access.url,
   protocol: access.protocol,
-  name: preset.name + (access.id === 'tokenPlan' ? ' · ' + planLabel : ''),
+  name: preset.name + (access.id === 'tokenPlan' ? ' · Token Plan' : ''),
   streamUsage: access.streamUsage ?? false,
   tokenParameter: access.completionTokens ? 'max_completion_tokens' : 'max_tokens',
 })
@@ -383,11 +424,14 @@ export const ProviderAccessPage = ({
         ))}
       </div>
       <a className={styles.docsLink} href={selected.docs} target="_blank" rel="noreferrer">
+        <IconLinkOutline14 />
         {t('providerAccessDocs')}
       </a>
-      <Button variant="primary" onClick={() => choose(selected)}>
-        {t('providerContinue')}
-      </Button>
+      <div className={styles.footer} data-provider-actions="">
+        <Button variant="primary" onClick={() => choose(selected)}>
+          {t('providerContinue')}
+        </Button>
+      </div>
     </div>
   )
 }

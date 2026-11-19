@@ -1,4 +1,8 @@
 declare const styles: {
+  readonly sectionHeading: string
+  readonly rowHeadline: string
+  readonly rowStrong: string
+  readonly rowBadge: string
   readonly readyTitle: string
   readonly readyMessage: string
   readonly readyHint: string

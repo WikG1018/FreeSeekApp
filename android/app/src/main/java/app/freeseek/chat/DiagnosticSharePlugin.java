@@ -26,7 +26,7 @@ public class DiagnosticSharePlugin extends Plugin {
                 String id = UUID.randomUUID().toString();
                 saves.put(id, new Save(file, new FileOutputStream(file), (long) size));
                 JSObject result = new JSObject(); result.put("id", id); call.resolve(result);
-            } catch (Exception error) { if (file != null) file.delete(); call.reject("Cannot prepare diagnostic share"); }
+            } catch (Exception error) { ShareFiles.discard(file); call.reject("Cannot prepare diagnostic share"); }
         });
     }
     @PluginMethod public void write(PluginCall call) {
@@ -54,7 +54,7 @@ public class DiagnosticSharePlugin extends Plugin {
                         JSObject meta = new JSObject(); meta.put("bytes", save.written);
                         DiagnosticsLog.record(getContext(), "diagnostics", "share.opened", meta);
                         JSObject result = new JSObject(); result.put("launched", true); call.resolve(result);
-                    } catch (Exception error) { save.file.delete(); call.reject("Cannot open share sheet"); }
+                    } catch (Exception error) { ShareFiles.discard(save.file); call.reject("Cannot open share sheet"); }
                 });
             } catch (Exception error) { discard(id); call.reject("Cannot finish diagnostic share"); }
         });
@@ -62,7 +62,7 @@ public class DiagnosticSharePlugin extends Plugin {
     @PluginMethod public void cancel(PluginCall call) { io.execute(() -> { discard(call.getString("id", "")); call.resolve(); }); }
     private void discard(String id) {
         Save save = saves.remove(id);
-        if (save != null) { try { save.stream.close(); } catch (Exception ignored) {} save.file.delete(); }
+        if (save != null) { try { save.stream.close(); } catch (Exception ignored) {} ShareFiles.discard(save.file); }
     }
     @Override protected void handleOnDestroy() {
         io.execute(() -> { for (String id : saves.keySet().toArray(new String[0])) discard(id); }); io.shutdown();
