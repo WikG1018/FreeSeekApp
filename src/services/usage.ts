@@ -3,6 +3,7 @@ import type { MessageUsage } from './api/types.js'
 import { loadAllSessions } from './chat/db.js'
 import type { AssistantMessage } from './chat/types.js'
 import { usageEntries } from './chat/usage.js'
+import { THIRD_PARTY_SEARCH_RATE } from './api/search.js'
 
 // DeepSeek billed model-triggered tools from Nov 1 until Nov 18 at 12:00 Beijing time.
 const TOOL_BILLING_START = Date.UTC(2026, 9, 31, 16)
@@ -212,10 +213,11 @@ export const computeMessageUsage = (
   const cacheRead = usage.cache_read_input_tokens ?? 0
   const cacheWrite = usage.cache_creation_input_tokens ?? 0
   const output = usage.output_tokens ?? 0
-  const searches = toolCalls(usage)
+  const modelSearches = toolCalls(usage)
+  const standaloneSearches = usage.standalone_search_requests ?? 0
   const toolCost =
     createdAt >= TOOL_BILLING_START && createdAt < TOOL_BILLING_END
-      ? (searches * pricing.searchPer1k) / 1000
+      ? (modelSearches * pricing.searchPer1k) / 1000
       : 0
   const peak = isPeakBeijing(createdAt)
   const rate = peak
@@ -226,11 +228,12 @@ export const computeMessageUsage = (
     cacheRead,
     cacheWrite,
     output,
-    searches,
+    searches: modelSearches + standaloneSearches,
     tokens: input + cacheRead + cacheWrite + output,
     costCny:
       (cacheRead * rate.hit + (input + cacheWrite) * rate.miss + output * rate.out) / 1_000_000 +
-      toolCost,
+      toolCost +
+      standaloneSearches * THIRD_PARTY_SEARCH_RATE,
   }
 }
 
@@ -248,7 +251,8 @@ export const collectUsage = async (): Promise<UsageStats> => {
       entry: { createdAt: number; usage: MessageUsage; model?: string }
     ) => {
       const effectivePricing = messagePricing(message, pricing, entry.model),
-        priced = hasKnownPricing(message, entry.model)
+        priced =
+          Boolean(entry.usage.standalone_search_requests) || hasKnownPricing(message, entry.model)
       const key = dayKey(entry.createdAt),
         day = days.get(key) ?? emptyTotals()
       const detail = computeMessageUsage(entry.usage, entry.createdAt, effectivePricing)

@@ -1,68 +1,105 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
-import { useSettings } from '../../services/settings.js'
 import { ApiError } from '../../services/api/errorTypes.js'
-import { fetchProviderModels, testProviderModel } from '../../services/api/providerClient.js'
 import {
+  PROVIDER_PRESETS,
+  providerAccess,
+  type ProviderAccess,
+  type ProviderPreset,
+} from '../../services/providerPresets.js'
+import {
+  activeReasoning,
   emptyProfile,
   modelLabel,
+  modelsInProfile,
   OFFICIAL_MODELS,
   ProviderConfigError,
-  removeProvider,
-  saveProvider,
+  providerModelLabel,
   selectModel,
+  setOfficialReasoningDefault,
   useProviders,
   type ProviderProfile,
-  type ProviderProtocol,
 } from '../../services/providers.js'
-import { SettingsDisclosure } from './SettingsDisclosure.js'
+import { useSettings } from '../../services/settings.js'
 import {
-  IconInfoOutline16,
+  IconBrowseOutline16,
   IconChevronLeftOutline16,
+  IconInfoOutline16,
+  IconSearchOutline16,
   IconSettingsOutline16,
 } from '../base/icons.js'
 import { Select } from '../base/Select.js'
 import { Button } from '../base/Button.js'
-import { Modal } from '../base/Modal.js'
-import { showToast } from '../base/toastState.js'
+import { ReasoningRow } from './ReasoningRow.js'
+import { Row, Section } from './SettingsRows.js'
 import styles from './ProviderSettings.module.css'
-import { useSettingsLeave } from './useSettingsLeave.js'
+import mimoIcon from '../../assets/providers/xiaomimimo.png'
+import zhipuIcon from '../../assets/providers/zhipu.png'
+import kimiIcon from '../../assets/providers/kimi.png'
+import arkIcon from '../../assets/providers/volcengine.png'
+import qwenIcon from '../../assets/providers/qwen.png'
+import minimaxIcon from '../../assets/providers/minimax.png'
+import siliconIcon from '../../assets/providers/siliconcloud.png'
+import geminiIcon from '../../assets/providers/gemini.png'
+import openaiIcon from '../../assets/providers/openai.png'
+import claudeIcon from '../../assets/providers/claude.png'
+import openrouterIcon from '../../assets/providers/openrouter.png'
 
-const configErrors: Record<ProviderConfigError['reason'], TranslationKey> = {
-  url: 'providerErrorUrl',
-  model: 'providerErrorModel',
-  parameters: 'providerErrorParameters',
-  storage: 'providerErrorStorage',
-  missing: 'providerConfigMissing',
-  changed: 'providerConfigChanged',
+const icons: Record<string, string> = {
+  xiaomimimo: mimoIcon,
+  zhipu: zhipuIcon,
+  kimi: kimiIcon,
+  volcengine: arkIcon,
+  qwen: qwenIcon,
+  minimax: minimaxIcon,
+  siliconcloud: siliconIcon,
+  gemini: geminiIcon,
+  openai: openaiIcon,
+  claude: claudeIcon,
+  openrouter: openrouterIcon,
 }
-const errorMessage = (error: unknown, t: ReturnType<typeof useTranslate>) =>
-  error instanceof ProviderConfigError
-    ? t(configErrors[error.reason])
+export const ProviderMark = ({ id }: { id?: string }) => {
+  const src = id && icons[id]
+  return src ? <img className={styles.mark} src={src} alt="" /> : <IconBrowseOutline16 />
+}
+export const providerErrorText = (error: unknown, t: ReturnType<typeof useTranslate>) => {
+  const config: Record<ProviderConfigError['reason'], TranslationKey> = {
+    url: 'providerErrorUrl',
+    model: 'providerErrorModel',
+    parameters: 'providerErrorParameters',
+    storage: 'providerErrorStorage',
+    missing: 'providerConfigMissing',
+    changed: 'providerConfigChanged',
+  }
+  return error instanceof ProviderConfigError
+    ? t(config[error.reason])
     : error instanceof ApiError && error.localMessage
       ? t(error.localMessage.key, error.localMessage.params)
       : t('providerNetworkError')
+}
 
 export const ConnectionSelector = () => {
-  const t = useTranslate(),
-    { profiles, selection } = useProviders()
-  const [error, setError] = useState('')
+  const t = useTranslate()
+  const state = useProviders()
+  const settings = useSettings()
+  const { profiles, selection } = state
+  const profile = profiles.find((item) => item.id === selection.providerId)
+  const usable = profiles.filter((item) => item.model)
+  const models = profile ? [...new Set([selection.model, ...modelsInProfile(profile)])] : []
+  const control = activeReasoning(state, settings)
   const groupId = useId()
-  const profile = profiles.find((p) => p.id === selection.providerId)
-  const models = profile
-    ? [...new Set([profile.model, selection.model, ...profile.models])]
-    : [...OFFICIAL_MODELS]
-  const choose = (providerId: string, model: string) => {
+  const [error, setError] = useState('')
+  const change = (action: () => void) => {
     try {
-      selectModel({ providerId, model })
+      action()
       setError('')
-    } catch (error) {
-      setError(errorMessage(error, t))
+    } catch (reason) {
+      setError(providerErrorText(reason, t))
     }
   }
   return (
     <div className={styles.fields}>
-      {profiles.length > 0 && (
+      {usable.length > 0 && (
         <div className={styles.field}>
           <span>{t('providerSelectService')}</span>
           <Select
@@ -70,24 +107,37 @@ export const ConnectionSelector = () => {
             value={selection.providerId}
             options={[
               { value: 'deepseek', label: t('providerOfficial') },
-              ...profiles.map((p) => ({ value: p.id, label: p.name })),
+              ...usable.map((item) => ({ value: item.id, label: item.name })),
             ]}
             onChange={(id) =>
-              choose(
-                id,
-                id === 'deepseek'
-                  ? 'deepseek-flash'
-                  : (profiles.find((p) => p.id === id)?.model ?? '')
+              change(() =>
+                selectModel({
+                  providerId: id,
+                  model: usable.find((item) => item.id === id)?.model ?? OFFICIAL_MODELS[0],
+                })
               )
             }
           />
         </div>
       )}
-      {!profile ? (
+      {profile ? (
+        <div className={styles.field}>
+          <span>{t('providerModel')}</span>
+          <Select
+            ariaLabel={t('providerModel')}
+            value={selection.model}
+            options={models.map((model) => ({
+              value: model,
+              label: providerModelLabel(model, profile),
+            }))}
+            onChange={(model) => change(() => selectModel({ providerId: profile.id, model }))}
+          />
+        </div>
+      ) : (
         <div
+          className={styles.modelChoices}
           role="radiogroup"
           aria-label={t('providerDefaultModel')}
-          className={styles.modelChoices}
         >
           {OFFICIAL_MODELS.map((model) => (
             <label key={model} data-selected={selection.model === model}>
@@ -95,7 +145,7 @@ export const ConnectionSelector = () => {
                 type="radio"
                 name={groupId}
                 checked={selection.model === model}
-                onChange={() => choose('deepseek', model)}
+                onChange={() => change(() => selectModel({ providerId: 'deepseek', model }))}
               />
               <span>
                 <b>{modelLabel(model)}</b>
@@ -108,465 +158,236 @@ export const ConnectionSelector = () => {
             </label>
           ))}
         </div>
-      ) : (
-        <div className={styles.field}>
-          <span>{t('providerModel')}</span>
-          <Select
-            ariaLabel={t('providerModel')}
-            value={selection.model}
-            options={models.map((model) => ({ value: model, label: modelLabel(model) }))}
-            onChange={(model) => choose(selection.providerId, model)}
-          />
-        </div>
+      )}
+      {!profile && control && (
+        <ReasoningRow
+          control={control}
+          onChange={(level) => change(() => setOfficialReasoningDefault(selection.model, level))}
+        />
       )}
       <p className={styles.hint}>{t(profile ? 'providerCustomHint' : 'settingsApiBillingValue')}</p>
-      {error ? (
-        <p className={styles.error} role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
-export const ProviderSettingsPage = ({ onOfficial }: { onOfficial: () => void }) => {
-  const officialConfigured = useSettings((state) => Boolean(state.apiKey))
-  const t = useTranslate(),
-    { profiles, selection } = useProviders()
-  const [form, setForm] = useState<ProviderProfile>(
-    () => profiles.find((p) => p.id === selection.providerId) ?? profiles[0] ?? emptyProfile()
-  )
-  const [headers, setHeaders] = useState(() => JSON.stringify(form.headers, null, 2))
-  const [body, setBody] = useState(() => JSON.stringify(form.extraBody, null, 2))
-  const saved = useRef({ profile: JSON.stringify(form), headers, body })
-  const dirty =
-    JSON.stringify(form) !== saved.current.profile ||
-    headers !== saved.current.headers ||
-    body !== saved.current.body
-  const leave = useSettingsLeave(dirty)
-  const [showKey, setShowKey] = useState(false),
-    [error, setError] = useState(''),
-    [result, setResult] = useState('')
-  const [busy, setBusy] = useState<'models' | 'test' | null>(null),
-    [deleting, setDeleting] = useState(false)
-  const controller = useRef<AbortController | null>(null)
-  useEffect(() => () => controller.current?.abort(), [])
-  const edit = (profile: ProviderProfile) => {
-    saved.current = {
-      profile: JSON.stringify(profile),
-      headers: JSON.stringify(profile.headers, null, 2),
-      body: JSON.stringify(profile.extraBody, null, 2),
-    }
-    controller.current?.abort()
-    setBusy(null)
-    setForm(profile)
-    setHeaders(JSON.stringify(profile.headers, null, 2))
-    setBody(JSON.stringify(profile.extraBody, null, 2))
-    setError('')
-    setResult('')
-    setShowKey(false)
-  }
-  const patch = (value: Partial<ProviderProfile>) => {
-    setForm((previous) => ({ ...previous, ...value }))
-    setError('')
-    setResult('')
-  }
-  const current = () => {
-    try {
-      return {
-        ...form,
-        headers: JSON.parse(headers || '{}') as Record<string, string>,
-        extraBody: JSON.parse(body || '{}') as Record<string, unknown>,
-      }
-    } catch {
-      throw new ProviderConfigError('parameters')
-    }
-  }
-  const save = (activate: boolean) => {
-    try {
-      edit(saveProvider(current(), activate))
-      showToast({ key: 'providerSaved' })
-    } catch (error) {
-      setError(errorMessage(error, t))
-    }
-  }
-  const run = async (action: 'models' | 'test') => {
-    if (controller.current) {
-      return
-    }
-    const active = new AbortController()
-    controller.current = active
-    setBusy(action)
-    setError('')
-    setResult('')
-    try {
-      const snapshot = current()
-      if (action === 'models') {
-        const models = await fetchProviderModels(snapshot, active.signal)
-        if (!active.signal.aborted) {
-          setForm((previous) => ({ ...previous, models }))
-          setResult(t('providerModelsCount', { count: models.length }))
-        }
-      } else {
-        const response = await testProviderModel(snapshot, active.signal)
-        if (!active.signal.aborted) {
-          setResult(`${t('providerTestSuccess', { ms: response.elapsedMs })}\n${response.text}`)
-        }
-      }
-    } catch (error) {
-      if (!active.signal.aborted) {
-        setError(errorMessage(error, t))
-      }
-    } finally {
-      if (controller.current === active) {
-        controller.current = null
-        setBusy(null)
-      }
-    }
-  }
-  return (
-    <div className={styles.page}>
-      <aside
-        className={styles.advancedNotice}
-        aria-label={t('advancedNoticeTitle')}
-        data-testid="advanced-provider-notice"
-      >
-        <span className={styles.noticeIcon} aria-hidden="true">
-          <IconInfoOutline16 />
-        </span>
-        <div>
-          <h2>{t('advancedNoticeTitle')}</h2>
-          <p>{t(officialConfigured ? 'advancedNoticeConfigured' : 'advancedNoticeUnconfigured')}</p>
-          <button type="button" onClick={() => leave.request(onOfficial)}>
-            <IconChevronLeftOutline16 />
-            {t('advancedReturnOfficial')}
-          </button>
-        </div>
-      </aside>
-      {profiles.length > 0 && (
-        <div className={styles.savedHeader}>
-          <span>{t('providerProfile')}</span>
-          <Button
-            variant="outlined"
-            size="s"
-            disabled={Boolean(busy)}
-            onClick={() => leave.request(() => edit(emptyProfile()))}
-          >
-            {t('providerNew')}
-          </Button>
-        </div>
-      )}
-      {profiles.length ? (
-        <div className={styles.profileList}>
-          {profiles.map((profile) => (
-            <button
-              type="button"
-              key={profile.id}
-              disabled={Boolean(busy)}
-              aria-pressed={form.id === profile.id}
-              onClick={() => leave.request(() => edit(profile))}
-            >
-              <span>{profile.name}</span>
-              {selection.providerId === profile.id ? <small>{t('providerActive')}</small> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {leave.dialog}
-      <fieldset className={styles.fieldGroup} disabled={Boolean(busy)}>
-        <legend>{t('providerConnectionGroup')}</legend>
-        <label className={styles.field}>
-          <span>{t('providerName')}</span>
-          <input
-            aria-label={t('providerName')}
-            maxLength={80}
-            value={form.name}
-            onChange={(e) => patch({ name: e.target.value })}
-          />
-        </label>
-        <div className={styles.field}>
-          <span>{t('providerProtocol')}</span>
-          <Select<ProviderProtocol>
-            ariaLabel={t('providerProtocol')}
-            value={form.protocol}
-            disabled={Boolean(busy)}
-            options={[
-              { value: 'openai', label: 'OpenAI Chat Completions', detail: '/chat/completions' },
-              { value: 'responses', label: 'OpenAI Responses', detail: '/responses' },
-              { value: 'anthropic', label: 'Anthropic Messages', detail: '/messages' },
-              {
-                value: 'gemini',
-                label: 'Google Gemini',
-                detail: 'generateContent · streamGenerateContent',
-              },
-            ]}
-            onChange={(protocol) => patch({ protocol, models: [] })}
-          />
-        </div>
-        <label className={styles.field}>
-          <span>{t('providerUrl')}</span>
-          <input
-            aria-label={t('providerUrl')}
-            type="url"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="https://api.example.com/v1"
-            value={form.url}
-            onChange={(e) => patch({ url: e.target.value, models: [] })}
-          />
-        </label>
-        <p className={styles.hint}>{t('providerUrlHint')}</p>
-        {form.url.trim().startsWith('http:') ? (
-          <p className={styles.hint}>{t('providerHttpHint')}</p>
-        ) : null}
-        <label className={styles.field}>
-          <span>{t('providerKey')}</span>
-          <input
-            aria-label={t('providerKey')}
-            type={showKey ? 'text' : 'password'}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={form.apiKey}
-            onChange={(e) => patch({ apiKey: e.target.value })}
-          />
-        </label>
-        <div className={styles.keyHint}>
-          <span>{t('providerKeyHint')}</span>
-          <button type="button" onClick={() => setShowKey(!showKey)}>
-            {t(showKey ? 'settingsApiKeyHide' : 'settingsApiKeyShow')}
-          </button>
-        </div>
-      </fieldset>
-      <fieldset className={styles.fieldGroup} disabled={Boolean(busy)}>
-        <legend>{t('providerModelGroup')}</legend>
-        <label className={styles.field}>
-          <span>{t('providerModel')}</span>
-          <input
-            aria-label={t('providerModel')}
-            autoCapitalize="none"
-            spellCheck={false}
-            value={form.model}
-            onChange={(e) => patch({ model: e.target.value })}
-          />
-        </label>
-        {form.models.length ? (
-          <Select
-            ariaLabel={t('providerChooseFetched')}
-            placeholder={t('providerChooseFetched')}
-            value={form.model}
-            disabled={Boolean(busy)}
-            options={form.models.map((model) => ({ value: model, label: model }))}
-            onChange={(model) => patch({ model })}
-          />
-        ) : null}
-        <div className={styles.actions}>
-          <Button variant="outlined" disabled={!form.url.trim()} onClick={() => void run('models')}>
-            {t('providerFetchModels')}
-          </Button>
-          <Button
-            variant="outlined"
-            disabled={!form.url.trim() || !form.model.trim()}
-            onClick={() => void run('test')}
-          >
-            {t('providerTestModel')}
-          </Button>
-        </div>
-        <p className={styles.hint}>{t('providerTestHint')}</p>
-      </fieldset>
-      {busy && (
-        <div className={styles.feedback} role="status">
-          <span>{t(busy === 'test' ? 'providerTesting' : 'providerFetching')}</span>
-          <Button variant="outlined" onClick={() => controller.current?.abort()}>
-            {t('cancel')}
-          </Button>
-        </div>
-      )}
       {error && (
         <p className={styles.error} role="alert">
           {error}
         </p>
       )}
-      {result && (
-        <p className={styles.result} role="status">
-          {result}
+    </div>
+  )
+}
+
+export const ProviderSettingsPage = ({
+  add,
+  edit,
+  search,
+  onOfficial,
+}: {
+  add: () => void
+  edit: (id: string) => void
+  search: () => void
+  onOfficial: () => void
+}) => {
+  const t = useTranslate()
+  const { profiles, selection } = useProviders()
+  const configured = useSettings((s) => s.thirdPartySearch.enabled)
+  const officialConfigured = useSettings((s) => Boolean(s.apiKey))
+  return (
+    <>
+      <aside
+        className={styles.advancedNotice}
+        aria-label={t('advancedNoticeTitle')}
+        data-testid="advanced-provider-notice"
+      >
+        <span className={styles.noticeIcon} aria-hidden>
+          <IconInfoOutline16 />
+        </span>
+        <div>
+          <h2>{t('advancedNoticeTitle')}</h2>
+          <p>{t(officialConfigured ? 'advancedNoticeConfigured' : 'advancedNoticeUnconfigured')}</p>
+          <button type="button" onClick={onOfficial}>
+            <IconChevronLeftOutline16 />
+            {t('advancedReturnOfficial')}
+          </button>
+        </div>
+      </aside>
+      <Section title={t('providerConnections')}>
+        {profiles.map((profile) => (
+          <Row
+            key={profile.id}
+            label={profile.name}
+            description={
+              new URL(profile.url).host +
+              ' · ' +
+              t('providerModelsN', { count: modelsInProfile(profile).length })
+            }
+            icon={<ProviderMark id={profile.preset?.id} />}
+            value={profile.id === selection.providerId ? t('providerActive') : undefined}
+            onClick={() => edit(profile.id)}
+            target="providerModels"
+          />
+        ))}
+        <Row
+          label={t('providerAddConnection')}
+          description={profiles.length ? undefined : t('providerCustomEmpty')}
+          icon={<IconBrowseOutline16 />}
+          onClick={add}
+          target="providerCatalog"
+        />
+      </Section>
+      <Section title={t('providerChatTools')}>
+        <Row
+          label={t('thirdPartySearchTitle')}
+          value={configured ? 'DeepSeek Search' : undefined}
+          icon={<IconSearchOutline16 />}
+          onClick={search}
+          target="providerSearch"
+        />
+      </Section>
+    </>
+  )
+}
+
+export const ProviderCatalogPage = ({
+  choose,
+  manual,
+}: {
+  choose: (preset: ProviderPreset) => void
+  manual: () => void
+}) => {
+  const t = useTranslate()
+  const [query, setQuery] = useState('')
+  const [region, setRegion] = useState<ProviderPreset['region']>('domestic')
+  const needle = query.trim().toLocaleLowerCase()
+  const options = PROVIDER_PRESETS.filter((item) =>
+    needle
+      ? (item.name + ' ' + item.id).toLocaleLowerCase().includes(needle)
+      : item.region === region
+  )
+  return (
+    <>
+      <label className={styles.searchField}>
+        <IconSearchOutline16 />
+        <input
+          type="search"
+          aria-label={t('providerSearchVendors')}
+          placeholder={t('providerSearchVendors')}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      {!needle && (
+        <div className={styles.regions} role="group" aria-label={t('providerCatalog')}>
+          {(['domestic', 'international'] as const).map((value) => (
+            <button
+              type="button"
+              key={value}
+              aria-pressed={region === value}
+              onClick={() => setRegion(value)}
+            >
+              {t(value === 'domestic' ? 'providerDomestic' : 'providerInternational')}
+            </button>
+          ))}
+        </div>
+      )}
+      {options.length > 0 ? (
+        <Section>
+          {options.map((item) => (
+            <Row
+              key={item.id}
+              label={item.name}
+              icon={<ProviderMark id={item.id} />}
+              description={
+                item.access.length > 1
+                  ? t('providerAccessApi') + ' · ' + t('providerAccessTokenPlan')
+                  : new URL(item.access[0].url).hostname
+              }
+              onClick={() => choose(item)}
+              target={item.access.length > 1 ? 'providerAccess' : 'providerConnection'}
+            />
+          ))}
+        </Section>
+      ) : (
+        <p className={styles.hint} role="status">
+          {t('optionNoResults')}
         </p>
       )}
-      <fieldset className={styles.fields} disabled={Boolean(busy)}>
-        <SettingsDisclosure title={t('providerParameters')} icon={<IconSettingsOutline16 />}>
-          <div className={styles.fields}>
-            <label className={styles.field}>
-              <span>{t('providerMaxOutput')}</span>
-              <input
-                aria-label={t('providerMaxOutput')}
-                type="number"
-                min={16}
-                max={1048576}
-                value={form.maxOutputTokens}
-                onChange={(e) => patch({ maxOutputTokens: Number(e.target.value) })}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>{t('contextWindow')}</span>
-              <input
-                type="number"
-                min={512}
-                max={10000000}
-                disabled={!form.model.trim()}
-                value={
-                  Object.hasOwn(form.contextWindows ?? {}, form.model.trim())
-                    ? form.contextWindows?.[form.model.trim()]
-                    : ''
-                }
-                onChange={(event) => {
-                  const model = form.model.trim()
-                  const windows = { ...form.contextWindows }
-                  if (event.target.value) {
-                    windows[model] = Number(event.target.value)
-                  }
-                  patch({
-                    contextWindows: event.target.value
-                      ? windows
-                      : Object.fromEntries(Object.entries(windows).filter(([id]) => id !== model)),
-                  })
-                }}
-              />
-              <small>{t('contextWindowHint')}</small>
-            </label>
-            <label className={styles.field}>
-              <span>{t('providerTemperature')}</span>
-              <input
-                aria-label={t('providerTemperature')}
-                type="number"
-                min={0}
-                max={2}
-                step={0.1}
-                value={form.temperature ?? ''}
-                onChange={(e) =>
-                  patch({ temperature: e.target.value === '' ? null : Number(e.target.value) })
-                }
-              />
-            </label>
-            {form.protocol === 'openai' ? (
-              <div className={styles.field}>
-                <span>{t('providerTokenParameter')}</span>
-                <Select<ProviderProfile['tokenParameter']>
-                  ariaLabel={t('providerTokenParameter')}
-                  value={form.tokenParameter}
-                  disabled={Boolean(busy)}
-                  options={[
-                    { value: 'max_tokens', label: 'max_tokens' },
-                    { value: 'max_completion_tokens', label: 'max_completion_tokens' },
-                  ]}
-                  onChange={(tokenParameter) => patch({ tokenParameter })}
-                />
-              </div>
-            ) : null}
-            {(['stream', 'streamUsage', 'vision', 'pdf'] as const).map((key, index) => (
-              <label key={key} className={styles.check}>
-                <input
-                  type="checkbox"
-                  checked={form[key]}
-                  onChange={(e) => patch({ [key]: e.target.checked })}
-                />
-                <span>
-                  {t(
-                    (
-                      [
-                        'providerStreaming',
-                        'providerStreamUsage',
-                        'providerVision',
-                        'providerPdf',
-                      ] as const
-                    )[index]
-                  )}
-                </span>
-              </label>
-            ))}
-            <p className={styles.hint}>{t('providerCapabilitiesHint')}</p>
-            <label className={styles.field}>
-              <span>{t('providerModelsUrl')}</span>
-              <input
-                type="url"
-                value={form.modelListUrl}
-                onChange={(e) => patch({ modelListUrl: e.target.value })}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>{t('providerHeaders')}</span>
-              <textarea
-                rows={3}
-                autoCapitalize="none"
-                spellCheck={false}
-                value={headers}
-                onChange={(e) => {
-                  setHeaders(e.target.value)
-                  setError('')
-                }}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>{t('providerExtraBody')}</span>
-              <textarea
-                rows={4}
-                autoCapitalize="none"
-                spellCheck={false}
-                value={body}
-                onChange={(e) => {
-                  setBody(e.target.value)
-                  setError('')
-                }}
-              />
-            </label>
-            <p className={styles.hint}>{t('providerExtraHint')}</p>
-          </div>
-        </SettingsDisclosure>
-      </fieldset>
-      <div className={styles.actions}>
-        <Button disabled={Boolean(busy)} variant="outlined" onClick={() => save(false)}>
-          {t('providerSave')}
-        </Button>
-        <Button disabled={Boolean(busy)} onClick={() => save(true)}>
-          {t('providerSaveUse')}
-        </Button>
+      <Section>
+        <Row
+          label={t('providerManualConfig')}
+          icon={<IconSettingsOutline16 />}
+          onClick={manual}
+          target="providerConnection"
+        />
+      </Section>
+    </>
+  )
+}
+
+export const providerAccessLabel = (access: ProviderAccess) =>
+  access.id === 'tokenPlan' ? 'providerAccessTokenPlan' : 'providerAccessApi'
+
+export const newProviderConnection = (
+  preset: ProviderPreset,
+  access: ProviderAccess,
+  planLabel: string
+): ProviderProfile => ({
+  ...emptyProfile(),
+  preset: { id: preset.id, access: access.id },
+  url: access.url,
+  protocol: access.protocol,
+  name: preset.name + (access.id === 'tokenPlan' ? ' · ' + planLabel : ''),
+  streamUsage: access.streamUsage ?? false,
+  tokenParameter: access.completionTokens ? 'max_completion_tokens' : 'max_tokens',
+})
+
+export const ProviderAccessPage = ({
+  preset,
+  choose,
+}: {
+  preset: ProviderPreset
+  choose: (access: ProviderAccess) => void
+}) => {
+  const t = useTranslate()
+  const groupId = useId()
+  const [id, setId] = useState(preset.access[0].id)
+  const selected = providerAccess(preset.id, id) ?? preset.access[0]
+  return (
+    <div className={styles.page}>
+      <div className={styles.providerIdentity}>
+        <ProviderMark id={preset.id} />
+        <span>
+          <strong>{preset.name}</strong>
+          <small>{t('providerAccessHint')}</small>
+        </span>
       </div>
-      <p className={styles.hint}>{t('providerPrivacy')}</p>
-      {form.id ? (
-        <Button variant="dangerOutlined" disabled={Boolean(busy)} onClick={() => setDeleting(true)}>
-          {t('providerDelete')}
-        </Button>
-      ) : null}
-      {deleting ? (
-        <Modal
-          title={t('providerDelete')}
-          onClose={() => setDeleting(false)}
-          footer={
-            <>
-              <Button variant="outlined" onClick={() => setDeleting(false)}>
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  try {
-                    removeProvider(form.id)
-                    edit(emptyProfile())
-                    setDeleting(false)
-                  } catch (error) {
-                    setError(errorMessage(error, t))
-                    setDeleting(false)
-                  }
-                }}
-              >
-                {t('delete')}
-              </Button>
-            </>
-          }
-        >
-          <p>{t('providerDeleteHint')}</p>
-        </Modal>
-      ) : null}
+      <div
+        className={styles.accessOptions}
+        role="radiogroup"
+        aria-label={t('providerChooseAccess')}
+      >
+        {preset.access.map((access) => (
+          <label key={access.id} data-selected={id === access.id}>
+            <input
+              type="radio"
+              name={groupId}
+              checked={id === access.id}
+              onChange={() => setId(access.id)}
+            />
+            <span>
+              <strong>{t(providerAccessLabel(access))}</strong>
+              <small>
+                {t(access.id === 'tokenPlan' ? 'providerAccessPlanKey' : 'providerAccessApiKey')}
+              </small>
+              <small>{access.url}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      <a className={styles.docsLink} href={selected.docs} target="_blank" rel="noreferrer">
+        {t('providerAccessDocs')}
+      </a>
+      <Button variant="primary" onClick={() => choose(selected)}>
+        {t('providerContinue')}
+      </Button>
     </div>
   )
 }

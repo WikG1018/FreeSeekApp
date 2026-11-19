@@ -198,3 +198,14 @@
   margin: 0;
   font-weight: 600;
 }
+.rejected {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--fs-line);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.rejected p {
+  margin: 4px 0 0;
+  color: var(--fs-secondary-text);
+}

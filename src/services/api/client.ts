@@ -65,16 +65,19 @@ const readErrorResponse = async (
     }
   }
   let message = text || fallback
+  let code = ''
   try {
     const body: unknown = JSON.parse(text)
     if (isErrorBody(body)) {
       message = body.error.message
+      const kind = body.error.code ?? body.error.type
+      code = typeof kind === 'string' ? kind : ''
     }
   } catch {
     // 非 JSON 响应体直接展示原文
   }
   // 原文保留在 error.message 里供匹配，界面展示用本地文案
-  return new ApiError(kind, message, response.status, describeKnownApiError(message))
+  return new ApiError(kind, message, response.status, describeKnownApiError(message, code))
 }
 
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
@@ -141,7 +144,18 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
   // 成功响应保留信号关联，上传/语音读取响应体期间仍可取消；一次性信号随请求回收。
   if (!response.ok) {
     const error = await readErrorResponse(response)
-    logEvent('api', 'http.failed', { requestId, route, ...diagnosticError(error) }, 'error')
+    const serverId = response.headers.get('x-ds-request-id')
+    logEvent(
+      'api',
+      'http.failed',
+      {
+        requestId,
+        route,
+        ...(serverId && /^[\da-f-]{36}$/i.test(serverId) ? { serverId } : {}),
+        ...diagnosticError(error),
+      },
+      'error'
+    )
     throw error
   }
   logEvent('api', 'response.headers', {
@@ -265,7 +279,10 @@ export async function* streamMessage(
           'stream',
           payload.error.message,
           undefined,
-          describeKnownApiError(payload.error.message)
+          describeKnownApiError(
+            payload.error.message,
+            typeof payload.error.code === 'string' ? payload.error.code : payload.error.type
+          )
         )
       }
       if (eventName === 'error') {

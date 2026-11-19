@@ -1,8 +1,9 @@
-import { describeKnownApiError, apiLimitCounts } from './knownErrors.js'
+import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
 import { readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
-import { validateProfile, type ProviderProfile } from '../providers.js'
+import { providerOutputBudget, validateProfile, type ProviderProfile } from '../providers.js'
+import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
 import { logEvent, diagnosticError, registerLogSecret } from '../diagnostics/log.js'
@@ -83,11 +84,9 @@ const headersFor = (profile: ProviderProfile): Record<string, string> => {
 }
 const remoteLimit = (data: Json) => {
   const detail = record(data.error ?? record(data.response).error ?? data)
-  const message = text(detail.code) + ' ' + text(detail.message)
-  const known = describeKnownApiError(message)
-  return known && { ...known, params: apiLimitCounts(message) }
+  return describeKnownApiError(text(detail.message), text(detail.code || detail.type))
 }
-const readJson = async (
+export const readApiJson = async (
   response: Response,
   signal: AbortSignal,
   limit = 8 * 1024 * 1024
@@ -173,7 +172,7 @@ const fetchResponse = async (
     if (!response.ok) {
       const known =
         response.status === 400 || response.status === 413 || response.status === 422
-          ? remoteLimit(await readJson(response, controller.signal, 32768).catch(() => ({})))
+          ? remoteLimit(await readApiJson(response, controller.signal, 32768).catch(() => ({})))
           : undefined
       void response.body?.cancel().catch(() => {})
       signal.throwIfAborted()
@@ -204,12 +203,13 @@ const fetchResponse = async (
     clearTimeout(timer)
   }
 }
-export const fetchProviderModels = async (
+export type ProviderCatalogModel = { id: string; contextWindow?: number }
+export const fetchProviderCatalog = async (
   input: ProviderProfile,
   signal: AbortSignal
-): Promise<string[]> => {
+): Promise<ProviderCatalogModel[]> => {
   const profile = validateProfile(input, false),
-    models = new Set<string>()
+    models = new Map<string, ProviderCatalogModel>()
   let next: string | undefined
   for (let page = 0; page < 10; page++) {
     const url = new URL(endpoint(profile, 'models', ''))
@@ -218,7 +218,7 @@ export const fetchProviderModels = async (
     }
     const { response, dispose } = await fetchResponse(profile, url.toString(), undefined, signal)
     try {
-      const data = await readJson(response, signal)
+      const data = await readApiJson(response, signal)
       const items = profile.protocol === 'gemini' ? data.models : data.data
       if (!Array.isArray(items)) {
         throw new ApiError('protocol', { key: 'providerInvalidResponse' })
@@ -237,7 +237,15 @@ export const fetchProviderModels = async (
           ''
         )
         if (id && id.length <= 200 && !Array.from(id).some((char) => char.charCodeAt(0) < 32)) {
-          models.add(id)
+          const advertised = value.context_length ?? value.context_window ?? value.inputTokenLimit
+          const contextWindow =
+            typeof advertised === 'number' &&
+            Number.isSafeInteger(advertised) &&
+            advertised >= 512 &&
+            advertised <= 10000000
+              ? advertised
+              : undefined
+          models.set(id, { id, contextWindow })
         }
       }
       const token =
@@ -257,8 +265,11 @@ export const fetchProviderModels = async (
   if (!models.size) {
     throw new ApiError('protocol', { key: 'providerModelsEmpty' })
   }
-  return [...models].sort().slice(0, 5000)
+  return [...models.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 5000)
 }
+
+export const fetchProviderModels = async (input: ProviderProfile, signal: AbortSignal) =>
+  (await fetchProviderCatalog(input, signal)).map(({ id }) => id)
 const partFor = (
   part: ProviderPart,
   protocol: ProviderProfile['protocol'],
@@ -401,13 +412,14 @@ export async function* streamProviderMessage(
   model: string,
   messages: ProviderMessage[],
   system: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  reasoning?: ReasoningChoice
 ): AsyncGenerator<MessageStreamEvent> {
   const profile = validateProfile({ ...input, model })
   const { response, dispose } = await fetchResponse(
     profile,
     endpoint(profile, 'chat', model, profile.stream),
-    providerBody(profile, model, messages, system),
+    applyReasoning(providerBody(profile, model, messages, system), profile.protocol, reasoning),
     signal
   )
   let completed = false,
@@ -584,7 +596,7 @@ export async function* streamProviderMessage(
         }
       }
     } else {
-      yield* consume(await readJson(response, signal))
+      yield* consume(await readApiJson(response, signal))
     }
     signal.throwIfAborted()
     if (!completed) {
@@ -615,13 +627,15 @@ export const testProviderModel = async (
   signal: AbortSignal
 ): Promise<{ text: string; elapsedMs: number }> => {
   const started = performance.now()
+  const capability = customReasoning(validateProfile(profile), profile.model)
   let result = ''
   for await (const event of streamProviderMessage(
-    { ...profile, maxOutputTokens: Math.min(profile.maxOutputTokens, 1024) },
+    { ...profile, maxOutputTokens: Math.min(providerOutputBudget(profile, profile.model), 1024) },
     profile.model,
     [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
     'This is a connection test. Reply briefly.',
-    signal
+    signal,
+    capability && { adapter: capability.adapter, level: capability.defaultLevel }
   )) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
       result += event.delta.text

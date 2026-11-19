@@ -34,11 +34,13 @@ type Direction = 'initial' | 'forward' | 'back' | 'switch'
 
 export const SettingsShell = ({
   children,
+  backTarget,
 }: {
+  backTarget?: SettingsPageId
   children: (
     page: SettingsPageId,
     open: (page: SettingsPageId) => void,
-    finish: () => void
+    finish: (next?: SettingsPageId) => void
   ) => ReactNode
 }) => {
   const t = useTranslate(),
@@ -50,7 +52,7 @@ export const SettingsShell = ({
       openSettings('account')
     }
   }, [wideLayout, requested, closing])
-  const parent = parentSettingsPage(page)
+  const parent = backTarget ?? parentSettingsPage(page)
   const canGoBack = page !== 'home' && (!wideLayout || parent !== 'home')
   const scale = useSettings((s) => s.fontScale)
   const layer = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : scale)
@@ -213,7 +215,7 @@ export const SettingsShell = ({
                   children(
                     page,
                     (next) => go(next, 'forward'),
-                    () => navigate(parent, 'back')
+                    (next = parent) => navigate(next, next === parent ? 'back' : 'forward')
                   )
                 )}
               </div>

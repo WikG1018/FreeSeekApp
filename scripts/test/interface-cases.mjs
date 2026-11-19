@@ -111,12 +111,18 @@ export const runInterfaceCases = async ({ run }) => {
       assert.ok(from > 20)
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
       assert.equal(await scroll.evaluate((el) => el.scrollTop), 0)
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('button', { name: '手动配置', exact: true }).click()
       await page.getByLabel('配置名称', { exact: true }).fill('未保存配置')
       await page.keyboard.press('Escape')
       await page.getByRole('button', { name: '继续编辑', exact: true }).click()
       assert.equal(await page.getByLabel('配置名称', { exact: true }).inputValue(), '未保存配置')
       await back(page)
       await page.getByRole('button', { name: '放弃修改', exact: true }).click()
+      await page.locator('[data-settings-page="providerCatalog"]').waitFor()
+      await back(page)
+      await page.locator('[data-settings-page="providers"]').waitFor()
+      await back(page)
       await page.locator('[data-settings-page="account"]').waitFor()
       assert.ok(Math.abs((await scroll.evaluate((el) => el.scrollTop)) - from) <= 2)
       await page.keyboard.press('Escape')
@@ -257,8 +263,10 @@ export const runInterfaceCases = async ({ run }) => {
     'settings options fit their field, support keyboard selection and close one layer at a time',
     async (page) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('button', { name: '手动配置', exact: true }).click()
       const field = page
-        .locator('[data-settings-page=providers]')
+        .locator('[data-settings-page=providerConnection]')
         .getByRole('button', { name: '接口协议', exact: true })
       await field.click()
       const panel = page.getByTestId('option-panel')
@@ -277,7 +285,7 @@ export const runInterfaceCases = async ({ run }) => {
       await page.keyboard.press('Escape')
       await panel.waitFor({ state: 'detached' })
       assert.equal(await field.evaluate((el) => document.activeElement === el), true)
-      assert.equal(await page.locator('[data-settings-page=providers]').isVisible(), true)
+      assert.equal(await page.locator('[data-settings-page=providerConnection]').isVisible(), true)
     }
   )
 
@@ -411,8 +419,13 @@ export const runInterfaceCases = async ({ run }) => {
       await guide.getByRole('listitem').first().waitFor()
       assert.equal(await guide.getByRole('listitem').count(), 4)
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('button', { name: '手动配置', exact: true }).click()
       const more = page.getByRole('button', { name: '更多参数与输入能力', exact: true }),
-        shelf = page.locator('[data-settings-page=providers]').getByRole('spinbutton').first()
+        shelf = page
+          .locator('[data-settings-page=providerConnection]')
+          .getByRole('spinbutton')
+          .first()
       await more.click()
       await shelf.fill('7777')
       await more.click()
@@ -526,13 +539,8 @@ export const runInterfaceCases = async ({ run }) => {
       })
       const guide = page.getByTestId('advanced-provider-notice')
       assert.match(await guide.innerText(), /验证并保存官方 Key/)
-      await page.getByLabel('配置名称', { exact: true }).fill('未保存的名称')
       const official = guide.getByRole('button', { name: '返回官方 API 设置', exact: true })
       await official.click()
-      await page.getByRole('button', { name: '继续编辑', exact: true }).click()
-      assert.equal(await page.getByLabel('配置名称', { exact: true }).inputValue(), '未保存的名称')
-      await official.click()
-      await page.getByRole('button', { name: '放弃修改', exact: true }).click()
       await page.route('**/models', (r) =>
         r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' })
       )

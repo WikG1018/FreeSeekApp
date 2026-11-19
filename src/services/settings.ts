@@ -7,6 +7,11 @@ export type Locale = 'zh-CN' | 'en-US'
 
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
+export type ThirdPartySearch = {
+  enabled: boolean
+  keySource: 'official' | 'separate'
+  apiKey: string
+}
 
 /** 本机设置，存 localStorage：API Key、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
 type Settings = {
@@ -16,6 +21,7 @@ type Settings = {
   location: UserLocation | null
   ttsVoice: TtsVoice
   thinking: boolean
+  hasLegacyThinking: boolean
   search: boolean
   siderCollapsed: boolean
   /** 正文与控件缩放；允许 0.85–1.25 之间任意微调 */
@@ -24,6 +30,9 @@ type Settings = {
   showUsage: boolean
   autoCompress: boolean
   showModelSwitcher: boolean
+  showReasoningPicker: boolean
+  thirdPartySearch: ThirdPartySearch
+  thirdPartySearchOn: boolean
 }
 
 const KEYS = {
@@ -39,6 +48,9 @@ const KEYS = {
   showUsage: 'freeseek:show-usage',
   autoCompress: 'freeseek:auto-compress',
   showModelSwitcher: 'freeseek:show-model-switcher',
+  showReasoningPicker: 'freeseek:show-reasoning-picker',
+  thirdPartySearch: 'freeseek:third-party-search',
+  thirdPartySearchOn: 'freeseek:third-party-search-on',
 } as const
 
 const read = (key: string) => {
@@ -110,6 +122,22 @@ const initialThemePreference = (): ThemePreference => {
 
 /** 未保存过时使用服务端默认音色 stella（海星） */
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
+const initialThirdPartySearch = (): ThirdPartySearch => {
+  try {
+    const value = JSON.parse(read(KEYS.thirdPartySearch) ?? 'null')
+    if (value && typeof value.apiKey === 'string' && value.apiKey.length <= 8192) {
+      registerLogSecret(value.apiKey)
+      return {
+        enabled: value.enabled === true,
+        keySource: value.keySource === 'separate' ? 'separate' : 'official',
+        apiKey: value.apiKey,
+      }
+    }
+  } catch {
+    /* Invalid local preferences are treated as unconfigured. */
+  }
+  return { enabled: false, keySource: 'official', apiKey: '' }
+}
 
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
@@ -118,11 +146,15 @@ export const useSettings = create<Settings>(() => ({
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
+  hasLegacyThinking: read(KEYS.thinking) !== null,
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
   autoCompress: read(KEYS.autoCompress) === 'true',
   showUsage: read(KEYS.showUsage) !== 'false',
   showModelSwitcher: read(KEYS.showModelSwitcher) === 'true',
+  showReasoningPicker: read(KEYS.showReasoningPicker) === 'true',
+  thirdPartySearch: initialThirdPartySearch(),
+  thirdPartySearchOn: read(KEYS.thirdPartySearchOn) === 'true',
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
@@ -162,12 +194,40 @@ export const setApiKey = (apiKey: string | null, { requirePersistence = false } 
 
 export const setThinking = (thinking: boolean) => {
   write(KEYS.thinking, String(thinking))
-  useSettings.setState({ thinking })
+  useSettings.setState({ thinking, hasLegacyThinking: true })
 }
 
 export const setSearch = (search: boolean) => {
   write(KEYS.search, String(search))
   useSettings.setState({ search })
+}
+
+export const thirdPartySearchKey = ({ apiKey, thirdPartySearch }: Settings) =>
+  thirdPartySearch.enabled
+    ? thirdPartySearch.keySource === 'official'
+      ? apiKey
+      : thirdPartySearch.apiKey
+    : null
+
+export const saveThirdPartySearch = (value: ThirdPartySearch) => {
+  const thirdPartySearch = { ...value, apiKey: value.apiKey.trim() }
+  if (
+    thirdPartySearch.apiKey.length > 8192 ||
+    !write(KEYS.thirdPartySearch, JSON.stringify(thirdPartySearch))
+  ) {
+    return false
+  }
+  registerLogSecret(thirdPartySearch.apiKey)
+  useSettings.setState({ thirdPartySearch })
+  if (!thirdPartySearch.enabled) {
+    setThirdPartySearchOn(false)
+  }
+  return true
+}
+
+export const setThirdPartySearchOn = (thirdPartySearchOn: boolean) => {
+  write(KEYS.thirdPartySearchOn, String(thirdPartySearchOn))
+  useSettings.setState({ thirdPartySearchOn })
 }
 
 export const setFontScale = (fontScale: number) => {
@@ -191,6 +251,11 @@ export const setShowUsage = (showUsage: boolean) => {
 export const setShowModelSwitcher = (showModelSwitcher: boolean) => {
   write(KEYS.showModelSwitcher, String(showModelSwitcher))
   useSettings.setState({ showModelSwitcher })
+}
+
+export const setShowReasoningPicker = (showReasoningPicker: boolean) => {
+  write(KEYS.showReasoningPicker, String(showReasoningPicker))
+  useSettings.setState({ showReasoningPicker })
 }
 
 export const setAutoCompress = (autoCompress: boolean) => {

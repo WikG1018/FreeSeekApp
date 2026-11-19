@@ -18,3 +18,4 @@
 ## 图标
 
 - 应用图标（一蓝一粉像素鲸鱼）由本项目绘制生成（`scripts/make_icons.py`），不含第三方素材。
+- API 服务商模板图标来自 [Lobe Icons](https://github.com/lobehub/lobe-icons) 的 `@lobehub/icons-static-png` 2.8.0。MIT 许可和 LobeHub 版权声明随应用展示。品牌标识用于辨认服务商。

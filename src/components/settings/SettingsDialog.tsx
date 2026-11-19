@@ -35,7 +35,21 @@ import { UpdateDialog, useUpdateStatusText } from '../update/Update.js'
 import { GettingStarted, UsageNotice } from '../onboarding/Onboarding.js'
 import { closeSettings, useSettingsDialog, type SettingsPageId } from './settingsDialogState.js'
 import styles from './Settings.module.css'
-import { ProviderSettingsPage } from './ProviderSettings.js'
+import {
+  newProviderConnection,
+  ProviderAccessPage,
+  ProviderCatalogPage,
+  ProviderSettingsPage,
+} from './ProviderSettings.js'
+import {
+  ProviderConnectionPage,
+  ProviderModelPage,
+  ProviderModelsPage,
+  ProviderSearchPage,
+} from './ProviderEditors.js'
+import { emptyProfile, useProviders } from '../../services/providers.js'
+import { providerPreset, type ProviderPreset } from '../../services/providerPresets.js'
+import type { ProviderCatalogModel } from '../../services/api/providerClient.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
 import { Section, Row, TutorialSteps } from './SettingsRows.js'
 import { AccountPage } from './AccountPage.js'
@@ -53,15 +67,32 @@ export const SettingsDialog = () =>
   useSettingsDialog((state) => state.open) ? <SettingsRoot /> : null
 
 const SettingsRoot = () => {
+  const t = useTranslate()
   const [guideOpen, setGuideOpen] = useState(true)
   const [persona, setPersona] = useState<Persona>({ id: '', name: '', prompt: '' })
   const historyImport = useHistoryImport(),
     historyDelete = useHistoryDelete()
   const ready = useChatStore((state) => state.ready)
   const replacing = useChatStore((state) => state.importingHistory)
+  const pageId = useSettingsDialog((state) => state.page)
+  const [preset, setPreset] = useState<ProviderPreset>()
+  const [connection, setConnection] = useState(emptyProfile)
+  const [connectionId, setConnectionId] = useState('')
+  const [model, setModel] = useState<ProviderCatalogModel>({ id: '' })
+  const [catalog, setCatalog] = useState<{
+    id: string
+    revision: string
+    models: ProviderCatalogModel[]
+  }>()
+  const profile = useProviders((state) => state.profiles.find((item) => item.id === connectionId))
+  const connectionParent = connection.id
+    ? 'providerModels'
+    : (providerPreset(connection.preset?.id)?.access.length ?? 0) > 1
+      ? 'providerAccess'
+      : 'providerCatalog'
   return (
     <>
-      <SettingsShell>
+      <SettingsShell backTarget={pageId === 'providerConnection' ? connectionParent : undefined}>
         {(page, open, finish) => {
           switch (page) {
             case 'account':
@@ -73,7 +104,94 @@ const SettingsRoot = () => {
                 />
               )
             case 'providers':
-              return <ProviderSettingsPage onOfficial={finish} />
+              return (
+                <ProviderSettingsPage
+                  add={() => open('providerCatalog')}
+                  edit={(id) => {
+                    setConnectionId(id)
+                    open('providerModels')
+                  }}
+                  search={() => open('providerSearch')}
+                  onOfficial={() => finish()}
+                />
+              )
+            case 'providerCatalog':
+              return (
+                <ProviderCatalogPage
+                  choose={(value) => {
+                    setPreset(value)
+                    if (value.access.length > 1) {
+                      open('providerAccess')
+                    } else {
+                      setConnection(
+                        newProviderConnection(value, value.access[0], t('providerAccessTokenPlan'))
+                      )
+                      open('providerConnection')
+                    }
+                  }}
+                  manual={() => {
+                    setConnection(emptyProfile())
+                    open('providerConnection')
+                  }}
+                />
+              )
+            case 'providerAccess':
+              return (
+                preset && (
+                  <ProviderAccessPage
+                    preset={preset}
+                    choose={(access) => {
+                      setConnection(
+                        newProviderConnection(preset, access, t('providerAccessTokenPlan'))
+                      )
+                      open('providerConnection')
+                    }}
+                  />
+                )
+              )
+            case 'providerConnection':
+              return (
+                <ProviderConnectionPage
+                  initial={connection}
+                  onSaved={(id) => {
+                    setConnectionId(id)
+                    finish('providerModels')
+                  }}
+                  onDeleted={() => finish('providers')}
+                />
+              )
+            case 'providerModels':
+              return (
+                profile && (
+                  <ProviderModelsPage
+                    profile={profile}
+                    catalog={
+                      catalog?.id === profile.id && catalog.revision === profile.revision
+                        ? catalog.models
+                        : []
+                    }
+                    setCatalog={(models) =>
+                      setCatalog({ id: profile.id, revision: profile.revision, models })
+                    }
+                    editConnection={() => {
+                      setConnection(profile)
+                      open('providerConnection')
+                    }}
+                    editModel={(value) => {
+                      setModel(value)
+                      open('providerModel')
+                    }}
+                  />
+                )
+              )
+            case 'providerModel':
+              return (
+                profile && (
+                  <ProviderModelPage profile={profile} selected={model} onDone={() => finish()} />
+                )
+              )
+            case 'providerSearch':
+              return <ProviderSearchPage onDone={() => finish()} />
             case 'chat':
               return <ChatPreferencesPage />
             case 'personas':
@@ -86,7 +204,7 @@ const SettingsRoot = () => {
                 />
               )
             case 'personaEdit':
-              return <PersonaEditor persona={persona} onDone={finish} />
+              return <PersonaEditor persona={persona} onDone={() => finish()} />
             case 'appearance':
               return <AppearancePage />
             case 'data':

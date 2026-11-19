@@ -5,6 +5,7 @@ import {
   setAutoCompress,
   setLocale,
   setShowModelSwitcher,
+  setShowReasoningPicker,
   setShowUsage,
   setThemePreference,
   setTtsVoice,
@@ -120,6 +121,7 @@ export const ChatPreferencesPage = () => {
   const t = useTranslate(),
     name = useId()
   const showModelSwitcher = useSettings((s) => s.showModelSwitcher),
+    showReasoningPicker = useSettings((s) => s.showReasoningPicker),
     autoCompress = useSettings((s) => s.autoCompress),
     showUsage = useSettings((s) => s.showUsage),
     voice = useSettings((s) => s.ttsVoice)
@@ -131,6 +133,13 @@ export const ChatPreferencesPage = () => {
           checked={showModelSwitcher}
           change={setShowModelSwitcher}
         />
+        {showModelSwitcher && (
+          <SwitchRow
+            label={t('showReasoningPicker')}
+            checked={showReasoningPicker}
+            change={setShowReasoningPicker}
+          />
+        )}
         <SwitchRow label={t('settingsShowUsage')} checked={showUsage} change={setShowUsage} />
       </Section>
       <Section title={t('longChats')}>

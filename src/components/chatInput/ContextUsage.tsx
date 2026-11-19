@@ -1,5 +1,6 @@
 import { memo, useMemo, type RefObject } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { isContextRejection } from '../../services/api/knownErrors.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import {
   applicableSummary,
@@ -17,7 +18,7 @@ import {
 import { EMPTY_DRAFT, useDrafts } from '../../services/chat/drafts.js'
 import { replySystemPrompt, useChatStore } from '../../services/chat/store.js'
 import { usePersonas } from '../../services/personas.js'
-import { modelLabel, useProviders } from '../../services/providers.js'
+import { providerModelLabel, useProviders } from '../../services/providers.js'
 import { IconCloseOutline16 } from '../base/icons.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
 import styles from './ContextUsage.module.css'
@@ -53,20 +54,39 @@ export const ContextUsage = memo(function ContextUsage({
       : undefined
   )
   const draft = useDrafts((state) => state.drafts.get(sessionId) ?? EMPTY_DRAFT)
+  const visible = useMemo(() => (session ? getVisibleMessages(session) : []), [session])
+  const lastReply = visible.at(-1)
+  const lastQuestion = visible.at(-2)
+  const lastError =
+    lastReply?.role === 'assistant' && lastReply.status === 'error'
+      ? lastReply.error?.localMessage
+      : undefined
+  const rejected =
+    isContextRejection(lastError?.key) ||
+    lastError?.key === 'compressionInputLarge' ||
+    lastError?.key === 'compressionStillTooLong' ||
+    lastError?.key === 'replyDocumentInputLimit'
+  const reported = lastError?.params
+  const requestFiles = Number(
+    reported?.requestQuestionFiles ??
+      (lastQuestion?.role === 'user' ? lastQuestion.files.length : 0)
+  )
+  const requestDocs = Number(reported?.requestDocumentCount)
+  const documentLimit = Number(reported?.documentLimit)
+  const requestCount = Number(reported?.requestedTokens)
+  const requestLimit = Number(reported?.contextLimitTokens)
+  const requestEstimate = Number(reported?.estimatedRequestTokens)
   const historyTokens = useMemo(() => {
     if (sessionId !== null && !session) {
       return undefined
     }
-    const rounds = contextRounds(
-      session ? getVisibleMessages(session) : [],
-      session?.inherited ?? inheritance
-    )
+    const rounds = contextRounds(visible, session?.inherited ?? inheritance)
     const summary = applicableSummary(
       session?.contextSummary ?? inheritance?.contextSummary,
       rounds
     )
     return estimateContextHistory(rounds, summary).tokens
-  }, [inheritance, session, sessionId])
+  }, [inheritance, session, sessionId, visible])
   const draftTokens = useMemo(
     () =>
       estimatedTokens(draft.text.trim()) +
@@ -84,16 +104,14 @@ export const ContextUsage = memo(function ContextUsage({
   const history = historyTokens === undefined ? undefined : historyTokens + systemTokens
   const reserved = connection ? contextReplyReserve(connection) : undefined
   const limit = connection ? contextLength(connection) : undefined
-  const total =
-    history !== undefined && reserved !== undefined ? history + draftTokens + reserved : undefined
-  const ratio = total !== undefined && limit ? total / limit : null
+  const ratio = history !== undefined && limit ? history / limit : null
   const roundedPercent = Math.round((ratio ?? 0) * 100)
   const percent = ratio === null ? null : ratio < 1 ? Math.min(99, roundedPercent) : roundedPercent
   const progress = Math.min(1, ratio ?? 0)
   const level = progress >= 1 ? 'full' : progress >= CONTEXT_NEAR_LIMIT ? 'near' : undefined
   const title = t('contextUsageTitle')
   const label = percent === null ? title : t('contextUsageLabel', { percent })
-  const displayModel = official ? modelLabel(model) : model
+  const displayModel = providerModelLabel(model, profile)
   const panel = useOptionPanel(title, {
     side: 'top',
     kind: 'details',
@@ -110,6 +128,7 @@ export const ContextUsage = memo(function ContextUsage({
         ref={panel.anchorRef}
         className={styles.trigger}
         data-testid="context-usage"
+        data-toolbar-control="context"
         data-level={level}
         aria-label={label}
         title={label}
@@ -154,7 +173,7 @@ export const ContextUsage = memo(function ContextUsage({
               <IconCloseOutline16 />
             </button>
           </div>
-          {total === undefined || history === undefined || reserved === undefined ? (
+          {history === undefined || reserved === undefined ? (
             <p className={styles.status}>
               {t(connection ? 'contextUsageUpdating' : 'contextUsageUnavailable')}
             </p>
@@ -168,10 +187,10 @@ export const ContextUsage = memo(function ContextUsage({
                 <span title={limit?.toLocaleString()}>
                   {limit
                     ? t('contextUsageFraction', {
-                        count: formatContextTokens(total),
+                        count: formatContextTokens(history),
                         limit: official ? '1M' : formatContextTokens(limit),
                       })
-                    : t('contextUsageCount', { count: formatContextTokens(total) })}
+                    : t('contextUsageCount', { count: formatContextTokens(history) })}
                 </span>
               </div>
               {limit ? (
@@ -195,6 +214,44 @@ export const ContextUsage = memo(function ContextUsage({
                   <dd>{formatContextTokens(reserved)}</dd>
                 </div>
               </dl>
+              {rejected && (
+                <div className={styles.rejected}>
+                  <strong>{t('contextUsageRejected')}</strong>
+                  {requestCount > 0 ? (
+                    <p>
+                      {requestLimit > 0
+                        ? t('contextUsageReportedCounts', {
+                            count: requestCount.toLocaleString(),
+                            limit: requestLimit.toLocaleString(),
+                          })
+                        : t('contextUsageReportedRequest', {
+                            count: requestCount.toLocaleString(),
+                          })}
+                    </p>
+                  ) : (
+                    <p>
+                      {requestEstimate > 0
+                        ? t('contextUsageEstimatedRequest', {
+                            count: formatContextTokens(requestEstimate),
+                          })
+                        : t('contextUsageMissingRequest')}
+                    </p>
+                  )}
+                  {!requestCount && requestLimit > 0 && (
+                    <p>
+                      {t('contextUsageReportedLimit', { limit: requestLimit.toLocaleString() })}
+                    </p>
+                  )}
+                  {requestDocs > 0 && documentLimit > 0 && (
+                    <p>
+                      {t('contextUsageDocumentCount', { count: requestDocs, limit: documentLimit })}
+                    </p>
+                  )}
+                  {requestFiles > 0 && (
+                    <p>{t('contextUsageRequestFiles', { count: requestFiles })}</p>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>

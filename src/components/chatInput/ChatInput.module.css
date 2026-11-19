@@ -13,13 +13,14 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 0 3px;
+  gap: 4px;
+  overflow: hidden;
 }
 .tools {
   display: flex;
   align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: none;
+  gap: 4px;
 }
 .tool,
 .modelTrigger {
@@ -40,10 +41,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 .tool {
-  flex: 0 1 auto;
-}
-.tools > * + * .tool {
-  margin-left: 4px;
+  flex: none;
 }
 .toolFace {
   display: inline-flex;
@@ -52,7 +50,7 @@
   max-width: 100%;
   box-sizing: border-box;
   min-height: 29px;
-  padding: 4px 9px;
+  padding: 4px 7px;
   border-radius: 15px;
   border: 1px solid var(--fs-line);
   background: var(--fs-floating-surface);
@@ -69,8 +67,54 @@
 }
 .toolFace > span {
   min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  white-space: nowrap;
+}
+.effortShort,
+.searchShort {
+  display: none;
+}
+.toolbar:not([data-compact='full']) .effortPrefix,
+.toolbar:not([data-compact='full']) .effortFull,
+.toolbar[data-compact='both'] .searchFull,
+.toolbar[data-compact='tight'] .searchFull {
+  display: none;
+}
+.toolbar:not([data-compact='full']) .effortShort,
+.toolbar[data-compact='both'] .searchShort,
+.toolbar[data-compact='tight'] .searchShort {
+  display: inline;
+}
+.effortChevron {
+  display: inline-flex;
+  margin-left: 3px;
+  flex: none;
+}
+.effortChevron svg {
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+  transition: transform 140ms var(--fs-ease-out);
+}
+.tool[aria-expanded='true'] .effortChevron svg {
+  transform: rotate(180deg);
+}
+.toolbar[data-compact='tight'],
+.toolbar[data-compact='tight'] .tools {
+  gap: 1px;
+}
+.toolbar[data-compact='tight'] .toolFace {
+  padding-inline: 3px;
+  font-size: 12px;
+}
+.toolbar[data-compact='tight'] .modelTrigger {
+  min-width: 40px;
+  padding-inline: 4px;
+}
+.toolbar[data-compact='tight'] .toolFace svg {
+  margin-right: 3px;
+}
+.toolbar[data-compact='tight'] .effortChevron svg {
+  margin-right: 0;
 }
 .tool[aria-pressed='true'] .toolFace {
   color: var(--fs-accent-text);
@@ -102,16 +146,33 @@
   transform: translateY(1px);
 }
 .modelTrigger {
+  position: relative;
+  isolation: isolate;
   justify-content: flex-start;
   /* Let the name yield space first; the tool labels may wrap only at extreme widths. */
   flex: 0 9999 auto;
-  max-width: 144px;
-  margin-right: 5px;
-  padding: 0 6px;
+  max-width: 100%;
+  padding: 0 8px;
   border-radius: 12px;
   color: var(--fs-accent-text);
   font-weight: 600;
   text-align: left;
+}
+.modelSurface {
+  position: absolute;
+  z-index: -1;
+  inset: 7px 0;
+  border: 1px solid var(--fs-line);
+  border-radius: 16px;
+  background: var(--fs-floating-surface);
+  pointer-events: none;
+  transition:
+    background-color var(--fs-duration-fast) var(--fs-ease-out),
+    border-color var(--fs-duration-fast) var(--fs-ease-out);
+}
+.modelTrigger[aria-expanded='true'] .modelSurface {
+  background: var(--fs-accent-wash);
+  border-color: var(--fs-accent-line);
 }
 .modelName {
   display: block;
@@ -293,11 +354,6 @@ button:disabled .modelReason {
   outline: 2px solid var(--fs-focus);
   outline-offset: -2px;
 }
-@media (max-width: 767px) {
-  .modelTrigger {
-    max-width: 128px;
-  }
-}
 @media (max-width: 359px) {
   .toolFace {
     padding-left: 6px;
@@ -306,10 +362,24 @@ button:disabled .modelReason {
   .toolFace svg {
     margin-right: 3px;
   }
+  .toolbar[data-compact='both'] .toolFace {
+    padding-inline: 3px;
+    font-size: 12px;
+  }
+  .toolbar[data-compact='both'] .modelTrigger {
+    min-width: 40px;
+    padding-inline: 4px;
+  }
+  .toolbar[data-compact='both'],
+  .toolbar[data-compact='both'] .tools {
+    gap: 1px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .textareaWrapper,
   .toolFace,
+  .effortChevron svg,
+  .modelSurface,
   .modelTrigger svg,
   .sendButton::before,
   .surface {

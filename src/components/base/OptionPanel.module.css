@@ -20,6 +20,19 @@
 .panel[data-kind='actions'] {
   width: 194px;
 }
+.panel[data-kind='reasoning'] {
+  width: 200px;
+}
+.reasoningHeading {
+  padding: 8px 11px 9px;
+  border-bottom: 1px solid var(--fs-line);
+  font-weight: 600;
+  font-size: 13px;
+}
+.reasoningDefault {
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
 .panel[data-kind='details'] {
   width: 312px;
   max-width: calc(100vw - var(--fs-safe-left) - var(--fs-safe-right) - 32px);

@@ -19,6 +19,12 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   home: 'settings',
   account: 'settingsApiService',
   providers: 'providerAdvanced',
+  providerCatalog: 'providerCatalog',
+  providerAccess: 'providerChooseAccess',
+  providerConnection: 'providerConnection',
+  providerModels: 'providerManageModels',
+  providerModel: 'providerModelSettings',
+  providerSearch: 'thirdPartySearchTitle',
   chat: 'settingsChatPreferences',
   personas: 'personaManagerTitle',
   personaEdit: 'settingsEditPersona',
@@ -92,7 +98,12 @@ export const SettingsDirectory = ({
               value={rail ? undefined : values[id]}
               onClick={() => open(id)}
               target={id}
-              current={rail && (active === id || parentSettingsPage(active) === id)}
+              current={
+                rail &&
+                (active === id ||
+                  parentSettingsPage(active) === id ||
+                  (id === 'account' && active.startsWith('provider')))
+              }
             />
           ))}
         </Section>

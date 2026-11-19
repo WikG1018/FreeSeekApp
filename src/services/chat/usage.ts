@@ -25,6 +25,12 @@ export const sumMessageUsage = (
     (base?.cache_creation_input_tokens ?? 0) + current.cache_creation_input_tokens,
   cache_read_input_tokens: (base?.cache_read_input_tokens ?? 0) + current.cache_read_input_tokens,
   output_tokens: (base?.output_tokens ?? 0) + current.output_tokens,
+  ...(base?.standalone_search_requests || current.standalone_search_requests
+    ? {
+        standalone_search_requests:
+          (base?.standalone_search_requests ?? 0) + (current.standalone_search_requests ?? 0),
+      }
+    : {}),
   ...(base?.server_tool_use || current.server_tool_use
     ? {
         server_tool_use: {

@@ -75,6 +75,7 @@ try {
  var blob=new Blob(['x']);var uploadAborted=false;var controller=new AbortController();controller.abort();
  try{await a.client.uploadFile('fake',new File([blob],'a.txt'),'user_data',controller.signal);}catch(error){uploadAborted=error.name==='AbortError';}
  a.settings.setShowUsage(false);a.drafts.setDraftText(null,'重启恢复草稿');a.drafts.flushDraftTexts();
+ localStorage.setItem('freeseek:notice-version','1');
  a.settingsDialog.openSettings('home');
  return{sdk:native.environment.sdk,android:native.environment.androidVersion,webview:native.environment.webviewVersion,pageSize:native.environment.pageSizeBytes,
  chatStatus:chatStatus,original:original,brokenRejected:broken,afterBroken:afterBroken,zipEntries:Object.keys(entries).length,

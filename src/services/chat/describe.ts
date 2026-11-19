@@ -1,5 +1,6 @@
 import { isTranslationKey, translate } from '../../i18n/index.js'
 import { classifyStatus, describeKnownApiError } from '../api/errors.js'
+import { isContextRejection } from '../api/knownErrors.js'
 import { isCompressionFailure } from './contextCompression.js'
 import type { AssistantMessage } from './types.js'
 
@@ -47,8 +48,24 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     ) {
       return { text: message, action: 'compression' }
     }
-    if (localMessage?.key === 'replyContextTooLong') {
-      return { text: message, action: 'newChat' }
+    if (isContextRejection(localMessage?.key)) {
+      const { requestedTokens, contextLimitTokens, requestDocumentCount, documentLimit } =
+        localMessage?.params ?? {}
+      const detail =
+        requestedTokens && contextLimitTokens
+          ? translate('contextUsageReportedCounts', {
+              count: requestedTokens,
+              limit: contextLimitTokens,
+            })
+          : requestDocumentCount && documentLimit
+            ? translate('contextUsageDocumentCount', {
+                count: requestDocumentCount,
+                limit: documentLimit,
+              })
+            : localMessage?.key === 'replyContextTooLong'
+              ? translate('contextUsageMissingRequest')
+              : ''
+      return { text: detail ? message + ' ' + detail : message, action: 'newChat' }
     }
     switch (classifyStatus(status)) {
       case 'unauthorized':

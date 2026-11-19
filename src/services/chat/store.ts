@@ -18,7 +18,7 @@ import {
   useUploads,
   markAttachmentInvalid,
 } from '../attachments.js'
-import { useSettings } from '../settings.js'
+import { thirdPartySearchKey, useSettings } from '../settings.js'
 import { UnsupportedImageError } from '../image.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
@@ -38,9 +38,14 @@ import {
   applicableSummary,
   compressionEstimateParams,
   contextLength,
+  contextReplyReserve,
   contextRounds,
   describeCompressionFailure,
   estimateContextHistory,
+  estimatedFileTokens,
+  estimatedSystemTokens,
+  estimatedTokens,
+  estimatedUserTokens,
   generateContextSummary,
   isCompressionFailure,
   MAX_SUMMARY_CHARS,
@@ -48,23 +53,31 @@ import {
   type ContextRound,
   type SummaryPlan,
 } from './contextCompression.js'
-import { apiLimitCounts } from '../api/knownErrors.js'
+import { apiLimitCounts, isContextRejection } from '../api/knownErrors.js'
 import { activePersona } from '../personas.js'
 import {
   activeConnection,
   activeConnectionRef,
   resolveConnection,
+  selectedReasoning,
+  setReasoningOverride,
   useProviders,
   ProviderConfigError,
   validModel,
   type Connection,
 } from '../providers.js'
 import { streamProviderMessage } from '../api/providerClient.js'
-import { prepareProviderMessages } from '../api/providerContent.js'
+import { searchContext, searchForCustomModel } from '../api/search.js'
+import {
+  documentTextFallback,
+  inlineDocuments,
+  prepareProviderMessages,
+} from '../api/providerContent.js'
 import {
   applyEvent,
   canContinueReply,
   getContextRounds,
+  getReplyText,
   settleReply,
   toRequestMessages,
 } from './reply.js'
@@ -82,6 +95,7 @@ import {
 
 /** deepseek-flash 同时支持深度思考与图片输入 */
 const MODEL: ChatModel = 'deepseek-flash'
+const DEEPSEEK_DOCUMENT_LIMIT = 20
 /** 所有生成请求统一携带的助手身份说明 */
 const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
@@ -357,10 +371,11 @@ export const bindChatPersistence = () => {
 export const replySystemPrompt = (prompt: string | undefined, official: boolean) =>
   prompt?.trim() ? prompt : official ? SYSTEM_PROMPT : 'You are a helpful assistant.'
 
-const createReply = (persona?: { name: string; prompt: string } | null): AssistantMessage => {
-  const { thinking, search } = useSettings.getState()
+const createReply = (persona: Session['persona'], sessionId: string | null): AssistantMessage => {
+  const settings = useSettings.getState()
   const { selection } = useProviders.getState()
   const official = selection.providerId === 'deepseek'
+  const reasoning = selectedReasoning(sessionId)
   return {
     id: createId(),
     role: 'assistant',
@@ -368,8 +383,11 @@ const createReply = (persona?: { name: string; prompt: string } | null): Assista
     model: selection.model,
     connection: activeConnectionRef(),
     systemPrompt: replySystemPrompt(persona?.prompt, official),
-    thinking: official && thinking,
-    search: official && search,
+    reasoning,
+    thinking: !!reasoning && reasoning.level !== 'off',
+    search: official
+      ? settings.search
+      : settings.thirdPartySearch.enabled && settings.thirdPartySearchOn,
     prefix: true,
     status: 'pending',
     blocks: [],
@@ -804,7 +822,11 @@ export const sendMessage = (targetSessionId: string | null) => {
     })),
     createdAt: now,
   }
-  const reply = createReply(current.persona)
+  const reply = createReply(current.persona, targetSessionId)
+  const override = useProviders.getState().reasoningOverride
+  if (targetSessionId === null && override?.sessionId === null) {
+    setReasoningOverride(sessionId, override.level)
+  }
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
     updatedAt: now,
@@ -843,7 +865,7 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     return
   }
   const history = path.slice(0, index - 1)
-  const reply = createReply(session.persona)
+  const reply = createReply(session.persona, sessionId)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, question.id, [reply]),
     updatedAt: Date.now(),
@@ -880,7 +902,7 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     files: previous.files,
     createdAt: Date.now(),
   }
-  const reply = createReply(session.persona)
+  const reply = createReply(session.persona, sessionId)
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
@@ -989,6 +1011,62 @@ type Request = {
   inherited?: InheritedContext | null
   /** 人设快照：prompt 覆盖默认 system 提示词 */
   persona?: { name: string; prompt: string } | null
+}
+
+const localDocumentRetry = async (
+  sessionId: string,
+  request: Request,
+  messages: MessageParam[],
+  signal: AbortSignal,
+  remainingTokens: number,
+  required: number
+) => {
+  const referenced = new Set(
+    messages.flatMap((message) =>
+      message.role === 'user' && Array.isArray(message.content)
+        ? message.content.flatMap((part) => (part.type === 'document' ? [part.source.file_id] : []))
+        : []
+    )
+  )
+  const texts = new Map<string, string>()
+  const considered = new Set<string>()
+  let bytes = 0
+  const questions = [
+    request.question,
+    ...contextRounds(request.history, request.inherited).map(([user]) => user),
+  ]
+  for (const question of questions) {
+    for (const file of question.files) {
+      const id = file.serverId
+      if (!id || !referenced.has(id) || considered.has(id)) {
+        continue
+      }
+      considered.add(id)
+      signal.throwIfAborted()
+      try {
+        const blob =
+          pendingFiles.get(sessionId)?.find((item) => item.id === file.id)?.blob ??
+          (await db.loadFile(file.id))
+        const text = blob ? await documentTextFallback(file, blob, signal) : undefined
+        if (!text) {
+          continue
+        }
+        const added = new Blob([text]).size
+        const increase = estimatedTokens(text) - estimatedFileTokens(file.size, false)
+        if (bytes + added <= 4 * 1024 * 1024 && remainingTokens - increase >= 0) {
+          texts.set(id, text)
+          remainingTokens -= increase
+          bytes += added
+          if (texts.size >= required) {
+            return texts
+          }
+        }
+      } catch {
+        signal.throwIfAborted()
+      }
+    }
+  }
+  return texts
 }
 
 export const currentContextSummary = (session: Session) =>
@@ -1156,9 +1234,8 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     question?.role !== 'user' ||
     previous?.role !== 'assistant' ||
     previous.status !== 'error' ||
-    (!['replyContextTooLong', 'compressionSuggested', 'compressionUnavailable'].includes(
-      local?.key ?? ''
-    ) &&
+    (!isContextRejection(local?.key) &&
+      !['compressionSuggested', 'compressionUnavailable'].includes(local?.key ?? '') &&
       !isCompressionFailure(local?.key))
   ) {
     return
@@ -1171,8 +1248,7 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     stopDetails: undefined,
   }
   const recover =
-    mode === 'compress' &&
-    (local?.key === 'replyContextTooLong' || local?.params?.recoverContext === 1)
+    mode === 'compress' && (isContextRejection(local?.key) || local?.params?.recoverContext === 1)
   updateReply(id, reply)
   persist(id)
   void streamReply(
@@ -1587,16 +1663,23 @@ const streamReply = async (
     thinking: initial.thinking,
     search: initial.search,
   })
-  const usageBase = request.prefix ? initial.usage : undefined
+  let usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
+  let searchResult = initial.blocks.find(
+    (block) => block.type === 'web_search_tool_result' && block.tool_use_id.startsWith('search-')
+  )
   const requestStartedAt = Date.now()
   let connection: Connection | undefined
+  let inlineAttempted = false
+  let documentTexts: ReadonlyMap<string, string> | undefined
 
   try {
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
       let preparing = false
       let receivedContent = false
+      let preparedContext: Request | undefined
+      let documentCount: number | undefined
       try {
         connection ??= resolveConnection(initial.connection, initial.model)
         if (checkPressure) {
@@ -1701,7 +1784,8 @@ const streamReply = async (
         if (!rawPrepared.question.content.trim() && rawPrepared.question.files.length === 0) {
           throw new ApiError('protocol', { key: 'replyNoReadableAttachment' })
         }
-        const prepared = withSummaryText(rawPrepared, summary)
+        let prepared = withSummaryText(rawPrepared, summary)
+        preparedContext = prepared
         preparing = false
         // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
         const latestReminder = prepared.prefix
@@ -1710,7 +1794,7 @@ const streamReply = async (
         reply = { ...reply, latestReminder }
         updateReply(sessionId, reply)
         persist(sessionId)
-        const messages = toRequestMessages(
+        const originalMessages = toRequestMessages(
           prepared.history,
           prepared.question,
           prepared.prefix,
@@ -1718,7 +1802,50 @@ const streamReply = async (
           latestReminder,
           prepared.inherited?.messages
         )
+        const messages = documentTexts
+          ? inlineDocuments(originalMessages, documentTexts)
+          : originalMessages
         sentMessages = messages
+        if (connection.kind === 'deepseek') {
+          documentCount = messages.reduce(
+            (count, message) =>
+              message.role === 'user' && Array.isArray(message.content)
+                ? count + message.content.filter((part) => part.type === 'document').length
+                : count,
+            0
+          )
+        }
+        if (connection.kind === 'custom' && initial.search && original.question.content.trim()) {
+          if (searchResult?.type !== 'web_search_tool_result') {
+            const searched = await searchForCustomModel(
+              original.question.content,
+              thirdPartySearchKey(useSettings.getState()),
+              controller.signal
+            )
+            searchResult = searched.result
+            reply = { ...reply, blocks: [...reply.blocks, searched.call, searched.result] }
+            if (searched.billed) {
+              const usage = {
+                input_tokens: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 0,
+                standalone_search_requests: 1,
+              }
+              usageBase = sumMessageUsage(usageBase, usage)
+              usageHistory.push({ createdAt: Date.now(), usage, model: connection.model })
+              reply = { ...reply, usage: usageBase, usageHistory: [...usageHistory] }
+            }
+            flush()
+            persist(sessionId)
+          }
+          const references = searchContext(searchResult)
+          prepared = {
+            ...prepared,
+            question: { ...prepared.question, content: prepared.question.content + references },
+          }
+          preparedContext = prepared
+        }
         logEvent('chat', 'request.prepared', {
           sessionId,
           replyId: initial.id,
@@ -1750,7 +1877,8 @@ const streamReply = async (
                   (request.persona?.prompt.trim()
                     ? request.persona.prompt
                     : 'You are a helpful assistant.'),
-                controller.signal
+                controller.signal,
+                initial.reasoning
               )
             : streamMessage(
                 connection.apiKey,
@@ -1762,6 +1890,11 @@ const streamReply = async (
                     (request.persona?.prompt.trim() ? request.persona.prompt : SYSTEM_PROMPT),
                   messages,
                   thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
+                  ...(initial.reasoning?.level === 'low' ||
+                  initial.reasoning?.level === 'high' ||
+                  initial.reasoning?.level === 'max'
+                    ? { output_config: { effort: initial.reasoning.level } }
+                    : {}),
                   safety_check: SAFETY_CHECK,
                   tools: serverTools(initial.search ?? false),
                   ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
@@ -1858,18 +1991,65 @@ const streamReply = async (
           })
           break
         }
-        if (
-          error instanceof ApiError &&
-          error.localMessage?.key === 'replyContextTooLong' &&
-          connection &&
-          !receivedContent
-        ) {
-          reportedLimit =
-            Number(error.localMessage.params?.contextLimitTokens) ||
-            apiLimitCounts(error.message).contextLimitTokens ||
-            reportedLimit
+        const local = error instanceof ApiError ? error.localMessage : undefined
+        if (error instanceof ApiError && local && isContextRejection(local.key) && connection) {
+          const params = { ...apiLimitCounts(error.message), ...local.params }
+          reportedLimit = Number(params.contextLimitTokens) || reportedLimit
+          if (preparedContext) {
+            const sentRounds = contextRounds(preparedContext.history, preparedContext.inherited)
+            const question = preparedContext.question
+            params.estimatedRequestTokens =
+              estimateContextHistory(sentRounds).tokens +
+              estimatedSystemTokens(initial.systemPrompt ?? '') +
+              estimatedUserTokens(question) +
+              (preparedContext.prefix ? estimatedTokens(getReplyText(preparedContext.prefix)) : 0) +
+              contextReplyReserve(connection)
+            params.requestQuestionFiles = question.files.length
+          }
+          if (documentCount !== undefined) {
+            params.requestDocumentCount = documentCount
+            if (local.key === 'replyDocumentCountLimit') {
+              params.documentLimit ??= DEEPSEEK_DOCUMENT_LIMIT
+            }
+          }
+          logEvent(
+            'chat',
+            'request.context.rejected',
+            { sessionId, replyId: reply.id, ...params },
+            'warn'
+          )
           const limit = reportedLimit ?? contextLength(connection)
           if (
+            !receivedContent &&
+            !inlineAttempted &&
+            connection.kind === 'deepseek' &&
+            documentCount &&
+            preparedContext &&
+            sentMessages
+          ) {
+            inlineAttempted = true
+            const allowed = Number(params.documentLimit)
+            const texts = await localDocumentRetry(
+              sessionId,
+              preparedContext,
+              sentMessages,
+              controller.signal,
+              (limit ?? Infinity) - Number(params.estimatedRequestTokens ?? 0),
+              allowed ? Math.max(1, documentCount - allowed) : Infinity
+            ).catch(() => new Map<string, string>())
+            if (controller.signal.aborted) {
+              reply = settleReply(reply, 'stopped', Date.now())
+              break
+            }
+            if (texts.size && (!allowed || documentCount - texts.size <= allowed)) {
+              documentTexts = texts
+              logEvent('chat', 'request.documents.inlined', { sessionId, count: texts.size })
+              continue
+            }
+          }
+          if (
+            !receivedContent &&
+            local.key === 'replyContextTooLong' &&
             connection.kind === 'custom' &&
             limit &&
             connection.profile.maxOutputTokens >= limit
@@ -1877,33 +2057,49 @@ const streamReply = async (
             reply = settleReply(reply, 'error', Date.now(), {
               kind: 'protocol',
               message: '',
-              localMessage: { key: 'replyOutputLimitInvalid' },
+              localMessage: { key: 'replyOutputLimitInvalid', params },
             })
             break
           }
-          // Only the service can establish that a request without earlier turns is too large.
-          // Attachment size estimates alone cannot tell whether reducing the history will help.
-          if (!rounds.length || summary?.coveredRounds === rounds.length) {
+          const documentLimit = local.key !== 'replyContextTooLong'
+          const currentDocs = new Set(
+            preparedContext?.question.files.flatMap(({ isImage, serverId }) =>
+              !isImage && serverId && !documentTexts?.has(serverId) ? [serverId] : []
+            )
+          ).size
+          if (
+            !receivedContent &&
+            (!rounds.length ||
+              (summary?.coveredRounds ?? 0) >= rounds.length ||
+              (documentLimit && documentCount !== undefined && currentDocs >= documentCount) ||
+              (local.key === 'replyDocumentCountLimit' &&
+                currentDocs > Number(params.documentLimit)))
+          ) {
             reply = settleReply(reply, 'error', Date.now(), {
               kind: 'protocol',
               message: '',
               localMessage: {
-                key: summary ? 'compressionStillTooLong' : 'compressionInputLarge',
+                key: documentLimit
+                  ? 'replyDocumentInputLimit'
+                  : summary
+                    ? 'compressionStillTooLong'
+                    : 'compressionInputLarge',
+                params,
               },
             })
             break
           }
-          if (mode !== 'send' && !compressionAttempted && useSettings.getState().autoCompress) {
+          if (
+            !receivedContent &&
+            mode !== 'send' &&
+            !compressionAttempted &&
+            useSettings.getState().autoCompress
+          ) {
             checkPressure = true
             mode = 'recover'
             continue
           }
-          if (reportedLimit) {
-            error.localMessage.params = {
-              ...error.localMessage.params,
-              contextLimitTokens: reportedLimit,
-            }
-          }
+          local.params = params
         }
         // 附件失效：重新补传后重发。收到过内容块（含丢弃的客户端工具）后不自动重发。
         if (

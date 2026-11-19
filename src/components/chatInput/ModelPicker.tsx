@@ -4,8 +4,9 @@ import { getVisibleMessages } from '../../services/chat/branches.js'
 import { getContextRounds } from '../../services/chat/reply.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
-  modelLabel,
   OFFICIAL_MODELS,
+  modelsInProfile,
+  providerModelLabel,
   ProviderConfigError,
   selectModel,
   useProviders,
@@ -26,6 +27,9 @@ export const ModelPicker = ({
 }: Context & { disabled: boolean; editorRef: RefObject<HTMLTextAreaElement> }) => {
   const t = useTranslate()
   const selection = useProviders((state) => state.selection)
+  const profile = useProviders((state) =>
+    state.profiles.find((item) => item.id === selection.providerId)
+  )
   const panel = useOptionPanel(t('providerSwitch'), {
     side: 'top',
     align: 'start',
@@ -34,18 +38,19 @@ export const ModelPicker = ({
   })
   const description = useId()
   const official = selection.providerId === 'deepseek'
-  const fullName = official ? modelLabel(selection.model) : selection.model
+  const fullName = providerModelLabel(selection.model, profile)
   const shortName = official
     ? selection.model === 'deepseek-flash'
       ? 'Flash'
       : 'V4 Pro'
-    : selection.model
+    : fullName
   return (
     <>
       <button
         ref={panel.anchorRef}
         type="button"
         data-testid="composer-model"
+        data-toolbar-control="model"
         className={styles.modelTrigger}
         aria-label={t('providerSwitch')}
         aria-describedby={description}
@@ -53,7 +58,10 @@ export const ModelPicker = ({
         disabled={disabled}
         {...panel.trigger}
       >
-        <span className={styles.modelName}>{shortName}</span>
+        <span className={styles.modelSurface} aria-hidden />
+        <span className={styles.modelName} data-model-label="">
+          {shortName}
+        </span>
         <IconChevronDownOutline14 />
       </button>
       <span hidden id={description}>
@@ -101,17 +109,18 @@ const ModelChoices = ({
         id: 'deepseek',
         name: t('providerOfficial'),
         vision: true,
+        profile: undefined,
         models: [...OFFICIAL_MODELS] as string[],
       },
       ...custom.map((p) => ({
         id: p.id,
         name: p.name,
         vision: p.vision,
+        profile: p,
         models: [
           ...new Set([
             ...(p.id === selection.providerId ? [selection.model] : []),
-            p.model,
-            ...p.models,
+            ...modelsInProfile(p),
           ]),
         ],
       })),
@@ -127,7 +136,7 @@ const ModelChoices = ({
         return {
           ...group,
           models: group.models.filter((model) => {
-            const label = group.id === 'deepseek' ? modelLabel(model) : model
+            const label = providerModelLabel(model, group.profile)
             return (label + ' ' + model).toLocaleLowerCase().includes(needle)
           }),
         }
@@ -224,7 +233,7 @@ const ModelChoices = ({
                       </svg>
                     </span>
                     <span className={panelStyles.copy}>
-                      <span>{official ? modelLabel(model) : model}</span>
+                      <span>{providerModelLabel(model, group.profile)}</span>
                       {blocked ? (
                         <small className={styles.modelReason}>{t(blocked)}</small>
                       ) : official ? (

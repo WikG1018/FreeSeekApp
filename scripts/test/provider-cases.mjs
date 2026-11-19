@@ -607,9 +607,13 @@ export const runProviderCases = async ({ run }) => {
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
       await page.getByRole('radio', { name: /DeepSeek V4 Pro/ }).check()
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('button', { name: '手动配置', exact: true }).click()
       await page.getByLabel('配置名称', { exact: true }).fill('My gateway')
       await page.getByLabel('API 地址', { exact: true }).fill('https://custom.example.test/v1')
       await page.getByLabel('API 密钥', { exact: true }).fill('KEY_UI_PRIVATE')
+      await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
+      await page.getByRole('button', { name: '手动添加', exact: true }).click()
       await page.getByLabel('模型名称 / ID', { exact: true }).fill('custom-model')
       await page.getByRole('button', { name: '保存并启用', exact: true }).click()
       await page.evaluate(() => {
@@ -628,6 +632,165 @@ export const runProviderCases = async ({ run }) => {
         show: window.__audit.settings.useSettings.getState().showModelSwitcher,
       }))
       assert.deepEqual(state, { model: 'custom-model', show: true })
+    }
+  )
+  await run(
+    'provider templates keep pay-as-you-go and subscription connections independent',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      const add = async (route, expectedUrl, key) => {
+        await page.getByRole('button', { name: '添加连接', exact: true }).click()
+        await page.getByRole('button', { name: '小米 MiMo', exact: true }).click()
+        await page.getByRole('radio', { name: new RegExp(route) }).check()
+        await page.getByRole('button', { name: '继续', exact: true }).click()
+        assert.equal(await page.getByLabel('API 地址', { exact: true }).inputValue(), expectedUrl)
+        assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '')
+        await page.getByLabel('API 密钥', { exact: true }).fill(key)
+        await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
+        await page.getByRole('heading', { name: '管理模型', exact: true }).waitFor()
+        await page.getByRole('button', { name: '返回', exact: true }).click()
+      }
+      await add('按量 API', 'https://api.xiaomimimo.com/v1', 'fixture-usage')
+      await add('Token Plan 订阅', 'https://token-plan-cn.xiaomimimo.com/v1', 'fixture-plan')
+      const profiles = await page.evaluate(
+        () => window.__audit.providers.useProviders.getState().profiles
+      )
+      assert.equal(profiles.length, 2)
+      assert.notEqual(profiles[0].id, profiles[1].id)
+      assert.notEqual(profiles[0].apiKey, profiles[1].apiKey)
+      assert.deepEqual(
+        profiles.map((profile) => profile.model),
+        ['', '']
+      )
+    }
+  )
+  await run(
+    'reasoning menus show supported levels and restore model defaults on every switch',
+    async (page) => {
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.settings.setApiKey('official-fixture')
+        a.settings.setShowModelSwitcher(true)
+        a.settings.setShowReasoningPicker(true)
+        a.providers.setOfficialReasoningDefault('deepseek-flash', 'high')
+        a.providers.setOfficialReasoningDefault('deepseek-v4-pro', 'max')
+        a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name: 'Gemini fixture',
+          url: 'https://gemini.example.test/v1beta',
+          protocol: 'gemini',
+          model: 'gemini-3.6-flash',
+        })
+      })
+      const effort = page.getByTestId('composer-reasoning')
+      await effort.click()
+      await page.getByRole('option', { name: '低', exact: true }).click()
+      assert.match(await effort.getAttribute('aria-label'), /低$/)
+      const switchTo = async (name) => {
+        await page.getByTestId('composer-model').click()
+        await page.getByRole('option', { name }).click()
+      }
+      await switchTo(/gemini-3\.6-flash/)
+      assert.match(await effort.getAttribute('aria-label'), /中$/)
+      await effort.click()
+      const panel = page.getByRole('dialog', { name: '思考强度', exact: true })
+      assert.equal(await panel.getByRole('option').count(), 4)
+      assert.equal(await panel.getByText('关闭', { exact: true }).count(), 0)
+      await page.keyboard.press('Escape')
+      await switchTo(/DeepSeek Flash/)
+      assert.match(await effort.getAttribute('aria-label'), /高$/)
+      await switchTo(/DeepSeek V4 Pro/)
+      assert.match(await effort.getAttribute('aria-label'), /最高$/)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
+      await page.getByRole('button', { name: '默认思考强度', exact: true }).click()
+      const defaultMenu = page.getByRole('dialog', { name: '默认思考强度', exact: true })
+      assert.equal(await defaultMenu.getAttribute('data-kind'), 'reasoning')
+      await defaultMenu.getByRole('option', { name: '关闭', exact: true }).click()
+      await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      assert.match(await effort.getAttribute('aria-label'), /关闭$/)
+    }
+  )
+  await run(
+    'third-party search sends separate credentials, adds sources and counts the standalone fee',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        a.settings.setApiKey('official-fixture')
+        a.settings.saveThirdPartySearch({
+          enabled: true,
+          keySource: 'separate',
+          apiKey: 'search-fixture',
+        })
+        a.settings.setThirdPartySearchOn(true)
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            url: 'https://chat.example.test/v1beta',
+            apiKey: 'model-fixture',
+            name: 'Gemini',
+            model: 'gemini-3.6-flash',
+            protocol: 'gemini',
+            stream: false,
+          },
+          true
+        )
+        a.providers.setReasoningOverride(null, 'low')
+        const requests = []
+        const ordinary = window.fetch
+        window.fetch = async (url, init) => {
+          const route = String(url)
+          if (route.endsWith('/v1/tools/search')) {
+            requests.push({
+              service: 'search',
+              header: new Headers(init.headers).get('authorization'),
+              body: JSON.parse(init.body),
+            })
+            return Response.json({
+              results: [
+                {
+                  title: 'Source',
+                  url: 'https://source.example/article',
+                  summary: 'Reference text',
+                },
+              ],
+            })
+          }
+          if (route.includes('chat.example.test')) {
+            requests.push({
+              service: 'model',
+              header: new Headers(init.headers).get('x-goog-api-key'),
+              body: JSON.parse(init.body),
+            })
+            return Response.json({
+              candidates: [{ content: { parts: [{ text: 'Answer' }] }, finishReason: 'STOP' }],
+              usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 },
+            })
+          }
+          return ordinary(url, init)
+        }
+        a.drafts.setDraftText(null, 'Query about the source')
+        a.store.sendMessage(null)
+        await a.waitIdle()
+        const state = a.store.useChatStore.getState()
+        const reply = state.sessionCache[state.activeId].messages.at(-1)
+        return {
+          requests,
+          status: reply.status,
+          searches: reply.usage.standalone_search_requests,
+          cost: a.usage.computeReplyUsage(reply).costCny,
+          hasSource: reply.blocks.some((part) => part.type === 'web_search_tool_result'),
+        }
+      })
+      assert.equal(result.status, 'done')
+      assert.equal(result.requests.length, 2)
+      assert.equal(result.requests[0].header, 'Bearer search-fixture')
+      assert.equal(result.requests[0].body.query, 'Query about the source')
+      assert.equal(result.requests[1].header, 'model-fixture')
+      assert.match(JSON.stringify(result.requests[1].body.contents), /Reference text/)
+      assert.equal(result.requests[1].body.generationConfig.thinkingConfig.thinkingLevel, 'LOW')
+      assert.equal(result.searches, 1)
+      assert.equal(result.cost, 0.005)
+      assert.equal(result.hasSource, true)
     }
   )
   await run(

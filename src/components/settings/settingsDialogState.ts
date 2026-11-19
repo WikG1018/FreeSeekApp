@@ -6,6 +6,12 @@ export type SettingsPageId =
   | 'home'
   | 'account'
   | 'providers'
+  | 'providerCatalog'
+  | 'providerAccess'
+  | 'providerConnection'
+  | 'providerModels'
+  | 'providerModel'
+  | 'providerSearch'
   | 'chat'
   | 'personas'
   | 'personaEdit'
@@ -25,6 +31,15 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   }
   if (page === 'providers') {
     return 'account'
+  }
+  if (page === 'providerCatalog' || page === 'providerModels' || page === 'providerSearch') {
+    return 'providers'
+  }
+  if (page === 'providerAccess' || page === 'providerConnection') {
+    return 'providerCatalog'
+  }
+  if (page === 'providerModel') {
+    return 'providerModels'
   }
   if (page === 'usagePricing') {
     return 'usage'

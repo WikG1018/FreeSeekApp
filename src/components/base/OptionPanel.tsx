@@ -16,7 +16,7 @@ import styles from './OptionPanel.module.css'
 type Options = {
   side?: Side
   align?: Align
-  kind?: 'choices' | 'actions' | 'field' | 'details'
+  kind?: 'choices' | 'actions' | 'field' | 'details' | 'reasoning'
   measureKey?: unknown
   editorRef?: RefObject<HTMLTextAreaElement>
   disabled?: boolean

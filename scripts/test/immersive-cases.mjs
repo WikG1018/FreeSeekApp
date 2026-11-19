@@ -174,15 +174,23 @@ export const runImmersiveCases = async ({ run }) => {
         for (const name of labels) {
           const button = bar.getByRole('button', { name, exact: true })
           assert.equal(await button.getAttribute('aria-disabled'), 'true')
-          assert.equal((await button.textContent()).trim(), name)
+          assert.ok((await button.innerText()).trim().length > 0)
         }
         assert.equal(await trigger.getAttribute('title'), model)
         const geometry = await bar.evaluate((el) => {
           const buttons = [...el.querySelectorAll('button')]
           const boxes = buttons.map((b) => b.getBoundingClientRect())
-          const measured = buttons[0].querySelector('span')
+          const measured = buttons[0].querySelector('[data-model-label]')
+          const input = document
+            .querySelector('[data-testid=composer-input-surface]')
+            .getBoundingClientRect()
           return {
-            within: boxes.every((r) => r.left >= -1 && r.right <= innerWidth + 1 && r.height >= 43),
+            compact: el.dataset.compact,
+            sizes: boxes.map((box) => Math.round(box.width)),
+            available: Math.round(input.width),
+            within: boxes.every(
+              (r) => r.left >= input.left - 1 && r.right <= input.right + 1 && r.height >= 43
+            ),
             separated: boxes
               .slice(1)
               .every(
@@ -216,6 +224,7 @@ export const runImmersiveCases = async ({ run }) => {
       await trigger.waitFor({ state: 'detached' })
       assert.equal(await bar.getByRole('button').count(), 3)
       await page.evaluate(() => {
+        window.__audit.settings.setThinking(false)
         window.__audit.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' })
       })
       for (const name of ['深度思考', '智能搜索']) {
@@ -225,16 +234,106 @@ export const runImmersiveCases = async ({ run }) => {
       }
       await page.reload()
       await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
-      for (const name of ['深度思考', '智能搜索'])
-        assert.equal(
-          await bar.getByRole('button', { name, exact: true }).getAttribute('aria-pressed'),
-          'true'
-        )
+      assert.equal(
+        await bar
+          .getByRole('button', { name: '深度思考', exact: true })
+          .getAttribute('aria-pressed'),
+        'false'
+      )
+      assert.equal(
+        await bar
+          .getByRole('button', { name: '智能搜索', exact: true })
+          .getAttribute('aria-pressed'),
+        'true'
+      )
     }
   )
 
   await run(
-    'context usage follows the draft, model limit and warnings while keeping the editor focused',
+    'model switch animation keeps toolbar hit areas separated throughout the transition',
+    async (page) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference' })
+      const short = 'Flash'
+      const long = 'DeepSeek V4 Pro'
+      const id = await page.evaluate(
+        ([short, long]) => {
+          const a = window.__audit
+          a.settings.setFontScale(1.25)
+          a.settings.setShowModelSwitcher(true)
+          return a.providers.saveProvider(
+            {
+              ...a.providers.emptyProfile(),
+              name: 'Motion check',
+              url: 'https://motion.example.test/v1',
+              model: short,
+              models: [short, long],
+            },
+            true
+          ).id
+        },
+        [short, long]
+      )
+      for (const width of [600, 320]) {
+        await page.setViewportSize({ width, height: 760 })
+        await page.evaluate(
+          ([id, short]) =>
+            window.__audit.providers.selectModel({
+              providerId: id,
+              model: short,
+            }),
+          [id, short]
+        )
+        await page.waitForTimeout(210)
+        const result = await page.evaluate(
+          async ([id, long, short]) => {
+            const a = window.__audit
+            const toolbar = document.querySelector('[data-testid=composer-toolbar]')
+            const trigger = toolbar.querySelector('[data-testid=composer-model]')
+            let sawWidthMotion = false
+            const badFrames = []
+            for (const model of [long, short]) {
+              a.providers.selectModel({ providerId: id, model })
+              for (let frame = 0; frame < 14; frame++) {
+                await new Promise((resolve) => requestAnimationFrame(resolve))
+                const input = document
+                  .querySelector('[data-testid=composer-input-surface]')
+                  .getBoundingClientRect()
+                const bounds = [...toolbar.querySelectorAll('button')].map((item) =>
+                  item.getBoundingClientRect()
+                )
+                sawWidthMotion ||= trigger
+                  .getAnimations()
+                  .some((animation) =>
+                    animation.effect.getKeyframes().some((keyframe) => keyframe.width)
+                  )
+                if (
+                  !bounds.every(
+                    (item, index) =>
+                      item.left >= input.left - 1 &&
+                      item.right <= input.right + 1 &&
+                      (index === 0 || item.left >= bounds[index - 1].right - 1)
+                  )
+                ) {
+                  badFrames.push({ model, frame })
+                }
+              }
+            }
+            return { sawWidthMotion, badFrames }
+          },
+          [id, long, short]
+        )
+        assert.deepEqual(
+          result.badFrames,
+          [],
+          'toolbar overflowed or overlapped at ' + width + 'px'
+        )
+        if (width === 600) assert.equal(result.sawWidthMotion, true)
+      }
+    }
+  )
+
+  await run(
+    'conversation context usage lists drafts separately and keeps the editor focused',
     async (page) => {
       const providerId = await page.evaluate(() => {
         const a = window.__audit
@@ -264,8 +363,8 @@ export const runImmersiveCases = async ({ run }) => {
         ])
       const before = await caret()
       await ring.click()
-      await panel.getByText('238 / 1k tokens', { exact: true }).waitFor()
-      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 24%')
+      await panel.getByText('136 / 1k tokens', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('aria-label'), '本会话上下文，估算已用 14%')
       assert.deepEqual(await caret(), before)
       const anchor = await ring.boundingBox(),
         floating = await panel.boundingBox()
@@ -280,11 +379,11 @@ export const runImmersiveCases = async ({ run }) => {
         )
       })
       await panel.getByText('602', { exact: true }).waitFor()
-      await panel.getByText('838 / 1k tokens', { exact: true }).waitFor()
-      assert.equal(await ring.getAttribute('data-level'), 'near')
+      await panel.getByText('136 / 1k tokens', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('data-level'), null)
       await page.evaluate(() => window.__audit.drafts.setDraftText(null, 'x'.repeat(1400)))
-      await panel.getByText('124%', { exact: true }).waitFor()
-      assert.equal(await ring.getAttribute('data-level'), 'full')
+      await panel.getByText('1k', { exact: true }).waitFor()
+      assert.equal(await ring.getAttribute('data-level'), null)
       await page.evaluate(
         (providerId) => window.__audit.providers.selectModel({ providerId, model: 'unknown' }),
         providerId

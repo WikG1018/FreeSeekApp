@@ -2,6 +2,7 @@ import { ApiError } from './errorTypes.js'
 import { getContextRounds, getReplyText } from '../chat/reply.js'
 import type { AssistantMessage, Message, UserMessage, FileAttachment } from '../chat/types.js'
 import type { ProviderProfile } from '../providers.js'
+import type { MessageParam } from './types.js'
 import { loadFile } from '../chat/db.js'
 import { readArchive, readEntry, skipEntry } from '../chat/history/zipReader.js'
 import { normalizeImageFile } from '../image.js'
@@ -23,7 +24,32 @@ const base64 = (blob: Blob) =>
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(blob)
   })
-const docxText = async (blob: Blob, signal: AbortSignal) => {
+
+const wordText = (document: Document, paragraph: Element, namespace: string) => {
+  const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (node) => {
+      const element = node as Element
+      if (element.namespaceURI !== namespace) {
+        return NodeFilter.FILTER_SKIP
+      }
+      if (['del', 'moveFrom'].includes(element.localName)) {
+        return NodeFilter.FILTER_REJECT
+      }
+      return ['t', 'tab', 'br', 'cr'].includes(element.localName)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP
+    },
+  })
+  const pieces: string[] = []
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    const name = (node as Element).localName
+    pieces.push(name === 't' ? (node.textContent ?? '') : name === 'tab' ? '\t' : '\n')
+  }
+  return pieces.join('')
+}
+
+const docxText = async (blob: Blob, signal: AbortSignal, plainOnly = false) => {
   let result: string | undefined,
     total = 0
   for await (const entry of readArchive(new File([blob], 'document.docx'))) {
@@ -32,22 +58,49 @@ const docxText = async (blob: Blob, signal: AbortSignal) => {
     if (total > 64 * 1024 * 1024 || entry.size > 16 * 1024 * 1024) {
       throw new ApiError('protocol', { key: 'providerFileTooLarge' })
     }
+    if (
+      plainOnly &&
+      /^word\/(?:media\/|embeddings\/|(?:footnotes|endnotes|header\d+|footer\d+)\.xml$)/i.test(
+        entry.path
+      )
+    ) {
+      return undefined
+    }
     if (entry.path === 'word/document.xml') {
       if (entry.size > 8 * 1024 * 1024) {
         throw new ApiError('protocol', { key: 'providerFileTooLarge' })
       }
       const text = await (await readEntry(entry)).text()
-      const document = new DOMParser().parseFromString(text, 'application/xml')
-      if (document.getElementsByTagName('parsererror').length) {
+      if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(text)) {
         throw new ApiError('protocol', { key: 'providerFileUnsupported' })
       }
-      result = Array.from(document.getElementsByTagNameNS('*', 'p'))
-        .map((p) =>
-          Array.from(p.getElementsByTagNameNS('*', 't'))
-            .map((t) => t.textContent ?? '')
-            .join('')
+      const document = new DOMParser().parseFromString(text, 'application/xml')
+      const namespace = document.documentElement.namespaceURI ?? ''
+      if (
+        ![
+          'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+          'http://purl.oclc.org/ooxml/wordprocessingml/main',
+        ].includes(namespace) ||
+        document.getElementsByTagName('parsererror').length
+      ) {
+        throw new ApiError('protocol', { key: 'providerFileUnsupported' })
+      }
+      if (
+        plainOnly &&
+        ['drawing', 'object', 'pict', 'oMath', 'altChunk', 'tbl'].some(
+          (name) => document.getElementsByTagNameNS('*', name).length > 0
         )
-        .join('\n')
+      ) {
+        return undefined
+      }
+      const body = document.getElementsByTagNameNS(namespace, 'body')[0]
+      if (!body) {
+        throw new ApiError('protocol', { key: 'providerFileUnsupported' })
+      }
+      result = Array.from(body.getElementsByTagNameNS(namespace, 'p'))
+        .filter((paragraph) => !paragraph.closest('del, moveFrom'))
+        .map((paragraph) => wordText(document, paragraph, namespace))
+        .join('\n\n')
     } else {
       await skipEntry(entry)
     }
@@ -57,6 +110,44 @@ const docxText = async (blob: Blob, signal: AbortSignal) => {
   }
   return result
 }
+
+const textExtension =
+  /\.(?:txt|md|markdown|csv|json|jsonl|ya?ml|xml|html?|log|js|ts|jsx|tsx|py|java|c|cpp|h|css|sql|sh|toml|ini)$/i
+
+export const documentTextFallback = async (
+  file: FileAttachment,
+  blob: Blob,
+  signal: AbortSignal
+): Promise<string | undefined> => {
+  if (file.isImage || blob.size > 4 * 1024 * 1024) {
+    return undefined
+  }
+  const raw = /\.docx$/i.test(file.name)
+    ? await docxText(blob, signal, true)
+    : file.mimeType.startsWith('text/') || textExtension.test(file.name)
+      ? await blob.text()
+      : undefined
+  signal.throwIfAborted()
+  if (!raw?.trim() || raw.includes('\0') || raw.includes('\uFFFD')) {
+    return undefined
+  }
+  const name = file.name.replace(/[\r\n]/g, ' ')
+  return '[Document: ' + name + ']\n' + raw
+}
+
+export const inlineDocuments = (messages: MessageParam[], texts: ReadonlyMap<string, string>) =>
+  messages.map((message): MessageParam => {
+    if (message.role !== 'user' || !Array.isArray(message.content)) {
+      return message
+    }
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        const text = part.type === 'document' ? texts.get(part.source.file_id) : undefined
+        return text === undefined ? part : { type: 'text', text }
+      }),
+    }
+  })
 
 /** 第三方附件只从本机原件生成内容，从不提交到 DeepSeek Files API。 */
 export const prepareProviderMessages = async (
@@ -104,11 +195,8 @@ export const prepareProviderMessages = async (
     } else {
       const text =
         ext === 'docx'
-          ? await docxText(blob, signal)
-          : file.mimeType.startsWith('text/') ||
-              /^(txt|md|markdown|csv|json|jsonl|yaml|yml|xml|html|htm|log|js|ts|jsx|tsx|py|java|c|cpp|h|css|sql|sh|toml|ini)$/.test(
-                ext
-              )
+          ? ((await docxText(blob, signal)) ?? null)
+          : file.mimeType.startsWith('text/') || textExtension.test(file.name)
             ? await blob.text()
             : null
       if (text === null || text.includes('\0')) {

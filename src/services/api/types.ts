@@ -178,6 +178,7 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
+  output_config?: { effort: 'low' | 'high' | 'max' }
   tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
   safety_check: { level: 'high' }
   title?: { enabled: boolean }
@@ -196,6 +197,7 @@ export type MessageUsage = {
   cache_read_input_tokens: number
   /** message_start 中为 0，message_delta 中为全轮累计值 */
   output_tokens: number
+  standalone_search_requests?: number
   /** 仅当 message_delta 中有对外输出的搜索结果块时出现 */
   server_tool_use?: {
     web_search_requests: number

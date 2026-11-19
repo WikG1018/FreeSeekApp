@@ -5,6 +5,7 @@ import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
 import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
 import { validModel } from '../../providers.js'
+import { isReasoningAdapter, isReasoningLevel } from '../../reasoning.js'
 
 const invalid = (): never => fail('backupIncomplete')
 export const record = (value: unknown): Record<string, unknown> =>
@@ -33,6 +34,7 @@ const usage = (value: unknown): MessageUsage => {
     cache_creation_input_tokens: number(item.cache_creation_input_tokens),
     cache_read_input_tokens: number(item.cache_read_input_tokens),
     output_tokens: number(item.output_tokens),
+    standalone_search_requests: optional(item.standalone_search_requests, number),
     ...(tools
       ? {
           server_tool_use: {
@@ -173,6 +175,10 @@ const message = (value: unknown): Message => {
     prefix: boolean(item.prefix),
     blocks: list(item.blocks, block),
     thinking: optional(item.thinking, boolean),
+    reasoning: optional(item.reasoning, (value) => {
+      const { adapter, level } = record(value)
+      return isReasoningAdapter(adapter) && isReasoningLevel(level) ? { adapter, level } : invalid()
+    }),
     search: optional(item.search, boolean),
     latestReminder: optional(item.latestReminder, string),
     contextWarnings: optional(item.contextWarnings, (value) =>

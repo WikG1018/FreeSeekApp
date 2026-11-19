@@ -185,8 +185,7 @@ export const canContinueReply = (reply: AssistantMessage): boolean => {
     return false
   }
   return (
-    reply.status === 'stopped' ||
-    (reply.status === 'done' && reply.stopReason === 'max_tokens')
+    reply.status === 'stopped' || (reply.status === 'done' && reply.stopReason === 'max_tokens')
   )
 }
 
@@ -343,6 +342,30 @@ export const toRequestMessages = (
       )
     ) {
       messages.push(assistant)
+    }
+  }
+  // Keep the latest reference to each document. DeepSeek expands each repeated file_id again.
+  const documents = new Set<string>()
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message.role !== 'user' || !Array.isArray(message.content)) {
+      continue
+    }
+    const content = message.content.filter((part) => {
+      if (part.type !== 'document') {
+        return true
+      }
+      if (documents.has(part.source.file_id)) {
+        return false
+      }
+      documents.add(part.source.file_id)
+      return true
+    })
+    if (content.length !== message.content.length) {
+      messages[index] = {
+        role: 'user',
+        content: content.length ? content : '[Document already referenced in another turn.]',
+      }
     }
   }
   return messages

@@ -28,10 +28,10 @@ export const runCompressionCases = async (run) => {
       const ring = page.getByTestId('context-usage')
       await ring.click()
       const panel = page.getByRole('dialog', { name: '上下文使用', exact: true })
-      const pre = panel.getByText(/^728\.\dk \/ 1M tokens$/)
+      const pre = panel.getByText(/^720\.\dk \/ 1M tokens$/)
       await pre.waitFor()
       assert.equal(await pre.getAttribute('title'), '1,048,576')
-      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 69%')
+      assert.equal(await ring.getAttribute('aria-label'), '本会话上下文，估算已用 69%')
       const result = await page.evaluate(async (id) => {
         const a = window.__audit
         const summary = await a.store.compressSession(id)
@@ -42,12 +42,207 @@ export const runCompressionCases = async (run) => {
           recentText: session.messages[0].content,
         }
       }, id)
-      await panel.getByText('8.4k / 1M tokens', { exact: true }).waitFor()
-      assert.equal(await ring.getAttribute('aria-label'), '上下文使用，预计占用 1%')
+      await panel.getByText(/^\d{2,3} \/ 1M tokens$/).waitFor()
+      assert.equal(await ring.getAttribute('aria-label'), '本会话上下文，估算已用 0%')
       assert.deepEqual(result, { covered: 1, oldText: 2520000, recentText: 'Next' })
     }
   )
 
+  await run(
+    'a 56 KB document continues a 32k-token chat and excess historical references recover in place',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const document = (id) => ({
+          id,
+          serverId: 'file-api-' + id,
+          name: id + '.docx',
+          size: 56 * 1024,
+          isImage: false,
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        })
+        const current = document('current')
+        const earlier = ['single', 'duplicate', 'accepted', 'quota'].map((id) =>
+          f.session({
+            id,
+            title: id,
+            messages: [
+              f.user(id + '-u', '文'.repeat(27000), {
+                files:
+                  id === 'single'
+                    ? []
+                    : id === 'duplicate'
+                      ? Array.from({ length: 22 }, () => current)
+                      : Array.from({ length: 20 }, (_, index) => document('history-' + index)),
+              }),
+              f.assistant(id + '-a', 'Part one'),
+              f.user(id + '-pending', 'Continue with part two ' + id, { files: [current] }),
+              f.assistant(id + '-failed', '', { status: 'error' }),
+            ],
+          })
+        )
+        a.settings.setApiKey('fixture')
+        a.settings.setAutoCompress(false)
+        await a.seed(earlier)
+        const original = window.fetch
+        const sent = []
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return original(url, init)
+          const body = JSON.parse(init.body)
+          const documents = body.messages.flatMap((message) =>
+            Array.isArray(message.content)
+              ? message.content
+                  .filter((part) => part.type === 'document')
+                  .map((part) => part.source.file_id)
+              : []
+          )
+          const summary = String(body.system).includes('summar')
+          sent.push({
+            documents: documents.length,
+            current: documents.includes('file-api-current'),
+            summary,
+          })
+          if (documents.length > 20 && JSON.stringify(body.messages).includes('part two quota')) {
+            return Response.json(
+              { error: { message: 'Maximum number of documents allowed is 20.' } },
+              { status: 400 }
+            )
+          }
+          return a.response(summary ? 'Summary of part one' : 'Part two')
+        }
+        const results = []
+        for (const id of ['single', 'duplicate', 'accepted', 'quota']) {
+          a.store.selectSession(id)
+          a.store.regenerateReply(id, id + '-failed')
+          await a.waitIdle()
+          let reply = a.store.useChatStore.getState().sessionCache[id].messages.at(-1)
+          const firstError = reply.error?.localMessage?.key ?? null
+          const rejectedCount = reply.error?.localMessage?.params?.requestDocumentCount ?? null
+          if (firstError) {
+            a.store.retryContextReply(id, reply.id, 'compress')
+            await a.waitIdle()
+            reply = a.store.useChatStore.getState().sessionCache[id].messages.at(-1)
+          }
+          results.push({ firstError, rejectedCount, final: reply.status })
+        }
+        return { sent, results }
+      })
+      assert.deepEqual(result.results, [
+        { firstError: null, rejectedCount: null, final: 'done' },
+        { firstError: null, rejectedCount: null, final: 'done' },
+        { firstError: null, rejectedCount: null, final: 'done' },
+        { firstError: 'replyDocumentCountLimit', rejectedCount: 21, final: 'done' },
+      ])
+      assert.deepEqual(result.sent, [
+        { documents: 1, current: true, summary: false },
+        { documents: 1, current: true, summary: false },
+        { documents: 21, current: true, summary: false },
+        { documents: 21, current: true, summary: false },
+        { documents: 0, current: false, summary: true },
+        { documents: 1, current: true, summary: false },
+      ])
+    }
+  )
+
+  await run(
+    'DeepSeek rejects a DOCX reference then answers with local text while preserving the original file',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        const xml =
+          '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+          '<w:body><w:p><w:r><w:t>正文第一行</w:t><w:tab/><w:t>对齐</w:t><w:br/><w:t>正文第二行</w:t></w:r>' +
+          '<w:del><w:r><w:delText>已删除段落</w:delText></w:r></w:del></w:p>' +
+          '<w:p><w:r><w:t>第二段 &amp; 说明</w:t></w:r></w:p></w:body></w:document>'
+        const source = [{ name: 'word/document.xml', blob: new Blob([xml]) }]
+        const plain = await a.writeArchive(source)
+        const rich = await a.writeArchive([
+          ...source,
+          { name: 'word/media/image1.png', blob: new Blob(['image']) },
+        ])
+        const file = (id, blob) => ({
+          id,
+          serverId: 'file-api-' + id,
+          name: id + '.docx',
+          size: blob.size,
+          isImage: false,
+          mimeType: mime,
+        })
+        a.settings.setApiKey('fixture')
+        await a.seed(
+          [
+            ['plain', plain],
+            ['rich', rich],
+          ].map(([id, blob]) =>
+            f.session({
+              id,
+              title: id,
+              messages: [
+                f.user(id + '-history', '文'.repeat(27000)),
+                f.assistant(id + '-answer', 'Part one'),
+                f.user(id + '-question', 'Part two ' + id, { files: [file(id, blob)] }),
+                f.assistant(id + '-failed', '', { status: 'error' }),
+              ],
+            })
+          ),
+          [
+            { id: 'plain', blob: plain },
+            { id: 'rich', blob: rich },
+          ]
+        )
+        const calls = []
+        const ordinary = window.fetch
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return ordinary(url, init)
+          const blocks = JSON.parse(init.body).messages.flatMap((message) =>
+            Array.isArray(message.content) ? message.content : []
+          )
+          const file = blocks.find((part) => part.type === 'document')
+          calls.push(
+            file
+              ? file.source.file_id
+              : blocks.find((part) => part.text?.startsWith('[Document:'))?.text
+          )
+          return file
+            ? Response.json(
+                { error: { code: 'context_length_exceeded', message: 'Context length exceeded.' } },
+                { status: 400 }
+              )
+            : a.response('Part two continued')
+        }
+        const statuses = []
+        for (const id of ['plain', 'rich']) {
+          a.store.selectSession(id)
+          a.store.regenerateReply(id, id + '-failed')
+          await a.waitIdle()
+          const state = a.store.useChatStore.getState().sessionCache[id]
+          const answer = state.messages.at(-1)
+          const saved = state.messages.find((message) => message.id === id + '-question')
+          statuses.push({
+            status: answer.status,
+            error: answer.error?.localMessage?.key,
+            serverId: saved.files[0].serverId,
+            original: (await a.db.loadFile(id)).size,
+          })
+        }
+        return { calls, statuses }
+      })
+      assert.deepEqual(result.calls, [
+        'file-api-plain',
+        '[Document: plain.docx]\n正文第一行\t对齐\n正文第二行\n\n第二段 & 说明',
+        'file-api-rich',
+      ])
+      assert.equal(result.statuses[0].status, 'done')
+      assert.equal(result.statuses[0].serverId, 'file-api-plain')
+      assert.equal(result.statuses[1].error, 'replyContextTooLong')
+      assert.ok(result.statuses.every((item) => item.original > 0))
+      await page.getByTestId('context-usage').click()
+      await page.getByRole('dialog', { name: '上下文使用' }).getByText('上次发送被拒绝').waitFor()
+    }
+  )
   await run(
     'compression prompts once, estimates savings, and retains the result and consent across backup restore',
     async (page) => {

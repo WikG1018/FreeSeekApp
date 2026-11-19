@@ -5,7 +5,8 @@ import { streamProviderMessage } from '../api/providerClient.js'
 import type { MessageUsage, StopReason } from '../api/types.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { TranslationKey, TranslationMessage } from '../../i18n/index.js'
-import type { Connection } from '../providers.js'
+import { providerOutputBudget, type Connection } from '../providers.js'
+import { customReasoning, disabledReasoning } from '../reasoning.js'
 import { getContextRounds, getReplyText } from './reply.js'
 import type {
   AssistantMessage,
@@ -42,7 +43,7 @@ export const contextLength = (connection: ContextModel): number | undefined =>
       : undefined
 
 export const contextReplyReserve = (connection: ContextModel) =>
-  connection.kind === 'custom' ? connection.profile.maxOutputTokens : 8192
+  connection.kind === 'custom' ? providerOutputBudget(connection.profile, connection.model) : 8192
 
 export const formatContextTokens = (tokens: number) => {
   if (tokens >= 1000000) {
@@ -122,10 +123,11 @@ export const estimatedFileTokens = (size: number, isImage: boolean) =>
 
 export const estimatedSystemTokens = (system: string) => 128 + estimatedTokens(system)
 
-const userTokens = (q: UserMessage) =>
+export const estimatedUserTokens = (q: UserMessage) =>
   estimatedTokens(q.content) +
   q.files.reduce((n, file) => n + estimatedFileTokens(file.size, file.isImage), 0)
-const roundTokens = ([q, a]: ContextRound) => userTokens(q) + estimatedTokens(getReplyText(a)) + 12
+const roundTokens = ([q, a]: ContextRound) =>
+  estimatedUserTokens(q) + estimatedTokens(getReplyText(a)) + 12
 
 const textSignature = (parts: Iterable<string>) => {
   let hash = 2166136261,
@@ -186,7 +188,7 @@ export const planCompression = (
   const fixed =
     contextReplyReserve(connection) +
     estimatedSystemTokens(current?.system ?? '') +
-    (current ? userTokens(current.question) : 0) +
+    (current ? estimatedUserTokens(current.question) : 0) +
     (current?.prefix ? estimatedTokens(getReplyText(current.prefix)) : 0)
   const start = summary?.coveredRounds ?? 0
   const { sizes, tokens } = estimateContextHistory(rounds, summary)
@@ -290,7 +292,8 @@ async function summarizeChunk(
           connection.model,
           [{ role: 'user', content: [{ type: 'text', text: input }] }],
           system,
-          controller.signal
+          controller.signal,
+          disabledReasoning(customReasoning(connection.profile, connection.model))
         )
       : streamMessage(
           connection.apiKey,

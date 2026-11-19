@@ -201,7 +201,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         disabled={importingHistory}
         modelLocked={streaming || voice.status !== 'idle'}
       />
-      <div className={styles.surface}>
+      <div className={styles.surface} data-testid="composer-input-surface">
         <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
         <div
           className={styles.inputRow}
