@@ -7,12 +7,14 @@ export type { ApiErrorKind } from './errorTypes.js'
 import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
-import type {
-  ApiErrorBody,
-  CreateMessageRequest,
-  FileObject,
-  FilePurpose,
-  MessageStreamEvent,
+import {
+  supportsOfficialChatExtensions,
+  type ApiErrorBody,
+  type CreateMessageRequest,
+  type FileObject,
+  type FilePurpose,
+  type MessageParam,
+  type MessageStreamEvent,
 } from './types.js'
 
 /** 构建期 API 地址，默认 https://api.deepseek.com；本地开发支持开发服务器代理 */
@@ -240,6 +242,31 @@ const hasFile = (body: CreateMessageRequest) =>
       message.content.some((block) => block.type === 'image' || block.type === 'document')
   )
 
+/** Enforce the model's limits at the wire boundary, including requests reconstructed from history. */
+const officialRequestForModel = (body: CreateMessageRequest): CreateMessageRequest => {
+  if (supportsOfficialChatExtensions(body.model)) {
+    return body
+  }
+  const request = {
+    ...body,
+    messages: body.messages.flatMap((message): MessageParam[] => {
+      if (message.role === 'latest_reminder') {
+        return []
+      }
+      if (message.role !== 'assistant') {
+        return [message]
+      }
+      const content = message.content.filter(
+        (block) => block.type === 'text' || block.type === 'thinking'
+      )
+      return content.length ? [{ ...message, content }] : []
+    }),
+  }
+  delete request.tools
+  delete request.title
+  return request
+}
+
 /**
  * POST /anthropic/v1/messages（stream: true），逐个产出流式事件，收到 message_stop 时结束。
  * ping、保活注释与无法解析的内容不产出；中止请求时抛出 signal 的 AbortError。
@@ -250,16 +277,17 @@ export async function* streamMessage(
   signal: AbortSignal,
   requestId = createId()
 ): AsyncGenerator<MessageStreamEvent> {
+  const payload = officialRequestForModel(body)
   const response = await request(
     `${ANTHROPIC_BASE_URL}/messages`,
     {
       method: 'POST',
       headers: {
-        ...anthropicHeaders(apiKey, hasFile(body)),
+        ...anthropicHeaders(apiKey, hasFile(payload)),
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
-      body: JSON.stringify({ ...body, stream: true }),
+      body: JSON.stringify({ ...payload, stream: true }),
       signal,
     },
     requestId

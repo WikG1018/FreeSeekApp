@@ -309,13 +309,13 @@ export const toRequestMessages = (
   thinking = prefix?.thinking ?? false,
   latestReminder?: string,
   inheritedMessages?: Message[],
-  includeReadLinks = true
+  includeChatExtensions = true
 ): MessageParam[] => {
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
   const appendReminder = (reminder: string | undefined) => {
     // 仅在当前分支首次出现或内容变化时插入快照；缺少快照的消息保持原有内容。
-    if (reminder && reminder !== previousReminder) {
+    if (includeChatExtensions && reminder && reminder !== previousReminder) {
       messages.push({ role: 'latest_reminder', content: reminder })
       previousReminder = reminder
     }
@@ -331,12 +331,12 @@ export const toRequestMessages = (
       continue
     }
     appendReminder(reply.latestReminder)
-    messages.push(toUserParam(user), toAssistantParam(reply, false, false, includeReadLinks))
+    messages.push(toUserParam(user), toAssistantParam(reply, false, false, includeChatExtensions))
   }
   appendReminder(latestReminder)
   messages.push(toUserParam(question))
   if (prefix?.prefix) {
-    const assistant = toAssistantParam(prefix, true, thinking, includeReadLinks)
+    const assistant = toAssistantParam(prefix, true, thinking, includeChatExtensions)
     // 没有非空白正文或有效思考时直接重发原问题，避免服务端拒绝空 Prefill。
     if (
       assistant.content.some(

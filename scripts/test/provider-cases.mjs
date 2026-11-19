@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 
 const PRO_EXTENSION_REJECTION =
   'The server-side tool calls (deepseek_web_search, deepseek_read_url) and the title generation feature are unavailable for model deepseek-v4-pro. Please use deepseek-flash instead. (request_id: test-pro-extensions)'
+const PRO_REMINDER_REJECTION =
+  'The latest_reminder message is unavailable for model deepseek-v4-pro. Please use deepseek-flash instead. (request_id: test-pro-reminder)'
 
 export const runProviderCases = async ({ run }) => {
   await run(
@@ -174,7 +176,7 @@ export const runProviderCases = async ({ run }) => {
     }
   )
   await run(
-    'official Pro sends a one-character first turn with a local title and no Flash extensions',
+    'official Pro sends a plain first turn with search off and no Flash extensions',
     async (page) => {
       const result = await page.evaluate(async (rejection) => {
         const a = window.__audit,
@@ -187,14 +189,18 @@ export const runProviderCases = async ({ run }) => {
           if (String(url).endsWith('/messages')) {
             const body = JSON.parse(options.body)
             calls.push(body)
-            if ('tools' in body || 'title' in body) {
+            if (
+              'tools' in body ||
+              'title' in body ||
+              body.messages.some((message) => message.role === 'latest_reminder')
+            ) {
               return Response.json({ error: { message: rejection } }, { status: 400 })
             }
             return a.response('Pro reply')
           }
           return original(url, options)
         }
-        a.drafts.setDraftText(null, '1')
+        a.drafts.setDraftText(null, '你好')
         a.store.sendMessage(null)
         await a.waitIdle()
         const session =
@@ -227,12 +233,12 @@ export const runProviderCases = async ({ run }) => {
           pro: pro.costCny,
           rejected: rejected.key,
         }
-      }, PRO_EXTENSION_REJECTION)
+      }, PRO_REMINDER_REJECTION)
       assert.deepEqual(result, {
         model: 'deepseek-v4-pro',
         saved: 'deepseek-v4-pro',
         status: 'done',
-        title: '1',
+        title: '你好',
         search: false,
         requests: 1,
         pro: 18,
@@ -259,6 +265,7 @@ export const runProviderCases = async ({ run }) => {
           messages: [
             a.fixtures.user('flash-question', '请读这篇文章 ' + link),
             a.fixtures.assistant('flash-reply', '文章的主要内容', {
+              latestReminder: '2026-11-19,星期四,上海,Web,中文',
               blocks: [
                 {
                   type: 'server_tool_use',
@@ -317,6 +324,7 @@ export const runProviderCases = async ({ run }) => {
             body.model === 'deepseek-v4-pro' &&
             ('tools' in body ||
               'title' in body ||
+              body.messages.some((message) => message.role === 'latest_reminder') ||
               JSON.stringify(body.messages).includes('read-link-signature'))
           ) {
             return Response.json({ error: { message: rejection } }, { status: 400 })
@@ -359,12 +367,13 @@ export const runProviderCases = async ({ run }) => {
         ['deepseek_read_url', 'deepseek_web_search']
       )
       assert.deepEqual(flash.title, { enabled: true })
+      assert.ok(flash.messages.some((message) => message.role === 'latest_reminder'))
     }
   )
   await run(
     'V4 Pro uses standalone search only after enabling its independent toggle',
     async (page) => {
-      await page.evaluate(() => {
+      await page.evaluate((reminderError) => {
         const a = window.__audit
         a.settings.setApiKey('pro-chat-key')
         a.settings.saveThirdPartySearch({
@@ -395,16 +404,20 @@ export const runProviderCases = async ({ run }) => {
             })
           }
           if (path.endsWith('/messages')) {
+            const body = JSON.parse(init.body)
             window.__searchRound.push({
               path,
               key: new Headers(init.headers).get('x-api-key'),
-              body: JSON.parse(init.body),
+              body,
             })
+            if (body.messages.some((message) => message.role === 'latest_reminder')) {
+              return Response.json({ error: { message: reminderError } }, { status: 400 })
+            }
             return a.response('Pro 搜索回复')
           }
           return original(url, init)
         }
-      })
+      }, PRO_REMINDER_REJECTION)
       const search = page.getByRole('button', { name: '智能搜索', exact: true })
       assert.equal(await search.getAttribute('aria-pressed'), 'false')
       await search.click()
@@ -440,6 +453,176 @@ export const runProviderCases = async ({ run }) => {
       assert.equal(result.searchResult, true)
       assert.equal(result.prompt, '请搜一下')
       assert.equal(result.flashSearch, false)
+    }
+  )
+  await run('retrying a saved Pro reminder error reuses five paid search results', async (page) => {
+    const id = await page.evaluate(async (message) => {
+      const a = window.__audit
+      const searched = 'search-saved-paid-result'
+      const session = a.fixtures.session({
+        title: '',
+        messages: [
+          a.fixtures.user('old-question', '1'),
+          a.fixtures.assistant('old-paid-reply', '', {
+            model: 'deepseek-v4-pro',
+            status: 'error',
+            thinking: true,
+            search: true,
+            latestReminder: '2026-11-20,星期五,,Web,中文',
+            error: { kind: 'http', status: 400, message },
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              standalone_search_requests: 1,
+            },
+            blocks: [
+              {
+                type: 'server_tool_use',
+                id: searched,
+                name: 'deepseek_web_search',
+                kind: 'search',
+                input: { action: 'search', queries: ['1'] },
+                caller: { type: 'direct' },
+              },
+              {
+                type: 'web_search_tool_result',
+                tool_use_id: searched,
+                kind: 'search',
+                content: Array.from({ length: 5 }, (_, i) => ({
+                  type: 'web_search_result',
+                  title: `原网页 ${i + 1}`,
+                  url: `https://example.test/source/${i + 1}`,
+                  snippet: `已付费的搜索内容 ${i + 1}`,
+                  site_icon: null,
+                  site_name: null,
+                  encrypted_content: '',
+                  page_age: null,
+                })),
+              },
+            ],
+          }),
+        ],
+      })
+      await a.seed([session])
+      localStorage.setItem('freeseek:active-session', session.id)
+      a.settings.setApiKey('pro-test-key')
+      a.settings.saveThirdPartySearch({ enabled: true, keySource: 'official', apiKey: '' })
+      a.settings.setProSearchOn(true)
+      a.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-v4-pro' })
+      return session.id
+    }, PRO_REMINDER_REJECTION)
+    await page.reload()
+    await page.getByText(/^这条消息附带了 V4 Pro 不支持的对话提醒/).waitFor()
+    await page.evaluate((message) => {
+      const a = window.__audit
+      window.__retryLookups = 0
+      window.__retryRequests = []
+      const original = window.fetch
+      window.fetch = async (url, init) => {
+        if (String(url).endsWith('/v1/tools/search')) {
+          window.__retryLookups++
+          return Response.json({ results: [] })
+        }
+        if (!String(url).endsWith('/messages')) return original(url, init)
+        const body = JSON.parse(init.body)
+        window.__retryRequests.push(body)
+        if (
+          body.messages.some((m) => m.role === 'latest_reminder') ||
+          'tools' in body ||
+          'title' in body
+        ) {
+          return Response.json({ error: { message } }, { status: 400 })
+        }
+        return a.response('沿用原来的搜索结果继续作答')
+      }
+    }, PRO_REMINDER_REJECTION)
+    await page.getByRole('button', { name: '重新生成', exact: true }).click()
+    await page.getByText('沿用原来的搜索结果继续作答', { exact: true }).waitFor()
+    const result = await page.evaluate(async (id) => {
+      const a = window.__audit
+      await a.waitIdle()
+      const session = a.store.useChatStore.getState().sessionCache[id]
+      const oldReply = session.messages.find((m) => m.id === 'old-paid-reply')
+      const newReply = session.messages.at(-1)
+      return {
+        requests: window.__retryRequests,
+        lookups: window.__retryLookups,
+        oldCharge: oldReply.usage.standalone_search_requests,
+        oldStatus: oldReply.status,
+        newCharge: newReply.usage?.standalone_search_requests ?? 0,
+        newSources: newReply.blocks.find((b) => b.type === 'web_search_tool_result')?.content
+          .length,
+        title: session.title,
+      }
+    }, id)
+    assert.equal(result.lookups, 0)
+    assert.equal(result.requests.length, 1)
+    assert.equal(result.requests[0].model, 'deepseek-v4-pro')
+    assert.ok(JSON.stringify(result.requests[0].messages).includes('已付费的搜索内容 5'))
+    assert.equal(result.oldCharge, 1)
+    assert.equal(result.oldStatus, 'error')
+    assert.equal(result.newCharge, 0)
+    assert.equal(result.newSources, 5)
+    assert.equal(result.title, '1')
+  })
+  await run(
+    'the official wire boundary strips Flash metadata from a prebuilt Pro request',
+    async (page) => {
+      const requests = await page.evaluate(async () => {
+        const a = window.__audit
+        const requests = []
+        const original = window.fetch
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return original(url, init)
+          requests.push(JSON.parse(init.body))
+          return a.response('OK')
+        }
+        const body = {
+          system: '原人设',
+          thinking: { type: 'enabled' },
+          output_config: { effort: 'high' },
+          safety_check: { level: 'high' },
+          title: { enabled: true },
+          tools: [{ type: 'deepseek_read_url', name: 'deepseek_read_url' }],
+          messages: [
+            { role: 'user', content: '上个问题' },
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: '原回答' },
+                { type: 'server_tool_use', id: 'flash-call', name: 'deepseek_read_url' },
+              ],
+            },
+            { role: 'latest_reminder', content: '2026-11-20,星期五,,Web,中文' },
+            { role: 'user', content: '接着聊' },
+          ],
+        }
+        for (const model of ['deepseek-v4-pro', 'deepseek-v4-flash']) {
+          for await (const _event of a.client.streamMessage(
+            'test-key',
+            { ...body, model },
+            new AbortController().signal
+          )) {
+          }
+        }
+        return requests
+      })
+      const [pro, flash] = requests
+      assert.deepEqual(
+        pro.messages.map((m) => m.role),
+        ['user', 'assistant', 'user']
+      )
+      assert.deepEqual(pro.messages[1].content, [{ type: 'text', text: '原回答' }])
+      assert.equal('tools' in pro || 'title' in pro, false)
+      assert.deepEqual(pro.safety_check, { level: 'high' })
+      assert.deepEqual(pro.output_config, { effort: 'high' })
+      assert.equal(pro.system, '原人设')
+      assert.equal(flash.messages[2].role, 'latest_reminder')
+      assert.equal(flash.messages[1].content[1].id, 'flash-call')
+      assert.equal(flash.tools.length, 1)
+      assert.deepEqual(flash.title, { enabled: true })
     }
   )
   for (const protocol of ['openai', 'responses', 'anthropic', 'gemini']) {

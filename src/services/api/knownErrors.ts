@@ -14,6 +14,13 @@ export const describeKnownApiError = (
   code = ''
 ): TranslationMessage | undefined => {
   if (
+    /\blatest_reminder\b/i.test(message) &&
+    /\bdeepseek-v4-pro\b/i.test(message) &&
+    /unavailable|not supported|does not support/i.test(message)
+  ) {
+    return { key: 'replyProReminderUnavailable' }
+  }
+  if (
     /\bdeepseek-v4-pro\b/i.test(message) &&
     /server[-\s]side tool calls|title generation|deepseek_(?:web_search|read_url)/i.test(message) &&
     /unavailable|not supported|does not support/i.test(message)

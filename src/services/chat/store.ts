@@ -8,6 +8,7 @@ import {
   type ChatModel,
   type CreateMessageRequest,
   type MessageParam,
+  type WebSearchToolResultBlock,
 } from '../api/types.js'
 import {
   extractFileIds,
@@ -417,6 +418,12 @@ const createReply = (persona: Session['persona'], sessionId: string | null): Ass
     blocks: [],
   }
 }
+
+const standaloneSearchResult = (blocks: AssistantMessage['blocks']) =>
+  blocks.find(
+    (block): block is WebSearchToolResultBlock =>
+      block.type === 'web_search_tool_result' && block.tool_use_id.startsWith('search-')
+  )
 
 /** 仍在生成中的回复（页面关闭或导出时未结束）按「已停止」处理 */
 const settleInterrupted = (session: Session): Session => {
@@ -898,11 +905,27 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   const index =
     messageId === undefined ? path.length - 1 : path.findIndex((m) => m.id === messageId)
   const question = path[index - 1]
-  if (question?.role !== 'user' || path[index]?.role !== 'assistant') {
+  const previous = path[index]
+  if (question?.role !== 'user' || previous?.role !== 'assistant') {
     return
   }
   const history = path.slice(0, index - 1)
   const reply = createReply(session.persona, sessionId)
+  if (
+    previous.status === 'error' &&
+    reply.search &&
+    (reply.connection?.providerId !== 'deepseek' ||
+      !supportsOfficialChatExtensions(reply.model ?? MODEL))
+  ) {
+    const result = standaloneSearchResult(previous.blocks)
+    if (result) {
+      // Carry the sources into the new reply version. The old version already records the search cost.
+      reply.blocks = previous.blocks.filter(
+        (block) =>
+          block === result || (block.type === 'server_tool_use' && block.id === result.tool_use_id)
+      )
+    }
+  }
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, question.id, [reply]),
     updatedAt: Date.now(),
@@ -1738,9 +1761,7 @@ const streamReply = async (
   })
   let usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
-  let searchResult = initial.blocks.find(
-    (block) => block.type === 'web_search_tool_result' && block.tool_use_id.startsWith('search-')
-  )
+  let searchResult = standaloneSearchResult(initial.blocks)
   const requestStartedAt = Date.now()
   let connection: Connection | undefined
   let inlineAttempted = false
@@ -1874,9 +1895,11 @@ const streamReply = async (
         preparedContext = prepared
         preparing = false
         // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
-        const latestReminder = prepared.prefix
-          ? prepared.prefix.latestReminder
-          : createLatestReminder(useSettings.getState())
+        const latestReminder =
+          prepared.prefix?.latestReminder ??
+          (serverExtensions && !prepared.prefix
+            ? createLatestReminder(useSettings.getState())
+            : undefined)
         reply = { ...reply, latestReminder }
         updateReply(sessionId, reply)
         persist(sessionId)
@@ -1924,7 +1947,7 @@ const streamReply = async (
           initial.thinking ?? false,
           latestReminder,
           prepared.inherited?.messages,
-          connection.kind === 'custom' || serverExtensions
+          serverExtensions
         )
         const messages = documentTexts
           ? inlineDocuments(originalMessages, documentTexts)

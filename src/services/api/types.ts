@@ -6,8 +6,11 @@
 
 export type ChatModel = string
 
-/** The official Messages integration uses these web tools and server titles on Flash. */
-export const supportsOfficialChatExtensions = (model: ChatModel) => model !== 'deepseek-v4-pro'
+/** The Messages API's chat tools, generated titles and metadata markers are Flash extensions. */
+export const supportsOfficialChatExtensions = (model: ChatModel) =>
+  model === 'deepseek-flash' ||
+  model === 'deepseek-v4-flash' ||
+  model === 'deepseek-v4-flash-vision-exp'
 
 // ---------- 响应：内容块 ----------
 

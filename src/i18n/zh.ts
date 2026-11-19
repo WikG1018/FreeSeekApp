@@ -24,6 +24,8 @@ export const zh = {
   providerProNoImages: 'DeepSeek V4 Pro 不支持图片。含图片的对话请使用 Flash，或新建纯文本对话',
   replyProExtensionsUnavailable:
     'DeepSeek V4 Pro 当前接口不支持这些联网工具和自动标题。可以点重新生成继续聊天。Pro 联网可在「对话联网搜索」中开启。',
+  replyProReminderUnavailable:
+    '这条消息附带了 V4 Pro 不支持的对话提醒。请点「重新生成」继续原对话。',
   providerConfigChanged: '原服务配置已更改，无法沿用原配置续写。请选择模型后重新生成',
   providerConfigMissing: '原服务配置不可用，请重新配置或选择模型后重新生成',
   providerAdvanced: '高级自定义配置',

@@ -36,6 +36,8 @@ export const en = {
     'DeepSeek V4 Pro does not support images. Use Flash for this chat, or start a text-only chat.',
   replyProExtensionsUnavailable:
     'DeepSeek V4 Pro rejected these web tools and automatic titles. Regenerate to continue, or enable standalone search in Chat web search.',
+  replyProReminderUnavailable:
+    'V4 Pro rejected the chat metadata on this message. Regenerate to continue the conversation.',
   providerConfigChanged: 'The original configuration has changed. Select a model and regenerate.',
   providerConfigMissing:
     'The original service configuration is unavailable. Configure it or select a model and regenerate.',
