@@ -260,35 +260,47 @@ const readText = async (url: string): Promise<{ status: number; text: string }> 
 }
 
 /** 依次尝试直连与镜像，返回第一个可用结果；全部失败返回 null */
-const fetchRelease = async (): Promise<{ release: ReleaseInfo; mirror: string } | null> => {
-  for (const url of METADATA_SOURCES) {
-    const source = new URL(url).host,
-      started = performance.now()
-    try {
-      const { status, text } = await readText(url)
-      logEvent('update', 'metadata.response', {
-        source,
-        status,
-        elapsedMs: Math.round(performance.now() - started),
-      })
-      if (status !== 200) {
-        continue
-      }
+const readReleaseSource = async (
+  url: string
+): Promise<{ release: ReleaseInfo; mirror: string } | null> => {
+  const source = new URL(url).host,
+    started = performance.now()
+  try {
+    const { status, text } = await readText(url)
+    logEvent('update', 'metadata.response', {
+      source,
+      status,
+      elapsedMs: Math.round(performance.now() - started),
+    })
+    if (status === 200) {
       const data = JSON.parse(text) as GithubRelease
-      if (!data?.tag_name) {
-        continue
+      if (data?.tag_name) {
+        const release = toRelease(data)
+        if (release.apk) {
+          return { release, mirror: source }
+        }
       }
-      const release = toRelease(data)
-      if (!release.apk) {
-        continue
-      }
-      return { release, mirror: source }
-    } catch (error) {
-      logEvent('update', 'metadata.failed', { source, ...diagnosticError(error) }, 'warn')
-      // 换下一个源
     }
+  } catch (error) {
+    logEvent('update', 'metadata.failed', { source, ...diagnosticError(error) }, 'warn')
   }
   return null
+}
+
+const fetchRelease = async () => {
+  const official = await readReleaseSource(RELEASE_API)
+  if (official) {
+    return official
+  }
+  // A successful mirror response can still be stale. Try the fallback sources within one timeout window.
+  const results = await Promise.all(METADATA_SOURCES.slice(1).map(readReleaseSource))
+  let latest: Awaited<ReturnType<typeof readReleaseSource>> = null
+  for (const candidate of results) {
+    if (candidate && (!latest || isNewer(candidate.release.version, latest.release.version))) {
+      latest = candidate
+    }
+  }
+  return latest
 }
 
 /** 把资源地址映射到某个镜像前缀下 */
@@ -443,6 +455,11 @@ export const installUpdate = async (): Promise<{ installed: boolean; reason?: st
   try {
     if (!release?.apk) {
       return { installed: false, reason: 'no-release' }
+    }
+    const { saveChatsBeforeRestart } = await import('./chat/store.js')
+    if (!(await saveChatsBeforeRestart())) {
+      logEvent('update', 'install.waiting-for-history', {}, 'warn')
+      return { installed: false, reason: 'history-unsaved' }
     }
     const result = await UpdateNative.install({
       path: filePath,

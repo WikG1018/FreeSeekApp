@@ -2,14 +2,16 @@ import { JSONParser, TokenType } from '@streamparser/json'
 import { BackupError, fail } from './errors.js'
 import type { ArchiveEntry } from './zipReader.js'
 
-/** 限制解压后的单条记录；不再同时保留整份 Blob、JSON 字符串和解析结果。 */
+/** These limits apply to one decompressed JSON entry, never to the whole archive. */
 export const MAX_JSON_BYTES = 128 * 1024 * 1024
+export const MAX_SESSION_JSON_BYTES = 256 * 1024 * 1024
 const PARSE_CHUNK_BYTES = 64 * 1024
 const MAX_DEPTH = 64
 const MAX_TOKENS = 2_000_000
+const MAX_SESSION_TOKENS = 4_000_000
 
 /** 导出遵守相同的结构预算，避免产生本应用无法再读取的备份。 */
-export const assertJsonStructure = (value: unknown): void => {
+export const assertJsonStructure = (value: unknown): number => {
   let tokens = 0
   const visit = (value: unknown, depth: number) => {
     if (value !== null && typeof value === 'object') {
@@ -44,6 +46,7 @@ export const assertJsonStructure = (value: unknown): void => {
     }
   }
   visit(value, 0)
+  return tokens
 }
 
 export type ImportProgress = (
@@ -54,9 +57,14 @@ export type ImportProgress = (
 
 export const readJsonEntry = async (
   entry: ArchiveEntry,
-  onRead?: (bytes: number, total: number) => void
+  onRead?: (bytes: number, total: number) => void,
+  kind: 'metadata' | 'session' | 'local' = 'metadata'
 ): Promise<unknown> => {
-  if (entry.size > MAX_JSON_BYTES) {
+  const maxBytes =
+    kind === 'local' ? entry.size : kind === 'session' ? MAX_SESSION_JSON_BYTES : MAX_JSON_BYTES
+  const maxTokens =
+    kind === 'local' ? Infinity : kind === 'session' ? MAX_SESSION_TOKENS : MAX_TOKENS
+  if (entry.size > maxBytes) {
     fail('backupJsonTooLarge')
   }
   const parser = new JSONParser({ paths: ['$'], stringBufferSize: 64 * 1024 })
@@ -75,7 +83,7 @@ export const readJsonEntry = async (
     if (token === TokenType.RIGHT_BRACE || token === TokenType.RIGHT_BRACKET) {
       depth--
     }
-    if (depth > MAX_DEPTH || ++tokens > MAX_TOKENS) {
+    if (depth > MAX_DEPTH || ++tokens > maxTokens) {
       fail('backupJsonTooLarge')
     }
   }
@@ -91,7 +99,7 @@ export const readJsonEntry = async (
     for (let offset = 0; offset < chunk.byteLength; offset += PARSE_CHUNK_BYTES) {
       const part = chunk.subarray(offset, offset + PARSE_CHUNK_BYTES)
       bytes += part.byteLength
-      if (bytes > MAX_JSON_BYTES) {
+      if (bytes > maxBytes) {
         fail('backupJsonTooLarge')
       }
       parser.write(part)

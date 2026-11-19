@@ -575,14 +575,20 @@ export const runCompressionCases = async (run) => {
       await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
       assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), ['summary'])
       await page.evaluate(() => window.__finishContextSummary(false))
-      await page.getByText(/模型的响应提前结束，未收到完整摘要/).waitFor()
+      await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
+      await page.evaluate(() => window.__finishContextSummary(false))
+      await page.getByText(/摘要只收到一部分/).waitFor()
       assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), [
         'summary',
         'summary-interrupted',
+        'summary',
+        'summary-interrupted',
       ])
-      await page.getByRole('button', { name: '整理并压缩上下文', exact: true }).click()
+      await page.getByRole('button', { name: '继续压缩', exact: true }).click()
       await page.waitForFunction(() => typeof window.__finishContextSummary === 'function')
       assert.deepEqual(await page.evaluate(() => window.__contextRecoveryOrder), [
+        'summary',
+        'summary-interrupted',
         'summary',
         'summary-interrupted',
         'summary',
@@ -594,8 +600,8 @@ export const runCompressionCases = async (run) => {
         const saved = a.store.useChatStore.getState().sessionCache.documents
         const requests = window.__contextRecoveryRequests
         return {
-          summaryRequests: requests.slice(0, 2).map((request) => JSON.stringify(request.messages)),
-          retry: JSON.stringify(requests[2].messages),
+          summaryRequests: requests.slice(0, 3).map((request) => JSON.stringify(request.messages)),
+          retry: JSON.stringify(requests[3].messages),
           order: window.__contextRecoveryOrder,
           status: saved.messages.at(-1).status,
           questions: saved.messages.filter((message) => message.role === 'user').length,
@@ -619,6 +625,8 @@ export const runCompressionCases = async (run) => {
         'summary',
         'summary-interrupted',
         'summary',
+        'summary-interrupted',
+        'summary',
         'summary-complete',
         'upload-current',
         'retry-answer',
@@ -626,6 +634,336 @@ export const runCompressionCases = async (run) => {
       assert.equal(result.status, 'done')
       assert.equal(result.questions, 7)
       assert.deepEqual(result.originalFiles, ['earlier-doc', 'current-doc'])
+    }
+  )
+
+  await run(
+    'a 1M rejection resumes a 2.9.0 progress record and recovers an interrupted response body',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures,
+          id = 'very-long'
+        const messages = Array.from({ length: 8490 }, (_, i) => [
+          f.user(
+            'q' + i,
+            (i === 0 ? 'EARLIEST_PRIVATE_FIXTURE ' : i === 8489 ? 'LAST_HISTORICAL_TURN ' : '') +
+              '较早的聊天记录'.repeat(17)
+          ),
+          f.assistant('a' + i, '较早的回答'.repeat(10)),
+        ]).flat()
+        // The persisted scope from 2.9.0 identifies the full earlier history, while the new plan
+        // only needs a targeted prefix. Keep the exact legacy digest for that compatibility check.
+        const signature = (parts) => {
+          let first = 2166136261,
+            second = 5381
+          for (const part of parts) {
+            first = Math.imul(first ^ part.length, 16777619)
+            for (let i = 0; i < part.length; i++) {
+              first = Math.imul(first ^ part.charCodeAt(i), 16777619)
+              second = Math.imul(second, 33) ^ part.charCodeAt(i)
+            }
+          }
+          return (first >>> 0).toString(36) + '-' + (second >>> 0).toString(36)
+        }
+        const history = []
+        for (let i = 0; i < messages.length; i += 2) {
+          const user = messages[i],
+            answer = messages[i + 1]
+          history.push(
+            user.id,
+            user.content,
+            String(user.createdAt),
+            answer.id,
+            a.reply.getReplyText(answer)
+          )
+        }
+        const checkpoint = {
+          scope: signature([
+            'compression-1',
+            'deepseek',
+            'deepseek-flash',
+            '',
+            '',
+            '0',
+            '8490',
+            signature(history),
+            '',
+          ]),
+          text: 'Legacy completed summary',
+          offset: 32768,
+          segmentLimit: 32768,
+          outputTokens: 4096,
+          windowTokens: 65536,
+        }
+        messages.push(
+          f.user('waiting', 'CURRENT_QUESTION', {
+            files: [
+              {
+                id: 'current',
+                serverId: 'file-api-current',
+                name: 'current.docx',
+                size: 56 * 1024,
+                mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                isImage: false,
+              },
+            ],
+          }),
+          f.assistant('failed', '', {
+            status: 'error',
+            error: {
+              kind: 'http',
+              status: 400,
+              message: '',
+              localMessage: {
+                key: 'replyContextTooLong',
+                params: { contextLimitTokens: 1048576, requestedTokens: 1052639 },
+              },
+            },
+          })
+        )
+        a.settings.setApiKey('test-key')
+        a.settings.setAutoCompress(false)
+        await a.seed([f.session({ id, messages, compressionCheckpoint: checkpoint })])
+        const ordinary = window.fetch,
+          summaries = []
+        let answer = null
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return ordinary(url, init)
+          const body = JSON.parse(init.body)
+          if (!body.max_tokens) {
+            const serialized = JSON.stringify(body.messages)
+            answer = {
+              current:
+                serialized.includes('CURRENT_QUESTION') && serialized.includes('file-api-current'),
+              recent: serialized.includes('LAST_HISTORICAL_TURN'),
+              durable: Boolean((await a.db.loadSession(id)).contextSummary),
+            }
+            return a.response('Continued the same chat')
+          }
+          const input = JSON.parse(body.messages[0].content)
+          summaries.push({
+            previous: input.previous_summary,
+            size: input.conversation_excerpt.length,
+            includedCurrent: /CURRENT_QUESTION|current\.docx|EARLIEST_PRIVATE_FIXTURE/.test(
+              input.conversation_excerpt
+            ),
+          })
+          if (summaries.length === 1) {
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  const data =
+                    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Partial summary"}}\n\n'
+                  controller.enqueue(new TextEncoder().encode(data))
+                  setTimeout(() => controller.error(new TypeError('network disconnected')), 10)
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } }
+            )
+          }
+          return a.response('Completed earlier summary')
+        }
+        a.store.retryContextReply(id, 'failed', 'compress')
+        await a.waitIdle()
+        const { events } = await a.diagnostics.readDiagnosticLogs()
+        const failure = events.find(({ event }) => event === 'compression.segment.failed')
+        const bodyFailure = events.find(({ event }) => event === 'response.body.failed')
+        const stored = await a.db.loadSession(id)
+        return {
+          summaries,
+          answer,
+          done: stored.messages.at(-1).status,
+          covered: stored.contextSummary?.coveredRounds,
+          original: stored.messages.length,
+          detail: failure?.details.failureKey,
+          linked: Boolean(
+            bodyFailure &&
+            failure?.details.requestId === bodyFailure.details.requestId &&
+            bodyFailure.details.receivedBytes > 0
+          ),
+          resumed: events.some(
+            ({ event, details }) =>
+              event === 'compression.resumed' && details.processedChars === checkpoint.offset
+          ),
+        }
+      })
+      assert.ok(result.resumed && result.linked && result.covered > 0 && result.covered < 8490)
+      assert.ok(result.summaries.length >= 2 && result.summaries.length <= 5)
+      assert.equal(result.summaries[0].previous, 'Legacy completed summary')
+      assert.deepEqual(result.summaries[1], result.summaries[0])
+      assert.ok(result.summaries.every(({ includedCurrent }) => !includedCurrent))
+      assert.deepEqual(result.answer, { current: true, recent: true, durable: true })
+      assert.equal(result.done, 'done')
+      assert.equal(result.detail, 'compressionFailedNetwork')
+      assert.equal(result.original, 16982)
+    }
+  )
+
+  await run(
+    'summary save failures block the answer and preserve the service rejection',
+    async (page) => {
+      const before = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures,
+          id = 'full-storage'
+        a.settings.setApiKey('test-key')
+        await a.seed([
+          f.session({
+            id,
+            messages: [
+              f.user('old', 'History before the waiting message. '.repeat(200)),
+              f.assistant('answer', 'Earlier note'),
+              f.user('pending', 'Waiting question'),
+              f.assistant('last', '', {
+                status: 'error',
+                error: {
+                  kind: 'http',
+                  status: 400,
+                  message: '',
+                  localMessage: {
+                    key: 'replyContextTooLong',
+                    params: { requestedTokens: 1052639, contextLimitTokens: 1048576 },
+                  },
+                },
+              }),
+            ],
+          }),
+        ])
+        const counts = (window.__counts = { summaries: 0, answers: 0, durable: false })
+        const ordinary = window.fetch
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return ordinary(url, init)
+          if (JSON.parse(init.body).max_tokens) {
+            counts.summaries++
+            return a.response('Summary of the earlier turns')
+          }
+          counts.answers++
+          counts.durable = Boolean((await a.db.loadSession(id)).contextSummary)
+          return a.response('Answered after saving')
+        }
+        const put = IDBObjectStore.prototype.put
+        try {
+          IDBObjectStore.prototype.put = function (value, ...args) {
+            if (this.name === 'sessions' && value?.contextSummary)
+              throw new DOMException('Fixture quota', 'QuotaExceededError')
+            return put.call(this, value, ...args)
+          }
+          a.store.retryContextReply(id, 'last', 'compress')
+          await a.waitIdle()
+          const stored = await a.db.loadSession(id)
+          a.store.retryContextReply(id, 'last', 'send')
+          await a.waitIdle()
+          return {
+            counts,
+            checkpoint: Boolean(stored.compressionCheckpoint),
+            error: stored.messages.at(-1).error?.localMessage,
+            stillPending: !stored.contextSummary,
+          }
+        } finally {
+          IDBObjectStore.prototype.put = put
+        }
+      })
+      assert.deepEqual(before.counts, { summaries: 1, answers: 0, durable: false })
+      assert.ok(before.checkpoint && before.stillPending)
+      assert.equal(before.error.key, 'compressionFailedSave')
+      assert.equal(before.error.params.requestedTokens, 1052639)
+      await page.getByRole('button', { name: '继续压缩', exact: true }).click()
+      const after = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.waitIdle()
+        return {
+          counts: window.__counts,
+          status: (await a.db.loadSession('full-storage')).messages.at(-1).status,
+        }
+      })
+      assert.deepEqual(after, {
+        counts: { summaries: 1, answers: 1, durable: true },
+        status: 'done',
+      })
+    }
+  )
+
+  await run(
+    'recent context keeps pending files and lets the same conversation carry on',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures,
+          id = 'recent-context'
+        const messages = Array.from({ length: 6 }, (_, i) => [
+          f.user('q' + i, 'OLD_TURN_' + i),
+          f.assistant('a' + i, 'Earlier answer ' + i),
+        ]).flat()
+        const attachment = {
+          id: 'document',
+          serverId: 'file-api-document',
+          name: 'document.pdf',
+          size: 4,
+          mimeType: 'application/pdf',
+          isImage: false,
+        }
+        messages.push(
+          f.user('pending', 'WAITING_MESSAGE', { files: [attachment] }),
+          f.assistant('failed', '', {
+            status: 'error',
+            error: {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'compressionFailedNetwork', params: { recoverContext: 1 } },
+            },
+          })
+        )
+        a.settings.setApiKey('test-key')
+        await a.seed([f.session({ id, messages })], [{ id: 'document', blob: new Blob(['file']) }])
+        const fetch = window.fetch,
+          calls = (window.__recentCalls = [])
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return fetch(url, init)
+          const messages = JSON.stringify(JSON.parse(init.body).messages)
+          calls.push(messages)
+          if (messages.includes('OLD_TURN_')) {
+            return Response.json(
+              { error: { message: 'maximum context length is 1048576 tokens' } },
+              { status: 400 }
+            )
+          }
+          return a.response('Continued answer')
+        }
+      })
+      await page.getByRole('button', { name: '用最近的聊天继续', exact: true }).click()
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          id = 'recent-context'
+        await a.waitIdle()
+        a.drafts.setDraftText(id, 'NEXT_MESSAGE')
+        a.store.sendMessage(id)
+        await a.waitIdle()
+        const backup = (await a.backup.exportHistory()).blob
+        await a.backup.importHistory(new File([backup], 'recent-context.zip'))
+        const stored = await a.db.loadSession(id)
+        return {
+          original: stored.messages[0].content,
+          status: stored.messages.at(-1).status,
+          retained: stored.contextSummary.recentOnly,
+          cut: stored.contextSummary.coveredRounds,
+          attachment: await (await a.db.loadFile('document')).text(),
+          calls: window.__recentCalls,
+        }
+      })
+      assert.equal(result.original, 'OLD_TURN_0')
+      assert.equal(result.attachment, 'file')
+      assert.ok(result.retained)
+      assert.equal(result.cut, 6)
+      assert.equal(result.status, 'done')
+      assert.equal(result.calls.length, 3)
+      assert.match(result.calls[0], /OLD_TURN_5/)
+      assert.doesNotMatch(result.calls[0], /OLD_TURN_0/)
+      assert.match(result.calls[1], /WAITING_MESSAGE/)
+      assert.match(result.calls[1], /file-api-document/)
+      assert.doesNotMatch(result.calls[1], /OLD_TURN_/)
+      assert.match(result.calls[2], /NEXT_MESSAGE/)
+      assert.doesNotMatch(result.calls[2], /OLD_TURN_/)
     }
   )
 

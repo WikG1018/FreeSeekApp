@@ -6,7 +6,7 @@ export { ApiError } from './errorTypes.js'
 export type { ApiErrorKind } from './errorTypes.js'
 import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
-import { StreamIdleTimeoutError, readServerSentEvents } from './sse.js'
+import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import type {
   ApiErrorBody,
   CreateMessageRequest,
@@ -80,9 +80,12 @@ const readErrorResponse = async (
   return new ApiError(kind, message, response.status, describeKnownApiError(message, code))
 }
 
-export const request = async (url: string, init: RequestInit): Promise<Response> => {
-  const requestId = createId(),
-    started = performance.now()
+export const request = async (
+  url: string,
+  init: RequestInit,
+  requestId = createId()
+): Promise<Response> => {
+  const started = performance.now()
   const headers = new Headers(init.headers)
   registerLogSecret(headers.get('x-api-key'))
   registerLogSecret(headers.get('Authorization')?.replace(/^Bearer\s+/i, ''))
@@ -244,18 +247,23 @@ const hasFile = (body: CreateMessageRequest) =>
 export async function* streamMessage(
   apiKey: string,
   body: CreateMessageRequest,
-  signal: AbortSignal
+  signal: AbortSignal,
+  requestId = createId()
 ): AsyncGenerator<MessageStreamEvent> {
-  const response = await request(`${ANTHROPIC_BASE_URL}/messages`, {
-    method: 'POST',
-    headers: {
-      ...anthropicHeaders(apiKey, hasFile(body)),
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
+  const response = await request(
+    `${ANTHROPIC_BASE_URL}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        ...anthropicHeaders(apiKey, hasFile(body)),
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({ ...body, stream: true }),
+      signal,
     },
-    body: JSON.stringify({ ...body, stream: true }),
-    signal,
-  })
+    requestId
+  )
   const contentType = response.headers.get('Content-Type') ?? ''
   if (!response.body || !contentType.includes('text/event-stream')) {
     throw await readErrorResponse(response, 'protocol', '')
@@ -298,6 +306,15 @@ export async function* streamMessage(
       }
     }
   } catch (error) {
+    if (error instanceof StreamReadError) {
+      logEvent(
+        'api',
+        'response.body.failed',
+        { requestId, receivedBytes: error.receivedBytes },
+        'warn'
+      )
+      throw new ApiError('network', { key: 'streamConnectionLost' })
+    }
     if (error instanceof StreamIdleTimeoutError) {
       // 连接静默挂起：按网络问题归类（可重试），给本地文案
       throw new ApiError('network', 'Stream idle timeout', undefined, {

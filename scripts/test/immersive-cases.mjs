@@ -408,6 +408,7 @@ export const runImmersiveCases = async ({ run }) => {
         const a = window.__audit
         a.settings.setShowModelSwitcher(true)
         a.settings.setApiKey('fixture')
+        a.settings.saveThirdPartySearch({ enabled: true, keySource: 'official', apiKey: '' })
         a.providers.saveProvider(
           {
             ...a.providers.emptyProfile(),
@@ -443,6 +444,7 @@ export const runImmersiveCases = async ({ run }) => {
       assert.equal((await trigger.textContent()).trim(), 'V4 Pro')
       const tool = page.getByTestId('composer-toolbar').getByRole('button', { name: '智能搜索' })
       await tool.click()
+      assert.equal(await tool.getAttribute('aria-pressed'), 'true')
       assert.deepEqual(await caret(), original)
       await trigger.click()
       await panel.getByRole('button', { name: '显示更多模型' }).click()

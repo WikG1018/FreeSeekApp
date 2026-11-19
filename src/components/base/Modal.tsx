@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
 import { IconCloseOutline16 } from './icons.js'
@@ -8,7 +8,7 @@ import { IconButton } from './IconButton.js'
 import styles from './Modal.module.css'
 
 /** 当前打开的弹窗，后打开的在末尾；叠放时 Esc 只关闭最上层，原生返回键同理 */
-const openModals: { close: () => void }[] = []
+const openModals: (() => void)[] = []
 
 /** 是否有弹窗打开（Android 返回键优先关闭弹窗） */
 export const hasOpenModal = (): boolean => openModals.length > 0
@@ -19,8 +19,31 @@ export const closeTopModal = (): boolean => {
   if (!top) {
     return false
   }
-  top.close()
+  top()
   return true
+}
+
+export const useModalStack = (close: () => void) => {
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const entry = useRef(() => closeRef.current())
+  const isTop = useCallback(() => openModals.at(-1) === entry.current && !hasTransientPanel(), [])
+  useEffect(() => {
+    const dismiss = entry.current
+    openModals.push(dismiss)
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isTop()) {
+        event.preventDefault()
+        dismiss()
+      }
+    }
+    document.addEventListener('keydown', onEscape)
+    return () => {
+      openModals.splice(openModals.indexOf(dismiss), 1)
+      document.removeEventListener('keydown', onEscape)
+    }
+  }, [isTop])
+  return isTop
 }
 
 /** 退出动画时长：与 sheetOut/dialogOut 的 CSS 时长一致；reduced-motion 下动画瞬时完成 */
@@ -115,16 +138,10 @@ export const Modal = ({
     }
   }, [])
 
+  const isTop = useModalStack(() => requestCloseRef.current())
   useEffect(() => {
-    const entry = { close: () => requestCloseRef.current() }
-    openModals.push(entry)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (openModals.at(-1) !== entry || hasTransientPanel()) {
-        return
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        requestCloseRef.current()
+      if (!isTop()) {
         return
       }
       // Tab 焦点陷阱：只在最上层弹窗内循环
@@ -157,10 +174,9 @@ export const Modal = ({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => {
-      openModals.splice(openModals.indexOf(entry), 1)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [isTop])
 
   const requestClose = () => requestCloseRef.current()
 

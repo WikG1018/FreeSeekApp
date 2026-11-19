@@ -1,10 +1,10 @@
 import { memo, useMemo, type RefObject } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { isContextRejection } from '../../services/api/knownErrors.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import {
   applicableSummary,
   CONTEXT_NEAR_LIMIT,
+  contextWasRejected,
   contextLength,
   contextReplyReserve,
   contextRounds,
@@ -62,9 +62,8 @@ export const ContextUsage = memo(function ContextUsage({
       ? lastReply.error?.localMessage
       : undefined
   const rejected =
-    isContextRejection(lastError?.key) ||
+    contextWasRejected(lastError) ||
     lastError?.key === 'compressionInputLarge' ||
-    lastError?.key === 'compressionStillTooLong' ||
     lastError?.key === 'replyDocumentInputLimit'
   const reported = lastError?.params
   const requestFiles = Number(
@@ -76,7 +75,7 @@ export const ContextUsage = memo(function ContextUsage({
   const requestCount = Number(reported?.requestedTokens)
   const requestLimit = Number(reported?.contextLimitTokens)
   const requestEstimate = Number(reported?.estimatedRequestTokens)
-  const historyTokens = useMemo(() => {
+  const historyContext = useMemo(() => {
     if (sessionId !== null && !session) {
       return undefined
     }
@@ -85,7 +84,10 @@ export const ContextUsage = memo(function ContextUsage({
       session?.contextSummary ?? inheritance?.contextSummary,
       rounds
     )
-    return estimateContextHistory(rounds, summary).tokens
+    return {
+      tokens: estimateContextHistory(rounds, summary).tokens,
+      recentOnly: summary?.recentOnly,
+    }
   }, [inheritance, session, sessionId, visible])
   const draftTokens = useMemo(
     () =>
@@ -101,7 +103,7 @@ export const ContextUsage = memo(function ContextUsage({
     () => estimatedSystemTokens(replySystemPrompt(prompt, official)),
     [prompt, official]
   )
-  const history = historyTokens === undefined ? undefined : historyTokens + systemTokens
+  const history = historyContext && historyContext.tokens + systemTokens
   const reserved = connection ? contextReplyReserve(connection) : undefined
   const limit = connection ? contextLength(connection) : undefined
   const ratio = history !== undefined && limit ? history / limit : null
@@ -214,6 +216,9 @@ export const ContextUsage = memo(function ContextUsage({
                   <dd>{formatContextTokens(reserved)}</dd>
                 </div>
               </dl>
+              {historyContext?.recentOnly && (
+                <p className={styles.status}>{t('compressionRecentSummary')}</p>
+              )}
               {rejected && (
                 <div className={styles.rejected}>
                   <strong>{t('contextUsageRejected')}</strong>

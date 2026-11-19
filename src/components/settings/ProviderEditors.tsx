@@ -215,7 +215,6 @@ export const ProviderConnectionPage = ({
           </Field>
           <Field label={t('providerUrl')}>
             <input
-              type="url"
               inputMode="url"
               autoCapitalize="none"
               spellCheck={false}
@@ -247,14 +246,25 @@ export const ProviderConnectionPage = ({
       <Section title={t('providerAuthGroup')}>
         <div className={styles.formFields}>
           <KeyField
-            label={t(access?.id === 'tokenPlan' ? 'providerPlanKey' : 'providerKey')}
+            label={t(
+              preset?.id === 'opencode-go'
+                ? 'providerOpenCodeGoKey'
+                : access?.id === 'tokenPlan'
+                  ? 'providerPlanKey'
+                  : 'providerKey'
+            )}
             value={form.apiKey}
             change={(value) => update('apiKey', value)}
             placeholder={
               preset &&
-              t(access?.id === 'tokenPlan' ? 'providerPastePlanKey' : 'providerPasteApiKey', {
-                provider: preset.name,
-              })
+              t(
+                preset.id === 'opencode-go'
+                  ? 'providerPasteOpenCodeGoKey'
+                  : access?.id === 'tokenPlan'
+                    ? 'providerPastePlanKey'
+                    : 'providerPasteApiKey',
+                { provider: preset.name }
+              )
             }
             helpHref={access?.docs}
           />

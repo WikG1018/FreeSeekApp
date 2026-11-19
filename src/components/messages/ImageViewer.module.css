@@ -1,0 +1,105 @@
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  isolation: isolate;
+  user-select: none;
+}
+
+.shade {
+  position: absolute;
+  inset: 0;
+  background: #101114;
+}
+
+.stage {
+  position: absolute;
+  top: var(--fs-safe-top);
+  left: var(--fs-safe-left);
+  /* Older WebViews do not stretch an absolutely positioned button between its sides. */
+  width: calc(100% - var(--fs-safe-left) - var(--fs-safe-right));
+  height: calc(100% - var(--fs-safe-top) - var(--fs-safe-bottom));
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+  cursor: zoom-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stage[data-zoomed] {
+  cursor: grab;
+}
+
+.stage[data-zoomed][data-dragging] {
+  cursor: grabbing;
+}
+
+.picture {
+  position: absolute;
+  display: block;
+  max-width: none;
+  object-fit: contain;
+  transform-origin: center;
+  clip-path: inset(0 round 0);
+  transition-property: none;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.close {
+  position: absolute;
+  top: calc(var(--fs-safe-top) + 8px);
+  right: calc(var(--fs-safe-right) + 10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  outline: 0;
+  background: rgba(16, 17, 20, 0.76);
+  color: #fff;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+
+  svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+.close:active {
+  background: #292b30;
+}
+
+.close:focus {
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.close:focus:not(:focus-visible) {
+  box-shadow: none;
+}
+
+.stage:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+
+.error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 20px;
+  color: #fff;
+  pointer-events: none;
+}

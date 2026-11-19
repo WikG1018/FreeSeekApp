@@ -44,7 +44,9 @@ export class ServerSentEventDecoder {
       lineStart = LINE_BREAK.lastIndex
     }
     this.buffer = this.buffer.slice(lineStart)
-    if (this.buffer.length > 2 * 1024 * 1024) { throw new Error('SSE line exceeds size limit') }
+    if (this.buffer.length > 2 * 1024 * 1024) {
+      throw new Error('SSE line exceeds size limit')
+    }
     return events
   }
 
@@ -74,7 +76,9 @@ export class ServerSentEventDecoder {
     switch (field) {
       case 'data':
         this.data = this.hasData ? `${this.data}\n${value}` : value
-        if (this.data.length > 2 * 1024 * 1024) { throw new Error('SSE event exceeds size limit') }
+        if (this.data.length > 2 * 1024 * 1024) {
+          throw new Error('SSE event exceeds size limit')
+        }
         this.hasData = true
         break
       case 'event':
@@ -123,6 +127,14 @@ export class StreamIdleTimeoutError extends Error {
   }
 }
 
+/** Response headers arrived, but the transport could not read the body to completion. */
+export class StreamReadError extends Error {
+  constructor(readonly receivedBytes: number) {
+    super('Response body stream disconnected')
+    this.name = 'StreamReadError'
+  }
+}
+
 export async function* readServerSentEvents(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -137,6 +149,7 @@ export async function* readServerSentEvents(
   const textDecoder = new TextDecoder()
   const decoder = new ServerSentEventDecoder()
   let finished = false
+  let receivedBytes = 0
   /** 每读到一段数据就重置；到点仍没数据视为连接已死 */
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   const clearIdle = () => {
@@ -158,7 +171,10 @@ export async function* readServerSentEvents(
           reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
           reject(new StreamIdleTimeoutError())
         }, idleTimeoutMs)
-        reader.read().then(({ done, value }) => resolve({ done, value }), reject)
+        reader.read().then(
+          ({ done, value }) => resolve({ done, value }),
+          () => reject(signal?.aborted ? abortReason(signal) : new StreamReadError(receivedBytes))
+        )
       })
       if (chunk.done) {
         if (signal?.aborted) {
@@ -172,6 +188,7 @@ export async function* readServerSentEvents(
       if (signal?.aborted) {
         throw abortReason(signal)
       }
+      receivedBytes += chunk.value?.byteLength ?? 0
       yield* decoder.push(textDecoder.decode(chunk.value, { stream: true }))
     }
   } finally {

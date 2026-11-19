@@ -259,7 +259,14 @@ const contextSummary = (value: unknown) => {
     const estimate = record(value)
     return { before: number(estimate.before), after: number(estimate.after) }
   })
-  return { text, coveredRounds, signature, updatedAt: number(raw.updatedAt), historyEstimate }
+  return {
+    text,
+    coveredRounds,
+    signature,
+    updatedAt: number(raw.updatedAt),
+    historyEstimate,
+    ...(raw.recentOnly === undefined ? {} : { recentOnly: boolean(raw.recentOnly) }),
+  }
 }
 
 export const readNativeSession = (value: unknown): Session => {

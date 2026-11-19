@@ -1,13 +1,15 @@
 import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
-import { readServerSentEvents } from './sse.js'
+import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
 import { providerOutputBudget, validateProfile, type ProviderProfile } from '../providers.js'
+import { isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
 import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
 import { logEvent, diagnosticError, registerLogSecret } from '../diagnostics/log.js'
 import { createId } from '../../utils/id.js'
+import type { TranslationKey } from '../../i18n/index.js'
 
 type Json = Record<string, unknown>
 const array = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
@@ -16,6 +18,12 @@ const record = (value: unknown): Json =>
 const count = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
+const goProtocolPath: Record<ProviderProfile['protocol'], string> = {
+  openai: '/openai/v1',
+  responses: '/openai/v1',
+  anthropic: '/anthropic/v1',
+  gemini: '/google/v1beta',
+}
 const endpoint = (
   profile: ProviderProfile,
   operation: 'models' | 'chat',
@@ -26,11 +34,14 @@ const endpoint = (
     return profile.modelListUrl
   }
   const url = new URL(profile.url)
+  const go = isOpenCodeGoUrl(url)
   let path = url.pathname.replace(/\/+$/, '')
   path = path
     .replace(/\/(chat\/completions|responses|messages)$/, '')
     .replace(/\/models\/[^/]+:(streamGenerateContent|generateContent)$/, '')
-  if (!path) {
+  if (go) {
+    path = OPEN_CODE_GO_PATH + (operation === 'models' ? '/v1' : goProtocolPath[profile.protocol])
+  } else if (!path) {
     path = profile.protocol === 'gemini' ? '/v1beta' : '/v1'
   }
   if (operation === 'models') {
@@ -55,25 +66,56 @@ const endpoint = (
   }
   return url.toString()
 }
-const headersFor = (profile: ProviderProfile): Record<string, string> => {
+type RequestContext = { requestId?: string; sessionId?: string }
+const browserGoSessions = new Map<string, string>()
+const goSessionHeader = async (profile: ProviderProfile, sessionId?: string) => {
+  if (!sessionId) {
+    return `ses_${createId()}`
+  }
+  // Imported conversation IDs can be arbitrary strings. Send only an opaque identifier.
+  const session = JSON.stringify([profile.id, sessionId])
+  if (globalThis.crypto?.subtle) {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session))
+    const hash = Array.from(new Uint8Array(bytes, 0, 16), (byte) =>
+      byte.toString(16).padStart(2, '0')
+    ).join('')
+    return `ses_${hash}`
+  }
+  // Pages served over plain HTTP do not expose SubtleCrypto.
+  const value = browserGoSessions.get(session) ?? `ses_${createId()}`
+  browserGoSessions.set(session, value)
+  return value
+}
+const headersFor = async (
+  profile: ProviderProfile,
+  go: boolean,
+  chat: boolean,
+  sessionId?: string
+): Promise<Record<string, string>> => {
   const headers = new Headers({
     'Content-Type': 'application/json',
     Accept: 'text/event-stream, application/json',
   })
   if (profile.apiKey) {
-    headers.set(
-      profile.protocol === 'anthropic'
+    const auth =
+      !go && profile.protocol === 'anthropic'
         ? 'x-api-key'
-        : profile.protocol === 'gemini'
+        : !go && profile.protocol === 'gemini'
           ? 'x-goog-api-key'
-          : 'Authorization',
-      ['anthropic', 'gemini'].includes(profile.protocol)
-        ? profile.apiKey
-        : `Bearer ${profile.apiKey}`
-    )
+          : 'Authorization'
+    headers.set(auth, auth === 'Authorization' ? `Bearer ${profile.apiKey}` : profile.apiKey)
   }
   if (profile.protocol === 'anthropic') {
     headers.set('anthropic-version', '2023-06-01')
+  }
+  if (go) {
+    const version = document
+      .querySelector('meta[name="application-version"]')
+      ?.getAttribute('content')
+    headers.set('User-Agent', version ? `FreeSeek/${version}` : 'FreeSeek')
+    if (chat) {
+      headers.set('x-opencode-session', await goSessionHeader(profile, sessionId))
+    }
   }
   for (const [key, value] of Object.entries(profile.headers)) {
     headers.set(key, value)
@@ -81,6 +123,11 @@ const headersFor = (profile: ProviderProfile): Record<string, string> => {
   }
   registerLogSecret(profile.apiKey)
   return Object.fromEntries(headers.entries())
+}
+const goHttpErrors: Partial<Record<number, TranslationKey>> = {
+  401: 'providerOpenCodeGoUnauthorized',
+  402: 'providerOpenCodeGoQuota',
+  403: 'providerOpenCodeGoForbidden',
 }
 const remoteLimit = (data: Json) => {
   const detail = record(data.error ?? record(data.response).error ?? data)
@@ -110,7 +157,13 @@ export const readApiJson = async (
   try {
     for (;;) {
       signal.throwIfAborted()
-      const { done, value } = await reader.read()
+      const { done, value } = await reader.read().catch(() => {
+        signal.throwIfAborted()
+        if (timedOut) {
+          throw new ApiError('network', { key: 'streamIdleTimeout' })
+        }
+        throw new StreamReadError(size)
+      })
       if (done) {
         break
       }
@@ -141,7 +194,8 @@ const fetchResponse = async (
   profile: ProviderProfile,
   url: string,
   body: unknown | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  { requestId = createId(), sessionId }: RequestContext = {}
 ) => {
   const serialized = body === undefined ? undefined : JSON.stringify(body)
   if (serialized && new Blob([serialized]).size > 32 * 1024 * 1024) {
@@ -159,13 +213,15 @@ const fetchResponse = async (
     controller.abort()
   }, 120000)
   logEvent('api', 'provider.request', {
+    requestId,
     protocol: profile.protocol,
     operation: body === undefined ? 'models' : 'chat',
   })
   try {
+    const go = isOpenCodeGoUrl(new URL(url))
     const response = await providerFetch(url, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: headersFor(profile),
+      headers: await headersFor(profile, go, body !== undefined, sessionId),
       body: serialized,
       signal: controller.signal,
     })
@@ -176,9 +232,13 @@ const fetchResponse = async (
           : undefined
       void response.body?.cancel().catch(() => {})
       signal.throwIfAborted()
+      const goError = go ? goHttpErrors[response.status] : undefined
       throw new ApiError(
         'http',
-        known ?? { key: 'providerHttpError', params: { status: response.status } },
+        known ??
+          (goError
+            ? { key: goError }
+            : { key: 'providerHttpError', params: { status: response.status } }),
         response.status
       )
     }
@@ -191,7 +251,7 @@ const fetchResponse = async (
     }
   } catch (error) {
     signal.removeEventListener('abort', abort)
-    logEvent('api', 'provider.failed', diagnosticError(error), 'error')
+    logEvent('api', 'provider.failed', { requestId, ...diagnosticError(error) }, 'error')
     if (signal.aborted) {
       signal.throwIfAborted()
     }
@@ -210,34 +270,37 @@ export const fetchProviderCatalog = async (
 ): Promise<ProviderCatalogModel[]> => {
   const profile = validateProfile(input, false),
     models = new Map<string, ProviderCatalogModel>()
+  const url = new URL(endpoint(profile, 'models', ''))
+  const go = isOpenCodeGoUrl(url)
+  const gemini = !go && profile.protocol === 'gemini'
   let next: string | undefined
   for (let page = 0; page < 10; page++) {
-    const url = new URL(endpoint(profile, 'models', ''))
     if (next) {
-      url.searchParams.set(profile.protocol === 'gemini' ? 'pageToken' : 'after_id', next)
+      url.searchParams.set(gemini ? 'pageToken' : 'after_id', next)
     }
     const { response, dispose } = await fetchResponse(profile, url.toString(), undefined, signal)
     try {
       const data = await readApiJson(response, signal)
-      const items = profile.protocol === 'gemini' ? data.models : data.data
+      const items = gemini ? data.models : data.data
       if (!Array.isArray(items)) {
         throw new ApiError('protocol', { key: 'providerInvalidResponse' })
       }
       for (const item of items) {
         const value = record(item)
         if (
-          profile.protocol === 'gemini' &&
+          gemini &&
           Array.isArray(value.supportedGenerationMethods) &&
           !value.supportedGenerationMethods.includes('generateContent')
         ) {
           continue
         }
-        const id = text(value.id || value.name).replace(
-          profile.protocol === 'gemini' ? /^models\// : /$^/,
-          ''
-        )
+        const id = text(value.id || value.name).replace(gemini ? /^models\// : /$^/, '')
         if (id && id.length <= 200 && !Array.from(id).some((char) => char.charCodeAt(0) < 32)) {
-          const advertised = value.context_length ?? value.context_window ?? value.inputTokenLimit
+          const advertised =
+            value.context_length ??
+            value.context_window ??
+            value.inputTokenLimit ??
+            record(value.limit).context
           const contextWindow =
             typeof advertised === 'number' &&
             Number.isSafeInteger(advertised) &&
@@ -248,12 +311,11 @@ export const fetchProviderCatalog = async (
           models.set(id, { id, contextWindow })
         }
       }
-      const token =
-        profile.protocol === 'gemini'
-          ? text(data.nextPageToken)
-          : profile.protocol === 'anthropic' && data.has_more
-            ? text(data.last_id)
-            : ''
+      const token = gemini
+        ? text(data.nextPageToken)
+        : !go && profile.protocol === 'anthropic' && data.has_more
+          ? text(data.last_id)
+          : ''
       if (!token || token === next || models.size >= 5000) {
         break
       }
@@ -413,14 +475,16 @@ export async function* streamProviderMessage(
   messages: ProviderMessage[],
   system: string,
   signal: AbortSignal,
-  reasoning?: ReasoningChoice
+  reasoning?: ReasoningChoice,
+  { requestId = createId(), sessionId }: RequestContext = {}
 ): AsyncGenerator<MessageStreamEvent> {
   const profile = validateProfile({ ...input, model })
   const { response, dispose } = await fetchResponse(
     profile,
     endpoint(profile, 'chat', model, profile.stream),
     applyReasoning(providerBody(profile, model, messages, system), profile.protocol, reasoning),
-    signal
+    signal,
+    { requestId, sessionId }
   )
   let completed = false,
     emitted = false,
@@ -617,6 +681,20 @@ export async function* streamProviderMessage(
       ...(usage ? { usage } : {}),
     }
     yield { type: 'message_stop' }
+  } catch (error) {
+    if (error instanceof StreamReadError) {
+      logEvent(
+        'api',
+        'response.body.failed',
+        { requestId, receivedBytes: error.receivedBytes },
+        'warn'
+      )
+      throw new ApiError('network', { key: 'streamConnectionLost' })
+    }
+    if (error instanceof StreamIdleTimeoutError) {
+      throw new ApiError('network', { key: 'streamIdleTimeout' })
+    }
+    throw error
   } finally {
     dispose()
     void response.body?.cancel().catch(() => {})

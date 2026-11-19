@@ -6,6 +6,9 @@
 
 export type ChatModel = string
 
+/** The official Messages integration uses these web tools and server titles on Flash. */
+export const supportsOfficialChatExtensions = (model: ChatModel) => model !== 'deepseek-v4-pro'
+
 // ---------- 响应：内容块 ----------
 
 /** 正文引用：服务端把模型的引用标记还原为来源，挂在对应文本块上 */
@@ -179,7 +182,7 @@ export type CreateMessageRequest = {
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
   output_config?: { effort: 'low' | 'high' | 'max' }
-  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
+  tools?: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
   safety_check: { level: 'high' }
   title?: { enabled: boolean }
 }

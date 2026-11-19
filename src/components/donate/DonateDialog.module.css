@@ -206,6 +206,16 @@
 .status span {
   display: block;
 }
+.payFooter {
+  width: 100%;
+}
+.scanInstructions {
+  margin: 7px 0 0;
+  color: var(--rose-copy);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
 .pay {
   display: flex;
   align-items: center;
@@ -223,23 +233,8 @@
   box-shadow: 0 3px 9px rgba(143, 27, 69, 0.13);
   transition: transform 140ms var(--fs-ease-out);
 }
-.payArrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 23px;
-  height: 23px;
-  margin-left: 8px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.17);
-  transition: transform 0.16s var(--fs-ease-out);
-}
 .pay:active:enabled {
   transform: translateY(1px);
-}
-.pay:active:enabled .payArrow {
-  transform: translate(1px, -1px);
 }
 .pay:focus-visible {
   outline: 2px solid white;
@@ -451,8 +446,7 @@
     animation: none;
   }
   .channelFace,
-  .pay,
-  .payArrow {
+  .pay {
     transition: none;
   }
 }

@@ -4,9 +4,11 @@ import { useTranslate } from '../../i18n/index.js'
 import { useUploads } from '../../services/attachments.js'
 import { loadFile } from '../../services/chat/db.js'
 import type { FileAttachment } from '../../services/chat/types.js'
+import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { FileCard } from '../files/FileCard.js'
+import { releaseMessageFileUrl, showImageViewer } from './imageViewerState.js'
 import styles from './MessageFile.module.css'
 
 /** 原件从 IndexedDB 读出并生成本地地址；undefined 表示加载中，null 表示原件缺失。 */
@@ -15,16 +17,23 @@ const useFileUrl = (id: string) => {
   useEffect(() => {
     let objectUrl: string | null = null
     let cancelled = false
-    loadFile(id).then((blob) => {
-      if (!cancelled) {
-        objectUrl = blob ? URL.createObjectURL(blob) : null
-        setFileUrl({ id, url: objectUrl })
-      }
-    })
+    void loadFile(id)
+      .then((blob) => {
+        if (!cancelled) {
+          objectUrl = blob ? URL.createObjectURL(blob) : null
+          setFileUrl({ id, url: objectUrl })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          logEvent('storage', 'attachment.preview.read-failed', diagnosticError(error), 'warn')
+          setFileUrl({ id, url: null })
+        }
+      })
     return () => {
       cancelled = true
       if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
+        releaseMessageFileUrl(objectUrl)
       }
     }
   }, [id])
@@ -134,20 +143,22 @@ export const MessageFile = ({
       )
     }
 
-    // 正常态：链接到原件
-    return url ? (
-      <a
-        className={clsx(styles.image, styles.imageThumb)}
-        href={url}
-        target="_blank"
-        rel="noreferrer"
+    if (!url || failedUrl === url) {
+      return <div className={styles.image}>{preview}</div>
+    }
+
+    // Stay in the chat document. Android WebView may open a new-window link in the same window.
+    return (
+      <button
+        type="button"
+        className={clsx(styles.image, styles.imageThumb, styles.previewTrigger)}
+        aria-label={t('messageImageOpen', { name: file.name })}
+        aria-haspopup="dialog"
         title={file.name}
+        onClick={(event) => showImageViewer(url, file.name, event.currentTarget)}
       >
         {preview}
-      </a>
-    ) : (
-      // 原件还没加载出来（极短暂）
-      <div className={styles.image} />
+      </button>
     )
   }
 

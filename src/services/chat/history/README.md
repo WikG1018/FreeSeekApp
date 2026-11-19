@@ -58,10 +58,12 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 | [zipReader.ts](./zipReader.ts)、[zipWriter.ts](./zipWriter.ts)                 | ZIP 读写及路径、大小、CRC 校验 |
 | [../backup.ts](../backup.ts)                                                   | 导入导出入口与串行队列         |
 
-支持单卷 ZIP32 的 STORE / DEFLATE，导出使用 STORE。ZIP64、加密、分卷及非 UTF-8 的非 ASCII 文件名不支持；条目名统一按 NFC 比较。JSON 分块解析，单条解压记录上限 128MiB、最多 64 层及 200 万个 JSON 词法单元，导出使用相同的结构预算；附件不受 JSON 限制，仍受 ZIP32 容量和设备资源限制。导出生成完整下载 Blob。官方及本机备份保留会话置顶状态。
+导入支持单卷 ZIP32 和 ZIP64 的 STORE / DEFLATE，导出使用 ZIP32 STORE。条目名统一按 NFC 比较。加密、分卷及非 UTF-8 的非 ASCII 文件名暂不支持。解压后的单个会话 JSON 可读至 256 MiB，索引和清单以 128 MiB 为上限，均受结构复杂度和设备资源限制。附件逐段校验并保存为独立的本地原件。官方及本机备份保留会话置顶状态。
 
 # FreeSeek 完整备份
 
 2.1.0 起，本机导出使用独立格式：`manifest.json` 标记 `freeseek_backup_version: 1` 并列出会话、原件、人设和单价；`freeseek/sessions/*.json` 保存完整会话；`freeseek/files/*.bin` 按附件本地 ID 去重保存原件及 MIME。
 
-导入先校验清单、消息结构、路径、大小与 CRC，只写暂存；所有条目成功后才原子替换会话和文件，再恢复人设与单价。API Key 始终排除。旧版及官方 v3 ZIP 继续由原有读取器导入；旧格式本来缺失的原件或元数据无法补造。
+导入先校验清单、消息结构、路径、大小与 CRC，数据逐条写入暂存。所有条目成功后，在同一事务中切换到已写入的数据、更新会话列表并清理旧记录。完成时无需重写附件。API Key 始终排除。旧版及官方 v3 ZIP 继续由原有读取器导入；旧格式本来缺失的原件或元数据无法补造。
+
+本机 v3 与 v4 格式按条目拆分超长会话。v4 允许单个会话的完整数据达到 256 MiB，由 2.9.2 起读取。现有 v1 至 v3 备份也可导入。2.9.3 起支持导入使用 ZIP64 的大备份，所需空间取决于解压后的聊天和附件。

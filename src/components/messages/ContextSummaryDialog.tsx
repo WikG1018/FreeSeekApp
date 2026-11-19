@@ -98,7 +98,7 @@ function SummaryEditor({ session }: { session: Session }) {
                   {t(summary ? 'compressionMore' : 'compressionGenerate')}
                 </Button>
               )}
-              {summary ? (
+              {summary && !summary.recentOnly ? (
                 <Button
                   disabled={busy}
                   onClick={() => setEdit({ original: summary, text: summary.text })}
@@ -113,8 +113,16 @@ function SummaryEditor({ session }: { session: Session }) {
         </>
       }
     >
-      <p className={styles.hint}>{t(summary ? 'compressionSummaryHint' : 'compressionHelp')}</p>
-      {summary && (
+      <p className={styles.hint}>
+        {t(
+          summary?.recentOnly
+            ? 'compressionRecentSummary'
+            : summary
+              ? 'compressionSummaryHint'
+              : 'compressionHelp'
+        )}
+      </p>
+      {summary && !summary.recentOnly && (
         <section className={styles.label}>
           <strong>{t('compressionCoverage', { count: summary.coveredRounds })}</strong>
           {summary.historyEstimate && (

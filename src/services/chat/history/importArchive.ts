@@ -13,13 +13,13 @@ import {
 } from './nativeArchive.js'
 import {
   ArchiveError,
-  countArchiveEntries,
+  archiveSize,
   isZipFile,
   readArchive,
-  readEntry,
   skipEntry,
   type ArchiveEntry,
 } from './zipReader.js'
+import { stageArchiveFile, useDiskForArchive } from './stageArchiveFile.js'
 
 /** 从原件字节补充图片 MIME；无法识别时为空字符串，图片身份仍由归档的 is_image 决定。 */
 const imageType = (bytes: Uint8Array): string => {
@@ -64,7 +64,9 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
       }
       const data = await readJson(entry)
       if (isNativeManifest(data)) {
-        readNativeManifest(data)
+        if (!readNativeManifest(data).sessions.length) {
+          fail('backupEmptyHistory')
+        }
       } else {
         checkManifest(data)
       }
@@ -97,23 +99,23 @@ export const importArchive = async (
   let manifest = false
   let index: SessionIndexEntry[] | undefined
   let currentSessionId: string | undefined
+  let processed = 0
+  const { total, expandedBytes } = await archiveSize(file)
+  const useDisk = useDiskForArchive(expandedBytes)
+  const onRead = (bytes: number, size: number) =>
+    onProgress?.(processed, total, { bytes, total: size })
 
   const saveImage = async (entry: ArchiveEntry, id: string) => {
     if (stored.has(id)) {
       await skipEntry(entry)
       return
     }
-    const data = await readEntry(entry)
-    const type = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
-    await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
+    const type = await stageArchiveFile(entry, id, imageType, onRead, useDisk)
     stored.set(id, type)
   }
 
-  const total = await countArchiveEntries(file)
-  let processed = 0
   onProgress?.(processed, total)
-  const read = (entry: ArchiveEntry) =>
-    readJson(entry, (bytes, size) => onProgress?.(processed, total, { bytes, total: size }))
+  const read = (entry: ArchiveEntry, kind?: 'session') => readJson(entry, onRead, kind)
 
   try {
     const entries = readArchive(file)
@@ -126,7 +128,11 @@ export const importArchive = async (
         }
         const data = await read(entry)
         if (isNativeManifest(data)) {
-          return await importNativeEntries(entries, readNativeManifest(data), total, onProgress)
+          const native = readNativeManifest(data)
+          if (!native.sessions.length) {
+            fail('backupEmptyHistory')
+          }
+          return await importNativeEntries(entries, native, total, useDisk, onProgress)
         }
         checkManifest(data)
         manifest = true
@@ -134,7 +140,7 @@ export const importArchive = async (
         // 账号信息（已脱敏）不导入；文件可能缺失。
         await skipEntry(entry)
       } else if (sessionId !== null && !index) {
-        const local = toLocalSession(readSessionFile(await read(entry)))
+        const local = toLocalSession(readSessionFile(await read(entry, 'session')))
         if (local.session.id !== sessionId || imported.has(sessionId)) {
           fail('backupIncomplete')
         }
@@ -178,6 +184,9 @@ export const importArchive = async (
     [...imported].some((id) => !listed.has(id))
   ) {
     fail('backupIncomplete')
+  }
+  if (imported.size === 0) {
+    fail('backupEmptyHistory')
   }
   await db.updateStagingFileTypes(stored, sessionsWithImages)
   return undefined

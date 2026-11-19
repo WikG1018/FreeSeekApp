@@ -20,6 +20,8 @@ export const runInstall = async () => {
   const result = await installUpdate()
   if (!result.installed && result.reason === 'permission') {
     showToast({ key: 'updateInstallPermission' })
+  } else if (!result.installed && result.reason === 'history-unsaved') {
+    showToast({ key: 'updateHistoryUnsaved', type: 'error' })
   } else if (!result.installed && result.reason !== 'web') {
     showToast({ key: 'updateInstallFailed', type: 'error' })
   }

@@ -32,6 +32,14 @@ button.image {
   cursor: pointer;
 }
 
+button.previewTrigger {
+  cursor: zoom-in;
+}
+
+.previewTrigger[data-image-viewer-source] {
+  opacity: 0;
+}
+
 .failedIcon {
   display: flex;
   align-items: center;

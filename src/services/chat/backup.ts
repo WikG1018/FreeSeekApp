@@ -5,6 +5,7 @@ import type { Session } from './types.js'
 import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ImportProgress } from './history/readJson.js'
+import { BackupError } from './history/errors.js'
 
 export { BackupError } from './history/errors.js'
 
@@ -22,8 +23,22 @@ const enqueueBackup = <T>(operation: string, run: () => Promise<T>): Promise<T> 
       })
       return result
     } catch (error) {
-      logEvent('backup', operation + '.failed', diagnosticError(error), 'error')
-      throw error
+      const failure =
+        operation === 'import' &&
+        error instanceof DOMException &&
+        error.name === 'QuotaExceededError'
+          ? new BackupError('backupStorageFull')
+          : error
+      logEvent(
+        'backup',
+        operation + '.failed',
+        {
+          ...diagnosticError(error),
+          ...(failure instanceof BackupError ? { failureKey: failure.key } : {}),
+        },
+        'error'
+      )
+      throw failure
     }
   })
   backupQueue = task.catch(() => {})
@@ -65,17 +80,24 @@ export const importHistory = (file: File, onProgress?: ImportProgress): Promise<
   enqueueBackup('import', async () => {
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     await checkArchiveFormat(file)
+    const previousSessionCount = useChatStore.getState().sessions.length
     let settings: NativeBackupSettings | undefined
     const count = await replaceHistory(async () => {
       settings = await importArchive(file, onProgress)
     })
     restoreNativeSettings(settings)
-    logEvent('backup', 'import.archive', { sessionCount: count, bytes: file.size })
+    logEvent('backup', 'import.archive', {
+      previousSessionCount,
+      sessionCount: count,
+      bytes: file.size,
+    })
     return count
   })
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */
 export const clearHistory = (): Promise<void> =>
   enqueueBackup('clear', async () => {
+    const previousSessionCount = useChatStore.getState().sessions.length
     await replaceHistory(async () => {})
+    logEvent('backup', 'history.cleared', { previousSessionCount })
   })

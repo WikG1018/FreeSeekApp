@@ -25,6 +25,10 @@ const api = (url: string, docs: string, protocol: ProviderProtocol = 'openai'): 
 const plan = (url: string, docs: string): ProviderAccess => ({ ...api(url, docs), id: 'tokenPlan' })
 const mimoDocs = 'https://mimo.mi.com/docs/tokenplan/integration'
 const miniMaxApi = 'https://api.minimax.cn/v1'
+const openCodeOrigin = 'https://opencode.ai'
+export const OPEN_CODE_GO_PATH = '/inference/go'
+export const isOpenCodeGoUrl = (url: URL) =>
+  url.origin === openCodeOrigin && /^\/(?:zen|inference)\/go(?:\/|$)/.test(url.pathname)
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
@@ -137,6 +141,34 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         'https://platform.claude.com/docs/en/api/overview',
         'anthropic'
       ),
+    ],
+  },
+  {
+    id: 'opencode-go',
+    name: 'OpenCode Go',
+    region: 'international',
+    access: [
+      {
+        ...plan(
+          openCodeOrigin + OPEN_CODE_GO_PATH + '/openai/v1',
+          openCodeOrigin + '/docs/console/go/'
+        ),
+        streamUsage: true,
+      },
+    ],
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode Zen',
+    region: 'international',
+    access: [
+      {
+        ...api(
+          openCodeOrigin + '/inference/openai/v1',
+          openCodeOrigin + '/docs/console/api/inference'
+        ),
+        streamUsage: true,
+      },
     ],
   },
   {

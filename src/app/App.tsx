@@ -1,4 +1,6 @@
 import { ContextSummaryDialog } from '../components/messages/ContextSummaryDialog.js'
+import { ImageViewer } from '../components/messages/ImageViewer.js'
+import { useImageViewer } from '../components/messages/imageViewerState.js'
 import { Onboarding } from '../components/onboarding/Onboarding.js'
 import { initialOnboardingStep } from '../services/onboarding.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
@@ -150,11 +152,12 @@ export const App = () => {
 
   // 系统栏图标跟随当前覆盖层。应用配色单独持久化，打开弹窗时无需重设。
   const theme = useTheme()
+  const previewImage = useImageViewer((state) => state.image)
   const nativeTheme = useRef<{ dark: boolean; ready: Promise<void> }>()
   const appDark = theme === 'dark'
   const darkMilestone = milestone !== null && milestone > 100
-  const darkStatus = appDark || (darkMilestone && !donationFullscreen)
-  const darkNavigation = appDark || (darkMilestone && !donationOpen)
+  const darkStatus = appDark || !!previewImage || (darkMilestone && !donationFullscreen)
+  const darkNavigation = appDark || !!previewImage || (darkMilestone && !donationOpen)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return
@@ -316,6 +319,7 @@ export const App = () => {
           onDone={() => setOnboarding(null)}
         />
       ) : null}
+      {previewImage && <ImageViewer image={previewImage} />}
       <Toast />
     </>
   )

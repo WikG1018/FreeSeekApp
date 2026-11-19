@@ -128,6 +128,8 @@ export type InheritedContext = {
 
 export type ContextSummary = {
   text: string
+  /** The user continued with recent turns while keeping the complete local history. */
+  recentOnly?: boolean
   coveredRounds: number
   signature: string
   updatedAt: number
@@ -150,6 +152,7 @@ export type CompressionCheckpoint = {
   segmentLimit: number
   outputTokens: number
   windowTokens: number
+  targetRounds?: number
 }
 
 export type Session = {

@@ -1,5 +1,60 @@
 import assert from 'node:assert/strict'
 import { zipSync, strToU8 } from 'fflate'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const zip64Fixture = (entries) => {
+  const archive = Buffer.from(zipSync(entries, { level: 0 }))
+  const end = Buffer.from(archive.subarray(-22))
+  const count = end.readUInt16LE(10)
+  const offset = end.readUInt32LE(16)
+  const records = []
+  let cursor = offset
+  for (let i = 0; i < count; i++) {
+    const header = Buffer.from(archive.subarray(cursor, cursor + 46))
+    const name = header.readUInt16LE(28)
+    const extra = header.readUInt16LE(30)
+    const comment = header.readUInt16LE(32)
+    const zip64 = Buffer.alloc(28)
+    zip64.writeUInt16LE(1)
+    zip64.writeUInt16LE(24, 2)
+    zip64.writeBigUInt64LE(BigInt(header.readUInt32LE(24)), 4)
+    zip64.writeBigUInt64LE(BigInt(header.readUInt32LE(20)), 12)
+    zip64.writeBigUInt64LE(BigInt(header.readUInt32LE(42)), 20)
+    header.writeUInt16LE(45, 6)
+    header.writeUInt32LE(0xffffffff, 20)
+    header.writeUInt32LE(0xffffffff, 24)
+    header.writeUInt16LE(extra + zip64.length, 30)
+    header.writeUInt32LE(0xffffffff, 42)
+    const next = cursor + 46 + name + extra
+    records.push(
+      header,
+      archive.subarray(cursor + 46, next),
+      zip64,
+      archive.subarray(next, next + comment)
+    )
+    cursor = next + comment
+  }
+  const directory = Buffer.concat(records)
+  const end64 = Buffer.alloc(56)
+  end64.writeUInt32LE(0x06064b50)
+  end64.writeBigUInt64LE(44n, 4)
+  end64.writeUInt16LE(45, 12)
+  end64.writeUInt16LE(45, 14)
+  end64.writeBigUInt64LE(BigInt(count), 24)
+  end64.writeBigUInt64LE(BigInt(count), 32)
+  end64.writeBigUInt64LE(BigInt(directory.length), 40)
+  end64.writeBigUInt64LE(BigInt(offset), 48)
+  const locator = Buffer.alloc(20)
+  locator.writeUInt32LE(0x07064b50)
+  locator.writeBigUInt64LE(BigInt(offset + directory.length), 8)
+  locator.writeUInt32LE(1, 16)
+  end.writeUInt16LE(0xffff, 8)
+  end.writeUInt16LE(0xffff, 10)
+  end.writeUInt32LE(0xffffffff, 12)
+  end.writeUInt32LE(0xffffffff, 16)
+  return Buffer.concat([archive.subarray(0, offset), directory, end64, locator, end])
+}
 
 // 官方格式的合成数据：含长中文、emoji、转义和末尾校验标记，不含任何用户内容。
 export const officialFixture = (megabytes = 64, sessions = 1) => {
@@ -67,6 +122,424 @@ export const officialFixture = (megabytes = 64, sessions = 1) => {
 
 export const runImportCases = async ({ run }) => {
   await run(
+    'a damaged chat list and interrupted import are recovered while empty backups preserve history',
+    async (page) => {
+      const emptyNative = zipSync({
+        'manifest.json': strToU8(
+          JSON.stringify({
+            freeseek_backup_version: 2,
+            sessions: [],
+            files: [],
+            personas: [],
+            defaultPersonaId: 'builtin-default',
+          })
+        ),
+      })
+      const emptyOfficial = zipSync({
+        'manifest.json': strToU8('{"export_format_version":3}'),
+        'chat_session_index.json': strToU8('[]'),
+      })
+      await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        await a.seed([
+          f.session({
+            id: 'retained',
+            title: 'Missing from list',
+            messages: [f.user('original', 'Original conversation')],
+          }),
+        ])
+        await a.db.addStagingSession(f.session({ id: 'unfinished', title: 'Interrupted import' }))
+        await a.db.saveStagingFiles([{ id: 'unfinished-file', blob: new Blob(['partial import']) }])
+        await new Promise((resolve, reject) => {
+          const open = indexedDB.open('freeseek')
+          open.onerror = () => reject(open.error)
+          open.onsuccess = () => {
+            const db = open.result
+            const tx = db.transaction('sessionSummaries', 'readwrite')
+            tx.objectStore('sessionSummaries').delete('retained')
+            tx.oncomplete = () => {
+              db.close()
+              resolve()
+            }
+            tx.onabort = () => {
+              db.close()
+              reject(tx.error)
+            }
+          }
+        })
+      })
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      const state = await page.evaluate(
+        async (archives) => {
+          const a = window.__audit
+          const before = a.store.useChatStore.getState().sessions.map(({ id }) => id)
+          const cleaned = (await a.diagnostics.readDiagnosticLogs()).events.some(
+            ({ event, details }) => event === 'history.staging-cleared' && details.originals === 1
+          )
+          const rejected = []
+          for (const b64 of archives) {
+            try {
+              await a.backup.importHistory(
+                new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'empty.zip')
+              )
+              rejected.push(null)
+            } catch (error) {
+              rejected.push(error.key)
+            }
+          }
+          return {
+            before,
+            cleaned,
+            rejected,
+            after: (await a.db.loadSessionSummaries()).map(({ id }) => id),
+            message: (await a.db.loadSession('retained')).messages[0].content,
+          }
+        },
+        [emptyNative, emptyOfficial].map((data) => Buffer.from(data).toString('base64'))
+      )
+      assert.deepEqual(state, {
+        before: ['retained'],
+        cleaned: true,
+        rejected: ['backupEmptyHistory', 'backupEmptyHistory'],
+        after: ['retained'],
+        message: 'Original conversation',
+      })
+    }
+  )
+
+  await run(
+    'ZIP64 history imports large-format offsets and an invalid CRC keeps the current chat',
+    async (page) => {
+      const original = 'Original ZIP64 attachment'
+      const manifest = {
+        freeseek_backup_version: 2,
+        sessions: ['zip64'],
+        files: [{ id: 'attachment', size: original.length, type: 'text/plain' }],
+        personas: [],
+        defaultPersonaId: 'builtin-default',
+      }
+      const session = {
+        id: 'zip64',
+        title: 'ZIP64 backup',
+        createdAt: 1720000000000,
+        updatedAt: 1720000001000,
+        messages: [
+          {
+            id: 'question',
+            role: 'user',
+            content: 'Imported ZIP64 history',
+            createdAt: 1720000000000,
+            files: [
+              {
+                id: 'attachment',
+                name: 'sample.txt',
+                serverId: null,
+                size: original.length,
+                isImage: false,
+                mimeType: 'text/plain',
+              },
+            ],
+          },
+        ],
+      }
+      const bytes = zip64Fixture({
+        'manifest.json': strToU8(JSON.stringify(manifest)),
+        'freeseek/sessions/zip64.json': strToU8(JSON.stringify(session)),
+        'freeseek/files/attachment.bin': strToU8(original),
+      })
+      const corrupt = Buffer.from(bytes)
+      const index = corrupt.indexOf(original)
+      assert.ok(index > 0)
+      corrupt[index] ^= 1
+      const result = await page.evaluate(
+        async ({ valid, bad }) => {
+          const a = window.__audit,
+            f = a.fixtures
+          const file = (data) =>
+            new File([Uint8Array.from(atob(data), (char) => char.charCodeAt(0))], 'backup.zip')
+          await a.seed([
+            f.session({ id: 'keep', messages: [f.user('original', 'Keep my original chat')] }),
+          ])
+          let reason
+          try {
+            await a.backup.importHistory(file(bad))
+          } catch (error) {
+            reason = error.key
+          }
+          const retained = (await a.db.loadSession('keep')).messages[0].content
+          const put = IDBObjectStore.prototype.put
+          let count
+          try {
+            IDBObjectStore.prototype.put = function (value, ...args) {
+              if (this.name === 'files' || this.name === 'sessions') {
+                throw new DOMException(
+                  'The final copy exceeds the demo storage limit',
+                  'QuotaExceededError'
+                )
+              }
+              return put.call(this, value, ...args)
+            }
+            count = await a.backup.importHistory(file(valid))
+          } finally {
+            IDBObjectStore.prototype.put = put
+          }
+          return {
+            reason,
+            retained,
+            count,
+            chat: (await a.db.loadSession('zip64')).messages[0].content,
+            attachment: await (await a.db.loadFile('attachment')).text(),
+          }
+        },
+        { valid: bytes.toString('base64'), bad: corrupt.toString('base64') }
+      )
+      assert.deepEqual(result, {
+        reason: 'backupIncomplete',
+        retained: 'Keep my original chat',
+        count: 1,
+        chat: 'Imported ZIP64 history',
+        attachment: original,
+      })
+    }
+  )
+
+  await run(
+    'history imports a ZIP larger than 64 MB and keeps the attachment after reopening',
+    async (page) => {
+      const size = 80 * 1024 * 1024
+      const bytes = new Uint8Array(size)
+      bytes[0] = 42
+      bytes[size - 1] = 99
+      const session = {
+        id: 'big-backup',
+        title: '带大附件的备份',
+        createdAt: 1720000000000,
+        updatedAt: 1720000001000,
+        messages: [
+          {
+            id: 'question',
+            role: 'user',
+            content: '完整附件',
+            createdAt: 1720000000000,
+            files: [
+              {
+                id: 'original',
+                name: 'attachment.txt',
+                mimeType: 'text/plain',
+                size,
+                isImage: false,
+                serverId: null,
+              },
+            ],
+          },
+        ],
+      }
+      const manifest = {
+        freeseek_backup_version: 2,
+        sessions: [session.id],
+        files: [{ id: 'original', type: 'text/plain', size }],
+        personas: [],
+        defaultPersonaId: 'builtin-default',
+      }
+      const zip = zipSync(
+        {
+          'manifest.json': strToU8(JSON.stringify(manifest)),
+          'freeseek/sessions/big-backup.json': strToU8(JSON.stringify(session)),
+          'freeseek/files/original.bin': bytes,
+        },
+        { level: 0 }
+      )
+      assert.ok(zip.byteLength > 80 * 1024 * 1024)
+      const file = resolve('tmp/regression/big-backup.zip')
+      await mkdir(resolve('tmp/regression'), { recursive: true })
+      await writeFile(file, zip)
+      try {
+        await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+        await page.locator('input[type="file"][accept*="application/zip"]').setInputFiles(file)
+        await page.getByRole('button', { name: '开始导入', exact: true }).click()
+        await page
+          .getByRole('dialog', { name: '导入完成', exact: true })
+          .waitFor({ timeout: 120000 })
+        await unlink(file)
+        await page.reload()
+        await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+        const stored = await page.evaluate(async () => {
+          const a = window.__audit,
+            chat = await a.db.loadSession('big-backup'),
+            attachment = await a.db.loadFile('original')
+          return {
+            text: chat.messages[0].content,
+            bytes: attachment.size,
+            first: new Uint8Array(await attachment.slice(0, 1).arrayBuffer())[0],
+            last: new Uint8Array(await attachment.slice(-1).arrayBuffer())[0],
+          }
+        })
+        assert.deepEqual(stored, { text: '完整附件', bytes: size, first: 42, last: 99 })
+      } finally {
+        await unlink(file).catch(() => {})
+      }
+    }
+  )
+
+  await run(
+    'history import explains insufficient space and keeps the existing chat',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        await a.seed([f.session({ id: 'keep', messages: [f.user('old', '原来的聊天')] })])
+        const archive = await a.exportArchive([
+          f.session({ id: 'incoming', messages: [f.user('new', '新聊天')] }),
+        ])
+        const add = IDBObjectStore.prototype.add
+        try {
+          IDBObjectStore.prototype.add = function (value, ...args) {
+            if (this.name === 'sessionsStaging')
+              throw new DOMException('Fixture storage quota', 'QuotaExceededError')
+            return add.call(this, value, ...args)
+          }
+          await a.backup.importHistory(new File([archive], 'backup.zip'))
+          return { failure: null }
+        } catch (error) {
+          return {
+            failure: error.key,
+            retained: (await a.db.loadSession('keep')).messages[0].content,
+            incoming: Boolean(await a.db.loadSession('incoming')),
+          }
+        } finally {
+          IDBObjectStore.prototype.add = add
+        }
+      })
+      assert.deepEqual(result, {
+        failure: 'backupStorageFull',
+        retained: '原来的聊天',
+        incoming: false,
+      })
+    }
+  )
+
+  await run(
+    'large native backup restores split parts and a missing part cannot replace history',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures,
+          id = 'large-native'
+        const usage = {
+          input_tokens: 200,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 40,
+          output_tokens: 80,
+        }
+        const messages = Array.from({ length: 12000 }, (_, i) => [
+          f.user(
+            'q' + i,
+            'Original question ' + i,
+            i === 0
+              ? {
+                  files: [
+                    {
+                      id: 'native-attachment',
+                      serverId: null,
+                      name: 'sample.txt',
+                      size: 14,
+                      mimeType: 'text/plain',
+                      isImage: false,
+                    },
+                  ],
+                }
+              : {}
+          ),
+          f.assistant('a' + i, 'Original answer ' + i, {
+            responseModel: 'deepseek-flash',
+            connection: { providerId: 'deepseek' },
+            thinking: true,
+            reasoning: { adapter: 'deepseek', level: 'high' },
+            search: false,
+            stopReason: 'end_turn',
+            systemPrompt: 'Write a note.',
+            blocks: [
+              { type: 'thinking', thinking: 'Example reasoning', elapsedSeconds: 1 },
+              { type: 'text', text: 'Original answer ' + i },
+            ],
+            usage,
+            usageHistory: [{ createdAt: Date.now(), usage, model: 'deepseek-flash' }],
+          }),
+        ]).flat()
+        const session = a.branches.appendBranch(
+          f.session({
+            id,
+            messages,
+            pinned: true,
+            inherited: {
+              fromId: 'parent',
+              fromTitle: 'Parent',
+              messages: [f.user('iq', 'Earlier input'), f.assistant('ia', 'Earlier output')],
+            },
+            compressionUsage: [
+              {
+                createdAt: Date.now(),
+                model: 'deepseek-flash',
+                connection: { providerId: 'deepseek' },
+                usage,
+              },
+            ],
+          }),
+          messages.at(-2).id,
+          [f.assistant('alternative', 'Last alternative')]
+        )
+        const original = new Blob(['original bytes'], { type: 'text/plain' })
+        const zip = await a.exportArchive([session], async () => original)
+        const file = new File([zip], 'native-split.zip')
+        const parts = []
+        let manifest
+        for await (const entry of a.readArchive(file)) {
+          const blob = await a.readEntry(entry)
+          if (entry.path === 'manifest.json') manifest = JSON.parse(await blob.text())
+          if (entry.path !== 'freeseek/sessions/large-native/2.json')
+            parts.push({ name: entry.path, blob })
+        }
+        await a.backup.importHistory(file)
+        const recovered = await a.db.loadSession(id)
+        const storedFile = await a.db.loadFile('native-attachment')
+        let rejected
+        try {
+          const incomplete = await a.writeArchive(parts)
+          await a.backup.importHistory(new File([incomplete], 'missing-part.zip'))
+        } catch (error) {
+          rejected = error.key
+        }
+        return {
+          version: manifest.freeseek_backup_version,
+          pieces: manifest.splitSessions[0].parts,
+          count: recovered.messages.length,
+          last: a.branches.getVisibleMessages(recovered).at(-1).id,
+          alternate: recovered.messages.at(-2).blocks.at(-1).text,
+          inherited: recovered.inherited.messages[1].blocks[0].text,
+          compression: recovered.compressionUsage[0].usage.output_tokens,
+          original: await storedFile.text(),
+          rejected,
+          afterFailure: (await a.db.loadSession(id)).messages.length,
+        }
+      })
+      const { pieces, ...rest } = result
+      assert.ok(pieces > 1)
+      assert.deepEqual(rest, {
+        version: 3,
+        count: 24001,
+        last: 'alternative',
+        alternate: 'Original answer 11999',
+        inherited: 'Earlier output',
+        compression: 80,
+        original: 'original bytes',
+        rejected: 'backupIncomplete',
+        afterFailure: 24001,
+      })
+    }
+  )
+  await run(
     'early cursor exhaustion aborts replacement and keeps all original records',
     async (page) => {
       const result = await page.evaluate(async () => {
@@ -125,8 +598,8 @@ export const runImportCases = async ({ run }) => {
   await run(
     'large official JSON imports through the UI, stays responsive, and round-trips without truncation',
     async (page) => {
-      const fixture = officialFixture()
-      assert.ok(fixture.jsonBytes > 64 * 1024 * 1024)
+      const fixture = officialFixture(136)
+      assert.ok(fixture.jsonBytes > 128 * 1024 * 1024)
       await page.evaluate(async () => {
         const a = window.__audit
         await a.seed([
@@ -156,7 +629,13 @@ export const runImportCases = async ({ run }) => {
         const a = window.__audit,
           imported = await a.db.loadSession('official-large-0')
         const backup = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([backup.blob], backup.name))
+        const file = new File([backup.blob], backup.name)
+        const entries = a.readArchive(file)
+        const first = await entries.next()
+        const manifest = JSON.parse(await (await a.readEntry(first.value)).text())
+        await entries.return()
+        await a.backup.importHistory(file)
+        await a.db.renameSession('official-large-0', '长会话改名')
         const restored = await a.db.loadSession('official-large-0')
         return {
           count: a.store.useChatStore.getState().sessions.length,
@@ -165,6 +644,8 @@ export const runImportCases = async ({ run }) => {
           identical: restored.messages[0].content === imported.messages[0].content,
           reply: restored.messages[1].blocks[0].text,
           pinned: restored.pinned,
+          title: restored.title,
+          version: manifest.freeseek_backup_version,
           ticks: window.__importTicks,
         }
       })
@@ -174,6 +655,8 @@ export const runImportCases = async ({ run }) => {
       assert.equal(result.identical, true)
       assert.equal(result.reply, '回答也完整保留')
       assert.equal(result.pinned, true)
+      assert.equal(result.title, '长会话改名')
+      assert.equal(result.version, 4)
       assert.ok(result.ticks > 5, 'long parsing must yield to the UI')
     }
   )

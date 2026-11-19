@@ -1,5 +1,6 @@
 import { memo, useRef, type RefObject } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { supportsOfficialChatExtensions } from '../../services/api/types.js'
 import {
   activeReasoning,
   providerModelLabel,
@@ -7,6 +8,7 @@ import {
   useProviders,
 } from '../../services/providers.js'
 import {
+  setProSearchOn,
   setSearch,
   setThirdPartySearchOn,
   thirdPartySearchKey,
@@ -57,8 +59,18 @@ export const ComposerToolbar = memo(function ComposerToolbar({
   const switchable = Boolean(
     control?.levels.includes('off') && control.levels.some((value) => value !== 'off')
   )
-  const searchReady = official || Boolean(thirdPartySearchKey(settings))
-  const searchOn = official ? settings.search : settings.thirdPartySearchOn
+  const embeddedSearch = official && supportsOfficialChatExtensions(selection.model)
+  const searchReady = embeddedSearch || Boolean(thirdPartySearchKey(settings))
+  const searchOn = embeddedSearch
+    ? settings.search
+    : official
+      ? settings.proSearchOn
+      : settings.thirdPartySearchOn
+  const searchHint = !searchReady
+    ? 'thirdPartySearchSetupHint'
+    : embeddedSearch
+      ? 'deactivatedSearchTooltip'
+      : 'thirdPartySearchPricing'
   const title = t('reasoningStrength')
   const panel = useOptionPanel(title, {
     kind: 'reasoning',
@@ -164,9 +176,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
             </button>
           </Tooltip>
         )}
-        <Tooltip
-          content={t(searchReady ? 'deactivatedSearchTooltip' : 'thirdPartySearchSetupHint')}
-        >
+        <Tooltip content={t(searchHint)}>
           <button
             type="button"
             className={styles.tool}
@@ -180,8 +190,10 @@ export const ComposerToolbar = memo(function ComposerToolbar({
                 showToast({ key: 'thirdPartySearchSetupHint' })
                 return
               }
-              if (official) {
+              if (embeddedSearch) {
                 setSearch(!searchOn)
+              } else if (official) {
+                setProSearchOn(!searchOn)
               } else {
                 setThirdPartySearchOn(!searchOn)
               }

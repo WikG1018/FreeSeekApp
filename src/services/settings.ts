@@ -33,6 +33,7 @@ type Settings = {
   showReasoningPicker: boolean
   thirdPartySearch: ThirdPartySearch
   thirdPartySearchOn: boolean
+  proSearchOn: boolean
 }
 
 const KEYS = {
@@ -51,6 +52,7 @@ const KEYS = {
   showReasoningPicker: 'freeseek:show-reasoning-picker',
   thirdPartySearch: 'freeseek:third-party-search',
   thirdPartySearchOn: 'freeseek:third-party-search-on',
+  proSearchOn: 'freeseek:pro-search-on',
 } as const
 
 const read = (key: string) => {
@@ -155,6 +157,7 @@ export const useSettings = create<Settings>(() => ({
   showReasoningPicker: read(KEYS.showReasoningPicker) === 'true',
   thirdPartySearch: initialThirdPartySearch(),
   thirdPartySearchOn: read(KEYS.thirdPartySearchOn) === 'true',
+  proSearchOn: read(KEYS.proSearchOn) === 'true',
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
@@ -221,6 +224,7 @@ export const saveThirdPartySearch = (value: ThirdPartySearch) => {
   useSettings.setState({ thirdPartySearch })
   if (!thirdPartySearch.enabled) {
     setThirdPartySearchOn(false)
+    setProSearchOn(false)
   }
   return true
 }
@@ -228,6 +232,11 @@ export const saveThirdPartySearch = (value: ThirdPartySearch) => {
 export const setThirdPartySearchOn = (thirdPartySearchOn: boolean) => {
   write(KEYS.thirdPartySearchOn, String(thirdPartySearchOn))
   useSettings.setState({ thirdPartySearchOn })
+}
+
+export const setProSearchOn = (proSearchOn: boolean) => {
+  write(KEYS.proSearchOn, String(proSearchOn))
+  useSettings.setState({ proSearchOn })
 }
 
 export const setFontScale = (fontScale: number) => {

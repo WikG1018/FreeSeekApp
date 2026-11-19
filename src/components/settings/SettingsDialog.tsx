@@ -874,8 +874,9 @@ const useHistoryImport = () => {
       setPhase('idle')
     } catch (error) {
       // 失败时保留文件与弹窗：把原因写在按钮上方，可直接重试
-      setErrorKey(error instanceof BackupError ? error.key : 'historyImportFailed')
-      setStatus({ key: 'historyImportFailed', error: true })
+      const key = error instanceof BackupError ? error.key : 'historyImportFailed'
+      setErrorKey(key)
+      setStatus({ key, error: true })
       setPhase('idle')
     } finally {
       importing.current = false

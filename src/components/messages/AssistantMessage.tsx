@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { memo, useState } from 'react'
 import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
+import { contextWasRejected } from '../../services/chat/contextCompression.js'
 import { canContinueReply } from '../../services/chat/reply.js'
 import {
   continueReply,
@@ -58,6 +59,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   const panelEntry = useSearchPanel((state) => state.entry)
   const notice = streaming ? null : describeReply(message)
   const compressionPrompt = message.error?.localMessage?.key === 'compressionSuggested'
+  const rejectedContext = contextWasRejected(message.error?.localMessage)
+  const summaryExhausted = message.error?.localMessage?.key === 'compressionStillTooLong'
   const projection = compressionPrompt ? message.error?.localMessage?.params : undefined
   // 安全拒绝：已下发的思考与正文按协议丢弃，只显示模板答复。
   const refused = message.stopReason === 'refusal'
@@ -150,27 +153,48 @@ export const AssistantMessage = memo(function AssistantMessage({
             ) : null}
             {(notice.action === 'compression' || notice.action === 'newChat') && (
               <div className={styles.contextActions}>
-                {message.error?.localMessage?.key !== 'compressionUnavailable' && (
+                {!summaryExhausted &&
+                  message.error?.localMessage?.key !== 'compressionUnavailable' && (
+                    <Button
+                      size="s"
+                      variant={notice.action === 'compression' ? 'primary' : 'outlined'}
+                      disabled={busy}
+                      onClick={() => retryContextReply(sessionId, message.id, 'compress')}
+                    >
+                      {t(
+                        compressionPrompt
+                          ? 'compressTitle'
+                          : notice.action === 'newChat'
+                            ? 'compressionRetry'
+                            : 'compressionResume'
+                      )}
+                    </Button>
+                  )}
+                {rejectedContext ? (
                   <Button
                     size="s"
-                    variant={notice.action === 'compression' ? 'primary' : 'outlined'}
+                    variant={summaryExhausted ? 'primary' : 'outlined'}
                     disabled={busy}
-                    onClick={() => retryContextReply(sessionId, message.id, 'compress')}
+                    onClick={() => retryContextReply(sessionId, message.id, 'recent')}
                   >
-                    {t(notice.action === 'newChat' ? 'compressionRetry' : 'compressTitle')}
+                    {t('compressionUseRecent')}
                   </Button>
-                )}
-                {notice.action === 'compression' && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className={styles.noticeAction}
-                    onClick={() => retryContextReply(sessionId, message.id, 'send')}
-                  >
-                    {t('compressionSendOnce')}
-                  </button>
+                ) : (
+                  notice.action === 'compression' && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className={styles.noticeAction}
+                      onClick={() => retryContextReply(sessionId, message.id, 'send')}
+                    >
+                      {t('compressionSendOnce')}
+                    </button>
+                  )
                 )}
               </div>
+            )}
+            {rejectedContext && (
+              <div className={styles.compressionEstimate}>{t('compressionRecentHint')}</div>
             )}
             {notice.action === 'newChat' ? (
               <button type="button" className={styles.noticeAction} onClick={newChat}>

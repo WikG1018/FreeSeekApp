@@ -11,6 +11,12 @@ export const en = {
     'Attachments or request are too large. Reduce attachments and retry; originals are retained.',
   providerHttpError:
     'Service returned HTTP {status}. Check the URL, key, model access and parameters.',
+  providerOpenCodeGoUnauthorized:
+    'OpenCode Go rejected the key. Check that it belongs to a workspace with an active Go subscription.',
+  providerOpenCodeGoForbidden:
+    'OpenCode Go denied this request. Check the subscription, key permissions and model access in the Console.',
+  providerOpenCodeGoQuota:
+    'OpenCode Go returned an insufficient quota error. Check your usage in the Console.',
   providerNetworkError:
     'Cannot reach the service. Check the URL, network and local network permission. Web browsers also require CORS support.',
   providerModelsEmpty: 'No models found. Enter a model ID manually and test it.',
@@ -28,6 +34,8 @@ export const en = {
     'PDF input is disabled. Enable it in advanced settings if the service supports it.',
   providerProNoImages:
     'DeepSeek V4 Pro does not support images. Use Flash for this chat, or start a text-only chat.',
+  replyProExtensionsUnavailable:
+    'DeepSeek V4 Pro rejected these web tools and automatic titles. Regenerate to continue, or enable standalone search in Chat web search.',
   providerConfigChanged: 'The original configuration has changed. Select a model and regenerate.',
   providerConfigMissing:
     'The original service configuration is unavailable. Configure it or select a model and regenerate.',
@@ -71,16 +79,21 @@ export const en = {
   replyDocumentInputLimit:
     'This message still exceeds the server limit for document count or parsed text. Send fewer attachments or split the document.',
   composerMessage: 'Message',
+  messageImageOpen: 'View image {name}',
+  messageImageClose: 'Close image preview',
+  messageImageUnavailable: 'This image could not be displayed.',
   providerSwitch: 'Switch model',
   providerShowSwitcher: 'Show model switcher in chat',
   providerConnections: 'Connections',
   providerDefaultNamed: 'Default {model}',
-  providerSearchConfigured: 'DeepSeek Search enabled for third-party models',
+  providerSearchConfigured: 'DeepSeek Search for Pro and third-party models',
   providerConnectionAdvanced: 'Advanced connection options',
   providerConnectionAdvancedHint: 'Model list URL, request headers and input capabilities',
   providerMore: 'More',
   providerPlanKey: 'Subscription key',
   providerPastePlanKey: 'Paste your Token Plan API key',
+  providerOpenCodeGoKey: 'OpenCode Go key',
+  providerPasteOpenCodeGoKey: 'Paste a key from a workspace subscribed to Go',
   providerPasteApiKey: 'Paste your {provider} API key',
   providerOpenAiCompatible: 'OpenAI compatible',
   providerModelsSearch: 'Search model names or IDs',
@@ -92,8 +105,8 @@ export const en = {
   providerNotSet: 'Not set',
   providerMoreSaveActions: 'More save options',
   providerSaveShort: 'Save',
-  providerSearchThirdParty: 'Third-party models',
-  providerSearchEnableHint: 'Available in the chat toolbar when enabled',
+  providerSearchThirdParty: 'DeepSeek V4 Pro and third-party models',
+  providerSearchEnableHint: 'Enable here, then turn on search in the model’s chat toolbar',
   providerSearchGroup: 'Search configuration',
   providerSearchBackend: 'Standalone search API',
   providerSearchBilling: 'Billing and data',
@@ -109,6 +122,8 @@ export const en = {
   providerCatalogGemini: 'Google AI Studio',
   providerCatalogOpenAI: 'OpenAI API Platform',
   providerCatalogClaude: 'Claude API Platform',
+  providerCatalogOpenCodeGo: 'Subscription · Go, Go Plus and Go Teams',
+  providerCatalogOpenCodeZen: 'Standard API · Pay as you go',
   providerChooseAccess: 'Choose access type',
   providerContinue: 'Continue',
   providerConnection: 'Connection settings',
@@ -154,7 +169,7 @@ export const en = {
   thirdPartySearchKey: 'Search credential',
   thirdPartySearchOfficialKey: 'Use the official DeepSeek API key',
   thirdPartySearchSeparateKey: 'Use a separate DeepSeek API key',
-  thirdPartySearchPricing: 'Standalone Search API costs about ¥5 per 1,000 requests with results',
+  thirdPartySearchPricing: 'Standalone Search API costs ¥5 per 1,000 requests with results',
   thirdPartySearchPrivacy:
     'With search enabled, the current search query goes to DeepSeek and the results go to the selected model with your message.',
   thirdPartySearchMissingKey:
@@ -642,6 +657,7 @@ export const en = {
   apiKeyVerifying: 'Verifying...',
   confirm: 'Confirm',
   streamIdleTimeout: 'No data received for a long time; check your network and retry',
+  streamConnectionLost: 'The connection dropped while receiving the reply. Please retry.',
   apiImageUnsupported:
     'An image in this conversation was rejected (usually from an older or imported message): remove it from that message to continue',
   apiDocumentImagesUnsupported:
@@ -693,20 +709,29 @@ export const en = {
     'Summarize older turns to make room for your next reply. The current model uses additional tokens to create the summary.',
   compressionSendOnce: 'Send without compressing this time',
   compressionRetry: 'Compress history and retry',
+  compressionResume: 'Resume compression',
+  compressionUseRecent: 'Continue with recent messages',
+  compressionRecentHint:
+    'This sends your current message, attachments, and a few recent turns. If it still exceeds the limit, only the current turn is sent. Your full chat stays on this device.',
+  compressionRecentSummary:
+    'The model is using recent turns. Earlier messages are still in this chat.',
+  compressionRecentApplied: 'Continued with recent messages',
   compressionInputLarge:
     'The current message or its attachments exceed the available context. Split the message or attachments and try again.',
   compressionStillTooLong:
     'The summary and your current message and attachments still exceed the model limit. Shorten the message or split the attachment and send it again.',
   compressionUnavailable: 'There is no earlier history to compress in this conversation.',
-  compressionFailed:
-    'Could not complete the summary. Try compressing again or send without compressing.',
+  compressionFailed: 'Could not finish compressing. Retry to resume from the saved progress.',
   compressionFailedKey:
     'The model service rejected the API key during compression. Check the key and retry.',
   compressionFailedBalance: 'The model balance is too low to compress this chat. Top up and retry.',
   compressionFailedRateLimit:
     'The model service rate-limited the compression request. Wait a moment and retry.',
   compressionFailedNetwork:
-    'The connection was interrupted or timed out during compression. Check your network and retry.',
+    'The connection dropped or timed out during compression. Retrying will reuse the completed parts.',
+  compressionFailedSave:
+    'Could not save the summary. Check your device storage and retry. Your current message is still here.',
+  compressionFailedPaused: 'Compression is paused. Retry to resume from where it stopped.',
   compressionFailedServer: 'The model service could not complete compression. Try again later.',
   compressionFailedContext:
     'The history still exceeds the model limit after splitting. Try a model with a larger context window.',
@@ -717,7 +742,7 @@ export const en = {
   compressionFailedRefused:
     'The model declined to summarize this chat. Your original messages are saved.',
   compressionFailedIncomplete:
-    'The response ended before the summary was complete. Try compressing again.',
+    'Only part of the summary came through. Resume compression to pick up where it stopped.',
   compressionFailedEmpty: 'The model returned an empty summary. Try compressing again.',
   compressionFailedNoSavings:
     'The summary did not free any context. Your chat and its existing summary are saved.',
@@ -843,7 +868,12 @@ export const en = {
   uploadImageTooLarge: 'This image has too many pixels. Resize it before uploading.',
   uploadImageDecodeTimeout: 'Image processing timed out. Retry or resize the image.',
   backupJsonTooLarge:
-    'A record exceeds 128 MB or the safe structural complexity limit. Existing chats are preserved.',
+    'A conversation or index is too large to read. Export it in smaller parts and try again. Existing chats are preserved.',
+  backupStorageFull:
+    'There is not enough storage to import this backup. Free up some space and try again. Existing chats are preserved.',
+  backupEmptyHistory: 'This backup has no conversations. The chats on this device are preserved.',
+  updateHistoryUnsaved:
+    'Chat data is still being saved. Finish saving or importing before installing the update.',
   uploadParseFailed: 'Parsing failed',
   uploadFileCountLimit: 'Uploaded file limit reached ({limit} files). ',
   uploadStorageLimit: 'Uploaded file storage limit reached ({limit} GB). ',

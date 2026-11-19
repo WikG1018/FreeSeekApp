@@ -2,6 +2,230 @@ import assert from 'node:assert/strict'
 
 export const runAndroidStabilityCases = async ({ run, behavior }) => {
   await run(
+    'chat image preview closes on a second tap or Android Back while the same reply finishes',
+    async (page) => {
+      const id = await page.evaluate(async () => {
+        const a = window.__audit
+        const canvas = document.createElement('canvas')
+        canvas.width = 160
+        canvas.height = 100
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+        const file = {
+          id: 'image-preview-file',
+          name: '历史图片.png',
+          size: blob.size,
+          mimeType: 'image/png',
+          isImage: true,
+          serverId: 'saved-image-server-id',
+        }
+        const session = a.fixtures.session({
+          messages: [
+            a.fixtures.user('image-preview-user', '原来的聊天', { files: [file] }),
+            a.fixtures.assistant('image-preview-assistant', '这里有张图片'),
+          ],
+        })
+        await a.seed([session], [{ id: file.id, blob }])
+        a.settings.setApiKey('preview-test-key')
+        const original = window.fetch
+        const encoder = new TextEncoder()
+        window.previewTestRequests = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return original(url, init)
+          window.previewTestRequests++
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                const push = (event) =>
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+                push({
+                  type: 'content_block_start',
+                  index: 0,
+                  content_block: { type: 'text', text: '第一段' },
+                })
+                window.finishPreviewReply = () => {
+                  push({
+                    type: 'content_block_delta',
+                    index: 0,
+                    delta: { type: 'text_delta', text: '继续生成完成' },
+                  })
+                  push({ type: 'content_block_stop', index: 0 })
+                  push({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })
+                  push({ type: 'message_stop' })
+                  controller.close()
+                }
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        }
+        a.drafts.setDraftText(session.id, '继续聊')
+        a.store.sendMessage(session.id)
+        return session.id
+      })
+      await page.getByText('第一段', { exact: true }).waitFor()
+      const thumb = page.getByRole('button', { name: '查看图片 历史图片.png' })
+      const preview = page.getByRole('dialog', { name: '历史图片.png', exact: true })
+      await thumb.click()
+      assert.equal(
+        await preview
+          .getByRole('img', { name: '历史图片.png' })
+          .evaluate((img) => img.naturalWidth),
+        160
+      )
+      await preview.getByRole('button', { name: '关闭图片预览' }).click()
+      await preview.waitFor({ state: 'hidden' })
+      await thumb.click()
+      await preview.waitFor()
+      await page.evaluate(() => window.previewTestBack())
+      await preview.waitFor({ state: 'hidden' })
+      const result = await page.evaluate(async (id) => {
+        const a = window.__audit
+        const active = a.store.useChatStore.getState()
+        const stillStreaming = active.activeId === id && Object.hasOwn(active.streaming, id)
+        window.finishPreviewReply()
+        await a.waitIdle()
+        const reply = a.store.useChatStore.getState().sessionCache[id].messages.at(-1)
+        return {
+          stillStreaming,
+          status: reply.status,
+          text: a.reply.getReplyText(reply),
+          requests: window.previewTestRequests,
+        }
+      }, id)
+      assert.deepEqual(result, {
+        stillStreaming: true,
+        status: 'done',
+        text: '第一段继续生成完成',
+        requests: 1,
+      })
+      assert.equal(page.context().pages().length, 1)
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        const listeners = []
+        window.CapacitorCustomPlatform = { name: 'android' }
+        window.Capacitor = {
+          PluginHeaders: [
+            {
+              name: 'App',
+              methods: [
+                { name: 'addListener', rtype: 'callback' },
+                { name: 'removeListener', rtype: 'promise' },
+                { name: 'getState', rtype: 'promise' },
+              ],
+            },
+          ],
+          nativeCallback: (_, method, options, callback) => {
+            if (method === 'addListener' && options.eventName === 'backButton')
+              listeners.push(callback)
+            return 'preview-test-listener'
+          },
+          nativePromise: async () => ({ isActive: true }),
+        }
+        window.previewTestBack = () =>
+          listeners.forEach((callback) => callback({ canGoBack: false }))
+      })
+    }
+  )
+  await run(
+    'full-screen image viewer keeps the pinch focal point and separates panning from taps',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const canvas = document.createElement('canvas')
+        canvas.width = 260
+        canvas.height = 520
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+        const file = {
+          id: 'pinch-photo',
+          name: '竖版照片.png',
+          size: blob.size,
+          mimeType: 'image/png',
+          isImage: true,
+          serverId: null,
+        }
+        await a.seed(
+          [a.fixtures.session({ messages: [a.fixtures.user('photo', '', { files: [file] })] })],
+          [{ id: file.id, blob }]
+        )
+      })
+      const touch = await page.context().newCDPSession(page)
+      await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 })
+      const contact = (id, x, y) => ({ id, x, y })
+      const send = (type, touchPoints) =>
+        touch.send('Input.dispatchTouchEvent', { type, touchPoints })
+      const thumb = page.getByRole('button', { name: '查看图片 竖版照片.png' })
+      const dialog = page.getByRole('dialog', { name: '竖版照片.png' })
+      const stage = dialog.getByRole('button', { name: '关闭图片预览' })
+      const img = dialog.getByRole('img', { name: '竖版照片.png' })
+      const motion = (locator) =>
+        locator.evaluate((element) => element.getAnimations().map((a) => a.effect.getKeyframes()))
+      const settle = () =>
+        img.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished))
+          await new Promise(requestAnimationFrame)
+        })
+      await thumb.click()
+      await img.waitFor()
+      const opening = await motion(img)
+      assert.ok(
+        opening.some(
+          ([from, to]) => from.transform !== to.transform && from.clipPath !== to.clipPath
+        )
+      )
+      await settle()
+      const initial = await img.boundingBox()
+      const area = await stage.boundingBox()
+      assert.equal(Math.round(area.width), page.viewportSize().width)
+      assert.ok(Math.abs(initial.height / initial.width - 2) < 0.01)
+      const x = initial.x + initial.width * 0.48
+      const y = initial.y + initial.height * 0.51
+      await send('touchStart', [contact(1, x - 40, y), contact(2, x + 40, y)])
+      await send('touchMove', [contact(1, x - 80, y), contact(2, x + 80, y)])
+      await page.waitForFunction(() => !!document.querySelector('[role="dialog"] [data-zoomed]'))
+      const zoomed = await img.boundingBox()
+      assert.ok(
+        Math.abs(zoomed.width / initial.width - 2) < 0.03,
+        JSON.stringify({ initial, zoomed })
+      )
+      assert.ok(Math.abs(x - (zoomed.x + zoomed.width * 0.48)) < 3)
+      assert.ok(Math.abs(y - (zoomed.y + zoomed.height * 0.51)) < 3)
+      await send('touchEnd', [contact(2, x + 80, y)])
+      await send('touchMove', [contact(1, x - 52, y + 32)])
+      await page.waitForFunction(
+        ({ left }) => {
+          const img = document.querySelector('[role="dialog"] img')
+          return img && Math.abs(img.getBoundingClientRect().left - left) < 3
+        },
+        { left: zoomed.x + 28 }
+      )
+      await send('touchEnd', [])
+      assert.ok(await dialog.isVisible())
+
+      // An intentional tap after dragging closes, and returns toward the original square crop.
+      await send('touchStart', [contact(3, x, y)])
+      await send('touchEnd', [])
+      const closing = await motion(img)
+      assert.ok(
+        closing.some(
+          ([from, to]) => from.transform !== to.transform && from.clipPath !== to.clipPath
+        )
+      )
+      await dialog.waitFor({ state: 'hidden' })
+
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.setViewportSize({ width: 750, height: 390 })
+      await thumb.click()
+      const landscape = await img.boundingBox()
+      assert.ok(landscape.height <= 390 && Math.abs(landscape.height / landscape.width - 2) < 0.01)
+      assert.deepEqual(await motion(img), [])
+      await page.keyboard.press('Escape')
+      await dialog.waitFor({ state: 'hidden' })
+      assert.equal(await page.context().pages().length, 1)
+      await touch.detach()
+    }
+  )
+  await run(
     'landscape software keyboard keeps text and send control within the viewport',
     async (page) => {
       await page.setViewportSize({ width: 800, height: 360 })
@@ -202,6 +426,55 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         return { read, name }
       })
       assert.deepEqual(result, { read: false, name: 'backupJsonTooLarge' })
+    }
+  )
+  await run(
+    'failed chat writes preserve the submitted draft and pause update installation',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        await a.seed([
+          f.session({
+            id: 'old',
+            title: 'Saved history',
+            messages: [f.user('u', 'Existing message')],
+          }),
+        ])
+        a.settings.setApiKey('fixture')
+        a.drafts.setDraftText('old', 'Recover this text after restart')
+        a.drafts.flushDraftTexts()
+        const fetch = window.fetch
+        window.fetch = (url, init) =>
+          String(url).endsWith('/messages') ? Promise.resolve(a.response()) : fetch(url, init)
+        const put = IDBObjectStore.prototype.put
+        IDBObjectStore.prototype.put = function (value, ...args) {
+          if (this.name === 'sessions') {
+            throw new DOMException('Fixture write failure', 'QuotaExceededError')
+          }
+          return put.call(this, value, ...args)
+        }
+        a.store.sendMessage('old')
+        await a.waitIdle()
+        return {
+          canInstall: await a.store.saveChatsBeforeRestart(),
+          draft: a.drafts.getDraft('old').text,
+        }
+      })
+      assert.deepEqual(result, { canInstall: false, draft: 'Recover this text after restart' })
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      const reopened = await page.evaluate(async () => {
+        const a = window.__audit
+        return {
+          draft: a.drafts.getDraft('old').text,
+          original: (await a.db.loadSession('old')).messages.map(({ content }) => content),
+        }
+      })
+      assert.deepEqual(reopened, {
+        draft: 'Recover this text after restart',
+        original: ['Existing message'],
+      })
     }
   )
   await run(

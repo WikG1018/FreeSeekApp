@@ -40,6 +40,7 @@ jobs:
           - { api: 29, image: '29', tag: google_apis }
           - { api: 30, image: '30', tag: google_apis }
           - { api: 31, image: '31', tag: google_apis }
+          - { api: 32, image: '32', tag: google_apis }
           - { api: 33, image: '33', tag: google_apis }
           - { api: 34, image: '34', tag: google_apis }
           - { api: 35, image: '35', tag: google_apis }

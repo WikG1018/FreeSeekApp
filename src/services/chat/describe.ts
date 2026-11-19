@@ -1,7 +1,6 @@
 import { isTranslationKey, translate } from '../../i18n/index.js'
 import { classifyStatus, describeKnownApiError } from '../api/errors.js'
-import { isContextRejection } from '../api/knownErrors.js'
-import { isCompressionFailure } from './contextCompression.js'
+import { contextWasRejected, isCompressionFailure } from './contextCompression.js'
 import type { AssistantMessage } from './types.js'
 
 export type Notice = {
@@ -48,7 +47,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     ) {
       return { text: message, action: 'compression' }
     }
-    if (isContextRejection(localMessage?.key)) {
+    if (contextWasRejected(localMessage)) {
       const { requestedTokens, contextLimitTokens, requestDocumentCount, documentLimit } =
         localMessage?.params ?? {}
       const detail =

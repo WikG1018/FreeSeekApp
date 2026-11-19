@@ -9,7 +9,7 @@ import {
   type PayMethod,
 } from '../../services/donate.js'
 import { closeTopModal, Modal } from '../base/Modal.js'
-import { IconCheckOutline16, IconRightUpOutline14 } from '../base/icons.js'
+import { IconCheckOutline16 } from '../base/icons.js'
 import { SupportMark, useDocumentVisible } from './SupportMark.js'
 import styles from './DonateDialog.module.css'
 
@@ -49,6 +49,7 @@ export const DonateDialog = ({
 }) => {
   const t = useTranslate()
   const group = useId()
+  const scanInstructions = useId()
   const [method, setMethod] = useState<PayMethod>('wechat')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ saved: boolean; opened: boolean } | null>(null)
@@ -173,14 +174,20 @@ export const DonateDialog = ({
       mainClassName={thanks ? styles.thanksMain : undefined}
       footer={
         !thanks && (
-          <button type="button" className={styles.pay} disabled={busy} onClick={() => void pay()}>
-            <span>
+          <div className={styles.payFooter}>
+            <button
+              type="button"
+              className={styles.pay}
+              aria-describedby={scanInstructions}
+              disabled={busy}
+              onClick={() => void pay()}
+            >
               {busy ? t('donateWorking') : t('donateSaveAndOpen', { app: label(method) })}
-            </span>
-            <span className={styles.payArrow} aria-hidden="true">
-              <IconRightUpOutline14 />
-            </span>
-          </button>
+            </button>
+            <p id={scanInstructions} className={styles.scanInstructions}>
+              {t('donateStepNext', { app: label(method) })}
+            </p>
+          </div>
         )
       }
     >
@@ -244,7 +251,6 @@ export const DonateDialog = ({
                   app: label(method),
                 })}
               </span>
-              {!done.opened && <span>{t('donateStepNext', { app: label(method) })}</span>}
             </div>
           )}
         </div>

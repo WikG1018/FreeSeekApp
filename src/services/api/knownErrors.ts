@@ -14,6 +14,13 @@ export const describeKnownApiError = (
   code = ''
 ): TranslationMessage | undefined => {
   if (
+    /\bdeepseek-v4-pro\b/i.test(message) &&
+    /server[-\s]side tool calls|title generation|deepseek_(?:web_search|read_url)/i.test(message) &&
+    /unavailable|not supported|does not support/i.test(message)
+  ) {
+    return { key: 'replyProExtensionsUnavailable' }
+  }
+  if (
     /\brich_layout_recognition\b/i.test(message) &&
     /\bcontains\s+images\b[\s\S]{0,48}\bnot\s+supported\s+by\s+(?:this|the(?: current)?)\s+model\b/i.test(
       message

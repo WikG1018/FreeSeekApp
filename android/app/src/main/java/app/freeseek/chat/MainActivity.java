@@ -22,6 +22,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DonatePlugin.class);
         registerPlugin(UpdatePlugin.class);
         registerPlugin(BackupPlugin.class);
+        registerPlugin(HistoryFilesPlugin.class);
         registerPlugin(DiagnosticsPlugin.class);
         registerPlugin(CustomHttpPlugin.class);
         registerPlugin(DiagnosticSharePlugin.class);

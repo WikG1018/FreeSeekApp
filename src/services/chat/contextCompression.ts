@@ -1,10 +1,12 @@
 import { ApiError, streamMessage } from '../api/client.js'
 import { classifyApiError, type ApiErrorCondition } from '../api/errors.js'
-import { apiLimitCounts } from '../api/knownErrors.js'
+import { apiLimitCounts, isContextRejection } from '../api/knownErrors.js'
 import { streamProviderMessage } from '../api/providerClient.js'
 import type { MessageUsage, StopReason } from '../api/types.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
-import type { TranslationKey, TranslationMessage } from '../../i18n/index.js'
+import type { TranslationKey, TranslationMessage, TranslationParams } from '../../i18n/index.js'
+import { abortableDelay } from '../../utils/abort.js'
+import { createId } from '../../utils/id.js'
 import { providerOutputBudget, type Connection } from '../providers.js'
 import { customReasoning, disabledReasoning } from '../reasoning.js'
 import { getContextRounds, getReplyText } from './reply.js'
@@ -23,6 +25,8 @@ export type SummaryPlan = {
   end: number
   limit?: number
   historyEstimate?: ContextSummary['historyEstimate']
+  /** Before partial recovery was introduced, a recovery checkpoint covered the full prefix. */
+  legacyEnd?: number
 }
 export type ContextModel = { kind: 'deepseek' } | Extract<Connection, { kind: 'custom' }>
 export const MAX_SUMMARY_CHARS = 16000
@@ -31,6 +35,8 @@ const MAX_SEGMENT_CHARS = 128 * 1024
 const MIN_SEGMENT_CHARS = 32
 const MAX_SEGMENT_WINDOW = 64 * 1024
 const MAX_SEGMENT_MS = 180_000
+const MAX_READ_RETRIES = 2
+const MAX_PASS_MS = 300_000
 export const contextRounds = (history: Message[], inherited?: { messages: Message[] } | null) => [
   ...getContextRounds(inherited?.messages ?? []),
   ...getContextRounds(history),
@@ -71,6 +77,14 @@ const compressionStatus: Partial<Record<ApiErrorCondition, TranslationKey>> = {
 
 export const isCompressionFailure = (key?: TranslationKey) =>
   key?.startsWith('compressionFailed') ?? false
+
+export const contextWasRejected = (message?: TranslationMessage) =>
+  isContextRejection(message?.key) ||
+  message?.key === 'compressionStillTooLong' ||
+  (message?.params?.recoverContext === 1 &&
+    !['compressionInputLarge', 'replyDocumentInputLimit', 'replyOutputLimitInvalid'].includes(
+      message.key
+    ))
 
 export const describeCompressionFailure = (error: unknown): TranslationMessage => {
   if (!(error instanceof ApiError)) {
@@ -172,7 +186,64 @@ export const estimateContextHistory = (rounds: ContextRound[], summary?: Context
   const sizes = rounds.slice(summary?.coveredRounds ?? 0).map(roundTokens)
   return {
     sizes,
-    tokens: estimatedTokens(summary?.text ?? '') + sizes.reduce((total, size) => total + size, 0),
+    tokens:
+      estimatedTokens(summary?.recentOnly ? '' : (summary?.text ?? '')) +
+      sizes.reduce((total, size) => total + size, 0),
+  }
+}
+
+/** Preserve most of the original context when the service only needs a little more room. */
+export const planRecoveryCompression = (
+  rounds: ContextRound[],
+  summary: ContextSummary | undefined,
+  connection: Connection,
+  rejection?: TranslationParams
+): SummaryPlan => {
+  const start = summary?.coveredRounds ?? 0
+  const limit = Number(rejection?.contextLimitTokens) || contextLength(connection)
+  const window = limit ?? 8192
+  const { sizes, tokens } = estimateContextHistory(rounds, summary)
+  const overflow = limit ? Math.max(0, (Number(rejection?.requestedTokens) || limit) - limit) : 0
+  const padding = Math.min(24_576, Math.max(512, Math.floor(window / 32)))
+  const target = Math.min(131_072, overflow + padding + summaryOutputBudget(connection, window))
+  let removed = 0,
+    end = start
+  // A document count/size rejection must remove the affected older references as well as text.
+  const rejectedDocuments =
+    rejection?.rejectionKey === 'replyDocumentCountLimit' ||
+    rejection?.rejectionKey === 'replyDocumentTextLimit'
+  while (end < rounds.length && (rejectedDocuments || removed < target)) {
+    removed += sizes[end - start]
+    end++
+  }
+  return {
+    start,
+    end,
+    limit,
+    historyEstimate: {
+      before: tokens,
+      after: tokens - removed + Math.min(removed, summaryOutputBudget(connection, window)),
+    },
+    legacyEnd: rounds.length,
+  }
+}
+
+/** A user-selected context boundary. Keep the original messages, attachments, and reply branches. */
+export const recentChatContext = (
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  keep: number
+): ContextSummary | undefined => {
+  if (!rounds.length) {
+    return undefined
+  }
+  const coveredRounds = Math.max(1, rounds.length - keep, prior?.coveredRounds ?? 0)
+  return {
+    text: '[Earlier messages retained locally]',
+    recentOnly: true,
+    coveredRounds,
+    signature: prefixSignature(rounds, coveredRounds),
+    updatedAt: Date.now(),
   }
 }
 
@@ -271,12 +342,16 @@ async function summarizeChunk(
   connection: Connection,
   system: string,
   input: string,
+  offset: number,
   segmentLength: number,
   maxTokens: number,
+  timeoutMs: number,
   signal: AbortSignal,
+  sessionId: string,
   charge: (item: CompressionCharge) => void
 ) {
   const provider = connection.kind === 'custom' ? connection.profile : undefined
+  const requestId = createId()
   const controller = new AbortController()
   const cancel = () => controller.abort(signal.reason)
   signal.addEventListener('abort', cancel, { once: true })
@@ -284,7 +359,7 @@ async function summarizeChunk(
   const deadline = setTimeout(() => {
     timedOut = true
     controller.abort()
-  }, MAX_SEGMENT_MS)
+  }, timeoutMs)
   const events =
     connection.kind === 'custom'
       ? streamProviderMessage(
@@ -293,7 +368,8 @@ async function summarizeChunk(
           [{ role: 'user', content: [{ type: 'text', text: input }] }],
           system,
           controller.signal,
-          disabledReasoning(customReasoning(connection.profile, connection.model))
+          disabledReasoning(customReasoning(connection.profile, connection.model)),
+          { requestId, sessionId }
         )
       : streamMessage(
           connection.apiKey,
@@ -302,11 +378,11 @@ async function summarizeChunk(
             system,
             max_tokens: maxTokens,
             thinking: { type: 'disabled' },
-            tools: [],
             safety_check: { level: 'high' },
             messages: [{ role: 'user', content: input }],
           },
-          controller.signal
+          controller.signal,
+          requestId
         )
   let summary = '',
     reason: StopReason | undefined,
@@ -345,20 +421,27 @@ async function summarizeChunk(
       throw new ApiError('protocol', { key: 'compressionFailedOutput' })
     }
     if (!complete || reason !== 'end_turn') {
-      throw new ApiError('protocol', { key: 'compressionFailedIncomplete' })
+      throw new ApiError('interrupted', { key: 'compressionFailedIncomplete' })
     }
     if (!summary.trim()) {
       throw new ApiError('protocol', { key: 'compressionFailedEmpty' })
     }
     return summary.trim()
   } catch (error) {
-    const failure = timedOut ? new ApiError('network', { key: 'compressionFailedNetwork' }) : error
+    const failure = timedOut
+      ? new ApiError('network', {
+          key: timeoutMs < MAX_SEGMENT_MS ? 'compressionFailedPaused' : 'compressionFailedNetwork',
+        })
+      : error
     if (!signal.aborted) {
       logEvent(
         'chat',
         'compression.segment.failed',
         {
           ...diagnosticError(failure),
+          requestId,
+          offset,
+          segmentElapsedMs: Date.now() - createdAt,
           failureKey: describeCompressionFailure(failure).key,
           segmentChars: segmentLength,
           summaryChars: summary.length,
@@ -388,8 +471,12 @@ async function summarizeChunk(
 }
 
 type SummaryJob = {
+  sessionId: string
   checkpoint?: CompressionCheckpoint
-  record: (charge: CompressionCharge | undefined, checkpoint?: CompressionCheckpoint) => void
+  record: (
+    charge: CompressionCharge | undefined,
+    checkpoint?: CompressionCheckpoint
+  ) => Promise<void>
   progress: (percent: number) => void
 }
 
@@ -407,30 +494,63 @@ export async function generateContextSummary(
   if (connection.kind === 'deepseek' && !connection.apiKey) {
     throw new ApiError('protocol', { key: 'compressionNoKey' })
   }
-  const signature = prefixSignature(rounds, plan.end)
-  const scope = textSignature([
-    'compression-1',
-    connection.kind,
-    connection.model,
-    connection.kind === 'custom' ? connection.profile.id : '',
-    connection.kind === 'custom' ? connection.profile.revision : '',
-    String(plan.start),
-    String(plan.end),
-    signature,
-    prior?.text ?? '',
-  ])
+  const scopeFor = (end: number, signature: string) =>
+    textSignature([
+      'compression-1',
+      connection.kind,
+      connection.model,
+      connection.kind === 'custom' ? connection.profile.id : '',
+      connection.kind === 'custom' ? connection.profile.revision : '',
+      String(plan.start),
+      String(end),
+      signature,
+      prior?.text ?? '',
+    ])
+  const saved = job.checkpoint
+  const legacyEnd = plan.legacyEnd ?? plan.end
+  let end = plan.end
+  if (
+    saved?.targetRounds &&
+    Number.isSafeInteger(saved.targetRounds) &&
+    saved.targetRounds > end &&
+    saved.targetRounds <= legacyEnd &&
+    saved.scope === scopeFor(saved.targetRounds, prefixSignature(rounds, saved.targetRounds))
+  ) {
+    end = saved.targetRounds
+  }
+  let signature = prefixSignature(rounds, end)
+  let scope = scopeFor(end, signature)
   let total = 0
-  for (const part of transcriptParts(rounds, plan.start, plan.end)) {
+  for (const part of transcriptParts(rounds, plan.start, end)) {
     total += part.length
+  }
+  const legacyCheckpoint =
+    saved &&
+    saved.scope !== scope &&
+    legacyEnd > end &&
+    saved.scope === scopeFor(legacyEnd, prefixSignature(rounds, legacyEnd))
+  if (saved && legacyCheckpoint && Number.isSafeInteger(saved.offset) && saved.offset > total) {
+    // Old checkpoints may end in the middle of a turn. Extend the new plan to include that turn.
+    while (end < legacyEnd && total < saved.offset) {
+      for (const part of transcriptParts(rounds, end, end + 1)) {
+        total += part.length
+      }
+      end++
+    }
+    signature = prefixSignature(rounds, end)
+    scope = scopeFor(end, signature)
   }
   let windowTokens = Math.min(plan.limit ?? 8192, MAX_SEGMENT_WINDOW)
   let outputTokens = Math.min(2048, summaryOutputBudget(connection, windowTokens))
   let segmentLimit = MAX_SEGMENT_CHARS
   let offset = 0
-  let previous = prior?.text ?? ''
-  const saved = job.checkpoint
+  let previous = prior?.recentOnly ? '' : (prior?.text ?? '')
+  let readRetries = 0,
+    lastRetryOffset = -1
+  const deadline = performance.now() + MAX_PASS_MS
   if (
-    saved?.scope === scope &&
+    saved &&
+    (saved.scope === scope || legacyCheckpoint) &&
     Number.isSafeInteger(saved.offset) &&
     saved.offset > 0 &&
     saved.offset <= total &&
@@ -455,7 +575,7 @@ export async function generateContextSummary(
   const showProgress = () => job.progress(Math.floor((offset * 100) / total))
   showProgress()
   for (const source of transcriptChunks(
-    transcriptParts(rounds, plan.start, plan.end),
+    transcriptParts(rounds, plan.start, end),
     offset,
     () => segmentLimit
   )) {
@@ -469,6 +589,10 @@ export async function generateContextSummary(
       const fits =
         estimatedSystemTokens(system) + estimatedTokens(input) + outputTokens <= windowTokens * 0.8
       if (fits && chunk.length <= segmentLimit) {
+        const remainingMs = deadline - performance.now()
+        if (remainingMs <= 0) {
+          throw new ApiError('protocol', { key: 'compressionFailedPaused' })
+        }
         let charge: CompressionCharge | undefined
         let summarized: string | undefined
         try {
@@ -476,25 +600,43 @@ export async function generateContextSummary(
             connection,
             system,
             input,
+            offset,
             chunk.length,
             outputTokens,
+            Math.min(MAX_SEGMENT_MS, remainingMs),
             signal,
+            job.sessionId,
             (item) => {
               charge = item
             }
           )
         } catch (error) {
           if (charge) {
-            job.record(charge)
+            await job.record(charge)
           }
           signal.throwIfAborted()
           if (!(error instanceof ApiError)) {
             throw error
           }
           const local = error.localMessage
+          const retryableRead =
+            error.kind === 'interrupted' ||
+            (error.kind === 'network' && (!local || local.key === 'streamConnectionLost'))
+          if (retryableRead && readRetries < MAX_READ_RETRIES && offset !== lastRetryOffset) {
+            lastRetryOffset = offset
+            readRetries++
+            logEvent('chat', 'compression.segment.retry', {
+              offset,
+              readRetries,
+              segmentChars: chunk.length,
+            })
+            await abortableDelay(500 * readRetries, signal)
+            pending.push(chunk)
+            continue
+          }
           if (local?.key === 'compressionFailedOutput') {
             const cap = summaryOutputBudget(connection, windowTokens)
-            if (!local.params?.summarySizeLimit && outputTokens < cap) {
+            if (!local.params?.summarySizeLimit && outputTokens <= 2048 && outputTokens < cap) {
               outputTokens = Math.min(outputTokens * 2, cap)
               pending.push(chunk)
               continue
@@ -515,13 +657,14 @@ export async function generateContextSummary(
         if (summarized !== undefined) {
           previous = summarized
           offset += chunk.length
-          job.record(charge, {
+          await job.record(charge, {
             scope,
             text: previous,
             offset,
             segmentLimit,
             outputTokens,
             windowTokens,
+            targetRounds: end,
           })
           reductions = 0
           showProgress()
@@ -539,7 +682,7 @@ export async function generateContextSummary(
   signal.throwIfAborted()
   return {
     text: previous,
-    coveredRounds: plan.end,
+    coveredRounds: end,
     signature,
     updatedAt: Date.now(),
   }

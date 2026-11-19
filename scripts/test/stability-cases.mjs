@@ -947,35 +947,41 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
   )
 
   await run(
-    'update manifest works when all API routes fail and stale mirror metadata keeps the known newer release',
+    'update manifest bypasses a stale mirror and keeps the known newer release offline',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit,
           attempts = []
-        const release = {
-          tag_name: 'v99.0.0',
+        const release = (version) => ({
+          tag_name: version,
           assets: [
             {
-              name: 'freeseek-v99.0.0-release.apk',
+              name: 'freeseek-' + version + '-release.apk',
               size: 123,
               browser_download_url:
-                'https://github.com/WikG1018/FreeSeekApp/releases/download/v99.0.0/freeseek-v99.0.0-release.apk',
+                'https://github.com/WikG1018/FreeSeekApp/releases/download/' +
+                version +
+                '/freeseek-' +
+                version +
+                '-release.apk',
               digest: 'sha256:' + 'a'.repeat(64),
             },
           ],
-        }
+        })
         const fetch = window.fetch
         window.fetch = async (url) => {
           attempts.push(String(url))
+          if (String(url).startsWith('https://gh-proxy.com/')) {
+            return Response.json(release('v2.9.1'))
+          }
           return String(url).startsWith('https://ghfast.top/') &&
             String(url).endsWith('/update.json')
-            ? new Response(JSON.stringify(release))
+            ? Response.json(release('v99.0.0'))
             : new Response('{}', { status: 503 })
         }
         const found = await a.update.checkForUpdate({ force: true }),
           current = a.update.useUpdate.getState()
-        window.fetch = async () =>
-          new Response(JSON.stringify({ ...release, tag_name: 'v1.0.0', assets: [] }))
+        window.fetch = async () => Response.json(release('v2.9.1'))
         await a.update.checkForUpdate({ force: true })
         const preserved = a.update.useUpdate.getState().release.version
         window.fetch = async () => {

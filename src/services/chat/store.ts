@@ -2,8 +2,13 @@ import { create } from 'zustand'
 import { showToast } from '../../components/base/toastState.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { MessageParam } from '../api/types.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
+import type { TranslationParams } from '../../i18n/index.js'
+import {
+  supportsOfficialChatExtensions,
+  type ChatModel,
+  type CreateMessageRequest,
+  type MessageParam,
+} from '../api/types.js'
 import {
   extractFileIds,
   getFileErrorCode,
@@ -37,6 +42,7 @@ import { createLatestReminder } from './latestReminder.js'
 import {
   applicableSummary,
   compressionEstimateParams,
+  contextWasRejected,
   contextLength,
   contextReplyReserve,
   contextRounds,
@@ -50,6 +56,8 @@ import {
   isCompressionFailure,
   MAX_SUMMARY_CHARS,
   planCompression,
+  planRecoveryCompression,
+  recentChatContext,
   type ContextRound,
   type SummaryPlan,
 } from './contextCompression.js'
@@ -67,7 +75,7 @@ import {
   type Connection,
 } from '../providers.js'
 import { streamProviderMessage } from '../api/providerClient.js'
-import { searchContext, searchForCustomModel } from '../api/search.js'
+import { searchContext, searchForReply } from '../api/search.js'
 import {
   documentTextFallback,
   inlineDocuments,
@@ -132,8 +140,8 @@ const writeActiveSession = (id: string | null) => {
 }
 
 /** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
-const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
-  const tools: CreateMessageRequest['tools'] = [
+const serverTools = (search: boolean): NonNullable<CreateMessageRequest['tools']> => {
+  const tools: NonNullable<CreateMessageRequest['tools']> = [
     { type: 'deepseek_read_url', name: 'deepseek_read_url' },
   ]
   if (search) {
@@ -278,20 +286,20 @@ const updateReply = (sessionId: string, reply: AssistantMessage) =>
     ),
   }))
 
-const persist = (sessionId: string) => {
+const persist = async (sessionId: string): Promise<boolean> => {
   const session = getSession(sessionId)
   if (session) {
     unsavedSessions.add(sessionId)
     if (deletingSessions.has(sessionId)) {
-      return
+      return false
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
-    void db
+    return db
       .saveSession(session, files)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
-          return
+          return false
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
@@ -305,6 +313,7 @@ const persist = (sessionId: string) => {
           }))
           trimSessionCache()
         }
+        return true
       })
       .catch((error: unknown) => {
         db.reportStorageError('save session')(error)
@@ -313,8 +322,10 @@ const persist = (sessionId: string) => {
             sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: true },
           }))
         }
+        return false
       })
   }
+  return false
 }
 
 export const retrySaveSessions = () => {
@@ -336,6 +347,17 @@ export const loadBackupFile = async (id: string): Promise<Blob | undefined> => {
 
 export const flushChatUpdates = () => {
   streamFlushes.forEach((flush) => flush())
+}
+
+/** An in-app update can restart the WebView immediately. Commit visible chats before launching it. */
+export const saveChatsBeforeRestart = async () => {
+  if (get().importingHistory) {
+    return false
+  }
+  flushChatUpdates()
+  const ids = new Set([...unsavedSessions, ...streamFlushes.keys()])
+  const saved = await Promise.all([...ids].map(persist))
+  return saved.every(Boolean) && !get().importingHistory
 }
 
 /** 离开前先合并尚未绘制的增量；隐藏期间浏览器可能暂停动画帧。 */
@@ -375,6 +397,7 @@ const createReply = (persona: Session['persona'], sessionId: string | null): Ass
   const settings = useSettings.getState()
   const { selection } = useProviders.getState()
   const official = selection.providerId === 'deepseek'
+  const embeddedSearch = official && supportsOfficialChatExtensions(selection.model)
   const reasoning = selectedReasoning(sessionId)
   return {
     id: createId(),
@@ -385,9 +408,10 @@ const createReply = (persona: Session['persona'], sessionId: string | null): Ass
     systemPrompt: replySystemPrompt(persona?.prompt, official),
     reasoning,
     thinking: !!reasoning && reasoning.level !== 'off',
-    search: official
+    search: embeddedSearch
       ? settings.search
-      : settings.thirdPartySearch.enabled && settings.thirdPartySearchOn,
+      : settings.thirdPartySearch.enabled &&
+        (official ? settings.proSearchOn : settings.thirdPartySearchOn),
     prefix: true,
     status: 'pending',
     blocks: [],
@@ -414,7 +438,7 @@ const settleInterrupted = (session: Session): Session => {
 }
 
 export const initChat = (): Promise<void> => {
-  if (get().ready) {
+  if (get().ready || get().importingHistory) {
     return Promise.resolve()
   }
   if (initTask) {
@@ -424,6 +448,7 @@ export const initChat = (): Promise<void> => {
   set({ initError: false })
   initTask = (async () => {
     try {
+      await db.clearStaging().catch(db.reportStorageError('clean interrupted import'))
       const summaries = await db.loadSessionSummaries()
       logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
       if (epoch === historyEpoch) {
@@ -716,6 +741,7 @@ const removeSessionData = async (id: string): Promise<boolean> => {
       return false
     }
     await db.deleteSession(id)
+    logEvent('storage', 'session.deleted', { previousSessionCount: get().sessions.length })
     if (epoch !== historyEpoch) {
       return true
     }
@@ -760,13 +786,14 @@ export const stopReply = (sessionId: string) => getStreamController(sessionId)?.
 
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
- * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
+ * 保存成功才清空原草稿，期间新输入的内容留在输入框。
  */
 export const sendMessage = (targetSessionId: string | null) => {
   if (get().importingHistory || !get().ready) {
     return false
   }
-  const prepared = prepareDraftMessage(getDraft(targetSessionId), useUploads.getState().tasks)
+  const draft = getDraft(targetSessionId)
+  const prepared = prepareDraftMessage(draft, useUploads.getState().tasks)
   if (!prepared) {
     return false
   }
@@ -837,14 +864,24 @@ export const sendMessage = (targetSessionId: string | null) => {
       ...files.map(({ id, blob }) => ({ id, blob })),
     ])
   }
-  persist(sessionId)
-  clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, {
-    history,
-    question,
-    inherited: current.inherited ?? null,
-    persona: current.persona ?? null,
+  const beforeRequest = persist(sessionId).then((saved) => {
+    if (saved && getDraft(targetSessionId) === draft) {
+      clearSentDraft(targetSessionId)
+    }
   })
+  void streamReply(
+    sessionId,
+    reply,
+    {
+      history,
+      question,
+      inherited: current.inherited ?? null,
+      persona: current.persona ?? null,
+    },
+    'ask',
+    undefined,
+    beforeRequest
+  )
   return true
 }
 
@@ -1075,7 +1112,30 @@ export const currentContextSummary = (session: Session) =>
     contextRounds(getVisibleMessages(session), session.inherited)
   )
 
-type CompressionMode = 'ask' | 'compress' | 'recover' | 'send'
+type CompressionMode = 'ask' | 'compress' | 'recover' | 'send' | 'recent'
+const saveContext = async (id: string, summary: ContextSummary, signal: AbortSignal) => {
+  signal.throwIfAborted()
+  const previous = getSession(id)
+  updateSession(id, (session) => ({
+    ...session,
+    contextSummary: summary,
+    compressionCheckpoint: undefined,
+  }))
+  if (!(await persist(id))) {
+    updateSession(id, (session) =>
+      session.contextSummary === summary
+        ? {
+            ...session,
+            contextSummary: previous?.contextSummary,
+            compressionCheckpoint: previous?.compressionCheckpoint,
+          }
+        : session
+    )
+    signal.throwIfAborted()
+    throw new ApiError('protocol', { key: 'compressionFailedSave' })
+  }
+  signal.throwIfAborted()
+}
 const markCompressing = (id: string, percent?: number) =>
   set((state) => {
     if (state.compressing[id]?.percent === percent) {
@@ -1105,9 +1165,10 @@ const compressRounds = async (
   })
   try {
     const generated = await generateContextSummary(connection, rounds, prior, plan, signal, {
+      sessionId: id,
       checkpoint: getSession(id)?.compressionCheckpoint,
       progress: (percent) => markCompressing(id, percent),
-      record: (charge, checkpoint) => {
+      record: async (charge, checkpoint) => {
         if (get().importingHistory || deletingSessions.has(id)) {
           return
         }
@@ -1116,7 +1177,10 @@ const compressRounds = async (
           ...(charge ? { compressionUsage: [...(session.compressionUsage ?? []), charge] } : {}),
           ...(checkpoint ? { compressionCheckpoint: checkpoint } : {}),
         }))
-        persist(id)
+        if (!(await persist(id))) {
+          signal.throwIfAborted()
+          throw new ApiError('protocol', { key: 'compressionFailedSave' })
+        }
       },
     })
     signal.throwIfAborted()
@@ -1130,12 +1194,7 @@ const compressRounds = async (
       throw new ApiError('protocol', { key: 'compressionFailedNoSavings' })
     }
     const summary = { ...generated, historyEstimate }
-    updateSession(id, (session) => ({
-      ...session,
-      contextSummary: summary,
-      compressionCheckpoint: undefined,
-    }))
-    persist(id)
+    await saveContext(id, summary, signal)
     logEvent('chat', 'compression.completed', {
       sessionId: id,
       coveredRounds: summary.coveredRounds,
@@ -1202,6 +1261,7 @@ export const editContextSummary = (id: string, original: ContextSummary, text: s
   const summary = session && currentContextSummary(session)
   if (
     !summary ||
+    summary.recentOnly ||
     summary !== original ||
     !text.trim() ||
     text.length > MAX_SUMMARY_CHARS ||
@@ -1220,7 +1280,11 @@ export const editContextSummary = (id: string, original: ContextSummary, text: s
   return true
 }
 
-export const retryContextReply = (id: string, replyId: string, mode: 'compress' | 'send') => {
+export const retryContextReply = (
+  id: string,
+  replyId: string,
+  mode: 'compress' | 'send' | 'recent'
+) => {
   const session = getSession(id)
   if (!session || getStreamController(id) || get().importingHistory || deletingSessions.has(id)) {
     return
@@ -1230,13 +1294,15 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
   const question = path[index - 1],
     previous = path[index]
   const local = previous?.role === 'assistant' ? previous.error?.localMessage : undefined
+  const rejected = contextWasRejected(local)
   if (
     question?.role !== 'user' ||
     previous?.role !== 'assistant' ||
     previous.status !== 'error' ||
-    (!isContextRejection(local?.key) &&
+    (!rejected &&
       !['compressionSuggested', 'compressionUnavailable'].includes(local?.key ?? '') &&
-      !isCompressionFailure(local?.key))
+      !isCompressionFailure(local?.key)) ||
+    (mode === 'send' && rejected)
   ) {
     return
   }
@@ -1247,8 +1313,13 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
     stopReason: undefined,
     stopDetails: undefined,
   }
-  const recover =
-    mode === 'compress' && (isContextRejection(local?.key) || local?.params?.recoverContext === 1)
+  const rejection = rejected
+    ? {
+        ...local?.params,
+        recoverContext: 1,
+        ...(isContextRejection(local?.key) && local ? { rejectionKey: local.key } : {}),
+      }
+    : undefined
   updateReply(id, reply)
   persist(id)
   void streamReply(
@@ -1261,13 +1332,13 @@ export const retryContextReply = (id: string, replyId: string, mode: 'compress' 
       inherited: session.inherited,
       persona: session.persona,
     },
-    recover ? 'recover' : mode,
-    Number(local?.params?.contextLimitTokens) || undefined
+    mode === 'compress' && rejected ? 'recover' : mode,
+    rejection
   )
 }
 
 const withSummaryText = (request: Request, summary?: ContextSummary): Request => {
-  if (!summary) {
+  if (!summary || summary.recentOnly) {
     return request
   }
   // Keep the summary at user priority. The active persona remains the only system prompt.
@@ -1628,13 +1699,15 @@ const streamReply = async (
   initial: AssistantMessage,
   original: Request,
   mode: CompressionMode = 'ask',
-  reportedLimit?: number
+  rejection?: TranslationParams,
+  beforeRequest?: Promise<void>
 ) => {
   let request = original
   const rounds = contextRounds(original.history, original.inherited)
   let summary = applicableSummary(getSession(sessionId)?.contextSummary, rounds)
   let compressionAttempted = false
   let checkPressure = true
+  let recentKeep = 4
   const controller = new AbortController()
   if (!getSession(sessionId)?.title) {
     titleRequests.add(controller)
@@ -1681,36 +1754,53 @@ const streamReply = async (
       let preparedContext: Request | undefined
       let documentCount: number | undefined
       try {
+        if (attempt === 0 && beforeRequest) {
+          await beforeRequest
+          controller.signal.throwIfAborted()
+        }
         connection ??= resolveConnection(initial.connection, initial.model)
+        const serverExtensions =
+          connection.kind === 'deepseek' && supportsOfficialChatExtensions(connection.model)
         if (checkPressure) {
           checkPressure = false
           const recovering = mode === 'recover'
-          // A rejected turn stays pending while only the earlier history is prepared for compression.
-          // The model window and earlier rounds suffice here, even when attachments expand on the server.
-          const pressure = recovering
-            ? undefined
-            : planCompression(
-                rounds,
-                summary,
-                connection,
-                {
+          const pressure =
+            recovering || mode === 'recent'
+              ? undefined
+              : planCompression(rounds, summary, connection, {
                   ...original,
                   system: initial.systemPrompt ?? original.persona?.prompt,
-                },
-                reportedLimit
-              )
-          const plan: SummaryPlan = pressure ?? {
-            start: summary?.coveredRounds ?? 0,
-            end: rounds.length,
-            limit: reportedLimit ?? contextLength(connection),
+                })
+          const plan = recovering
+            ? planRecoveryCompression(rounds, summary, connection, rejection)
+            : pressure?.near && !pressure.currentTooLarge && mode !== 'send'
+              ? planRecoveryCompression(rounds, summary, connection)
+              : pressure
+          const canReduce = plan && plan.end > plan.start
+          if (mode === 'recent') {
+            summary = recentChatContext(rounds, summary, recentKeep)
+            if (!summary) {
+              throw new ApiError('protocol', { key: 'compressionInputLarge', params: rejection })
+            }
+            try {
+              await saveContext(sessionId, summary, controller.signal)
+            } catch (error) {
+              controller.signal.throwIfAborted()
+              throw new ApiError('protocol', {
+                ...describeCompressionFailure(error),
+                params: rejection,
+              })
+            }
           }
-          const canReduce = plan.end > plan.start
-          if (mode === 'compress' && !canReduce) {
+          if ((mode === 'compress' || recovering) && !canReduce) {
+            if (recovering && summary) {
+              throw new ApiError('protocol', { key: 'compressionStillTooLong', params: rejection })
+            }
             throw new ApiError('protocol', { key: 'compressionUnavailable' })
           }
           const nearLimit = mode === 'ask' && pressure?.near && !pressure.currentTooLarge
           const autoCompress = nearLimit && useSettings.getState().autoCompress
-          if (canReduce && nearLimit && !autoCompress) {
+          if (plan && canReduce && nearLimit && !autoCompress) {
             const session = getSession(sessionId)
             if (session && !session.compressionPromptShown) {
               updateSession(sessionId, (item) => ({ ...item, compressionPromptShown: true }))
@@ -1728,7 +1818,7 @@ const streamReply = async (
               }
             }
           }
-          if (canReduce && (recovering || mode === 'compress' || autoCompress)) {
+          if (plan && canReduce && (recovering || mode === 'compress' || autoCompress)) {
             compressionAttempted = true
             try {
               summary = await compressRounds(
@@ -1745,11 +1835,7 @@ const streamReply = async (
               throw new ApiError('protocol', {
                 ...failure,
                 params: recovering
-                  ? {
-                      ...failure.params,
-                      recoverContext: 1,
-                      ...(reportedLimit ? { contextLimitTokens: reportedLimit } : {}),
-                    }
+                  ? { ...rejection, ...failure.params, recoverContext: 1 }
                   : failure.params,
               })
             }
@@ -1794,32 +1880,17 @@ const streamReply = async (
         reply = { ...reply, latestReminder }
         updateReply(sessionId, reply)
         persist(sessionId)
-        const originalMessages = toRequestMessages(
-          prepared.history,
-          prepared.question,
-          prepared.prefix,
-          initial.thinking ?? false,
-          latestReminder,
-          prepared.inherited?.messages
-        )
-        const messages = documentTexts
-          ? inlineDocuments(originalMessages, documentTexts)
-          : originalMessages
-        sentMessages = messages
-        if (connection.kind === 'deepseek') {
-          documentCount = messages.reduce(
-            (count, message) =>
-              message.role === 'user' && Array.isArray(message.content)
-                ? count + message.content.filter((part) => part.type === 'document').length
-                : count,
-            0
-          )
-        }
-        if (connection.kind === 'custom' && initial.search && original.question.content.trim()) {
+        const searchSettings = useSettings.getState()
+        // Older Pro replies may have search: true from the Flash tools. Only a separate Pro opt-in can start a paid search.
+        const standaloneSearch =
+          !serverExtensions &&
+          initial.search &&
+          (connection.kind === 'custom' || searchSettings.proSearchOn)
+        if (standaloneSearch && original.question.content.trim()) {
           if (searchResult?.type !== 'web_search_tool_result') {
-            const searched = await searchForCustomModel(
+            const searched = await searchForReply(
               original.question.content,
-              thirdPartySearchKey(useSettings.getState()),
+              thirdPartySearchKey(searchSettings),
               controller.signal
             )
             searchResult = searched.result
@@ -1845,6 +1916,28 @@ const streamReply = async (
             question: { ...prepared.question, content: prepared.question.content + references },
           }
           preparedContext = prepared
+        }
+        const originalMessages = toRequestMessages(
+          prepared.history,
+          prepared.question,
+          prepared.prefix,
+          initial.thinking ?? false,
+          latestReminder,
+          prepared.inherited?.messages,
+          connection.kind === 'custom' || serverExtensions
+        )
+        const messages = documentTexts
+          ? inlineDocuments(originalMessages, documentTexts)
+          : originalMessages
+        sentMessages = messages
+        if (connection.kind === 'deepseek') {
+          documentCount = messages.reduce(
+            (count, message) =>
+              message.role === 'user' && Array.isArray(message.content)
+                ? count + message.content.filter((part) => part.type === 'document').length
+                : count,
+            0
+          )
         }
         logEvent('chat', 'request.prepared', {
           sessionId,
@@ -1878,12 +1971,13 @@ const streamReply = async (
                     ? request.persona.prompt
                     : 'You are a helpful assistant.'),
                 controller.signal,
-                initial.reasoning
+                initial.reasoning,
+                { sessionId }
               )
             : streamMessage(
                 connection.apiKey,
                 {
-                  model: initial.model ?? MODEL,
+                  model: connection.model,
                   // 人设提示词覆盖默认助手身份说明
                   system:
                     initial.systemPrompt ??
@@ -1896,8 +1990,10 @@ const streamReply = async (
                     ? { output_config: { effort: initial.reasoning.level } }
                     : {}),
                   safety_check: SAFETY_CHECK,
-                  tools: serverTools(initial.search ?? false),
-                  ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
+                  ...(serverExtensions && {
+                    tools: serverTools(initial.search ?? false),
+                    ...(titleRequests.has(controller) && { title: { enabled: true } }),
+                  }),
                 },
                 controller.signal
               )
@@ -1948,7 +2044,10 @@ const streamReply = async (
           }
         }
         reply = settleReply(reply, 'done', Date.now())
-        if (connection.kind === 'custom' && titleRequests.has(controller)) {
+        if (mode === 'recent' && summary?.recentOnly && get().activeId === sessionId) {
+          showToast({ key: 'compressionRecentApplied' })
+        }
+        if (!serverExtensions && titleRequests.has(controller)) {
           updateSession(sessionId, (session) =>
             session.title
               ? session
@@ -1993,8 +2092,15 @@ const streamReply = async (
         }
         const local = error instanceof ApiError ? error.localMessage : undefined
         if (error instanceof ApiError && local && isContextRejection(local.key) && connection) {
-          const params = { ...apiLimitCounts(error.message), ...local.params }
-          reportedLimit = Number(params.contextLimitTokens) || reportedLimit
+          const params: TranslationParams = {
+            ...apiLimitCounts(error.message),
+            ...local.params,
+            rejectionKey: local.key,
+            recoverContext: 1,
+          }
+          if (!params.contextLimitTokens && rejection?.contextLimitTokens) {
+            params.contextLimitTokens = rejection.contextLimitTokens
+          }
           if (preparedContext) {
             const sentRounds = contextRounds(preparedContext.history, preparedContext.inherited)
             const question = preparedContext.question
@@ -2018,7 +2124,7 @@ const streamReply = async (
             { sessionId, replyId: reply.id, ...params },
             'warn'
           )
-          const limit = reportedLimit ?? contextLength(connection)
+          const limit = Number(params.contextLimitTokens) || contextLength(connection)
           if (
             !receivedContent &&
             !inlineAttempted &&
@@ -2067,6 +2173,19 @@ const streamReply = async (
               !isImage && serverId && !documentTexts?.has(serverId) ? [serverId] : []
             )
           ).size
+          rejection = params
+          if (
+            mode === 'recent' &&
+            !receivedContent &&
+            recentKeep > 0 &&
+            (local.key !== 'replyDocumentCountLimit' ||
+              currentDocs <= Number(params.documentLimit)) &&
+            (summary?.coveredRounds ?? 0) < rounds.length
+          ) {
+            recentKeep = 0
+            checkPressure = true
+            continue
+          }
           if (
             !receivedContent &&
             (!rounds.length ||
@@ -2092,6 +2211,7 @@ const streamReply = async (
           if (
             !receivedContent &&
             mode !== 'send' &&
+            mode !== 'recent' &&
             !compressionAttempted &&
             useSettings.getState().autoCompress
           ) {

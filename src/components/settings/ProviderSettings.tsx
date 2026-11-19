@@ -46,6 +46,7 @@ import geminiIcon from '../../assets/providers/gemini.png'
 import openaiIcon from '../../assets/providers/openai.png'
 import claudeIcon from '../../assets/providers/claude.png'
 import openrouterIcon from '../../assets/providers/openrouter.png'
+import opencodeIcon from '../../assets/providers/opencode.png'
 import deepseekIcon from '../../assets/providers/deepseek.png'
 
 const icons: Record<string, string> = {
@@ -60,6 +61,8 @@ const icons: Record<string, string> = {
   openai: openaiIcon,
   claude: claudeIcon,
   openrouter: openrouterIcon,
+  opencode: opencodeIcon,
+  'opencode-go': opencodeIcon,
   deepseek: deepseekIcon,
 }
 export const providerPresetDescriptions: Record<string, TranslationKey | undefined> = {
@@ -72,6 +75,8 @@ export const providerPresetDescriptions: Record<string, TranslationKey | undefin
   openai: 'providerCatalogOpenAI',
   claude: 'providerCatalogClaude',
   openrouter: 'providerCatalogMultiModel',
+  opencode: 'providerCatalogOpenCodeZen',
+  'opencode-go': 'providerCatalogOpenCodeGo',
 }
 export const ProviderMark = ({ id }: { id?: string }) => {
   const src = id && icons[id]
@@ -375,7 +380,8 @@ export const newProviderConnection = (
   preset: { id: preset.id, access: access.id },
   url: access.url,
   protocol: access.protocol,
-  name: preset.name + (access.id === 'tokenPlan' ? ' · Token Plan' : ''),
+  name:
+    preset.name + (preset.access.length > 1 && access.id === 'tokenPlan' ? ' · Token Plan' : ''),
   streamUsage: access.streamUsage ?? false,
   tokenParameter: access.completionTokens ? 'max_completion_tokens' : 'max_tokens',
 })

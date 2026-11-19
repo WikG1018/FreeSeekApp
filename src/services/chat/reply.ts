@@ -222,7 +222,8 @@ const toUserParam = ({ content, files }: UserMessage): MessageParam => {
 const toAssistantParam = (
   { blocks }: AssistantMessage,
   prefix = false,
-  thinking = false
+  thinking = false,
+  includeReadLinks = true
 ): Extract<MessageParam, { role: 'assistant' }> => {
   const content: AssistantBlockParam[] = []
   // 成功阅读的网页靠签名恢复正文；缺少有效签名时，调用与结果都不回传。
@@ -262,6 +263,7 @@ const toAssistantParam = (
       const { type, thinking, signature } = block
       content.push({ type, thinking, signature: signature ?? '' })
     } else if (
+      includeReadLinks &&
       block.type === 'server_tool_use' &&
       block.kind === 'read_link' &&
       !unsignedReadLinks.has(block.id)
@@ -269,6 +271,7 @@ const toAssistantParam = (
       const { type, id, name, input, kind } = block
       content.push({ type, id, name, input, kind })
     } else if (
+      includeReadLinks &&
       block.type === 'web_fetch_tool_result' &&
       block.kind === 'read_link' &&
       !unsignedReadLinks.has(block.tool_use_id)
@@ -305,7 +308,8 @@ export const toRequestMessages = (
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
   latestReminder?: string,
-  inheritedMessages?: Message[]
+  inheritedMessages?: Message[],
+  includeReadLinks = true
 ): MessageParam[] => {
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
@@ -327,12 +331,12 @@ export const toRequestMessages = (
       continue
     }
     appendReminder(reply.latestReminder)
-    messages.push(toUserParam(user), toAssistantParam(reply))
+    messages.push(toUserParam(user), toAssistantParam(reply, false, false, includeReadLinks))
   }
   appendReminder(latestReminder)
   messages.push(toUserParam(question))
   if (prefix?.prefix) {
-    const assistant = toAssistantParam(prefix, true, thinking)
+    const assistant = toAssistantParam(prefix, true, thinking, includeReadLinks)
     // 没有非空白正文或有效思考时直接重发原问题，避免服务端拒绝空 Prefill。
     if (
       assistant.content.some(

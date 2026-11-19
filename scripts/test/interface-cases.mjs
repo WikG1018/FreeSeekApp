@@ -382,6 +382,13 @@ export const runInterfaceCases = async ({ run }) => {
       assert.ok(
         await donate.getByText('有建议的话，也欢迎写在付款备注里。', { exact: true }).isVisible()
       )
+      const scanInstructions = (app) =>
+        donate.getByText(`打开${app}，点「扫一扫」，再从相册选择收款码。`, { exact: true })
+      assert.ok(await scanInstructions('微信').isVisible())
+      assert.equal(
+        await donate.getByRole('button', { name: '保存收款码并打开微信' }).locator('svg').count(),
+        0
+      )
       const wechat = await qr.getAttribute('src'),
         box = await qr.boundingBox()
       const channelColors = () =>
@@ -399,6 +406,8 @@ export const runInterfaceCases = async ({ run }) => {
       assert.ok(green[1] > green[0] && green[1] > green[2] && paleBlue[2] > paleBlue[1])
       await donate.getByRole('radio', { name: '支付宝', exact: true }).check()
       await settle()
+      assert.ok(await scanInstructions('支付宝').isVisible())
+      assert.equal(await scanInstructions('微信').count(), 0)
       const [paleGreen, blue] = await channelColors()
       assert.ok(paleGreen[1] > paleGreen[0] && blue[2] > blue[1] && blue[2] > blue[0])
       assert.notEqual(await qr.getAttribute('src'), wechat)
@@ -463,7 +472,7 @@ export const runInterfaceCases = async ({ run }) => {
       assert.equal(await sheet.evaluate(looping), false)
       await sheet.getByRole('button', { name: '保存收款码并打开微信', exact: true }).click()
       await sheet.getByRole('status').getByText('未能自动打开微信').waitFor()
-      assert.ok(await sheet.getByText('可以打开微信，在「扫一扫」里从相册选取收款码。').isVisible())
+      assert.ok(await sheet.getByText('打开微信，点「扫一扫」，再从相册选择收款码。').isVisible())
       assert.equal(await page.getByRole('dialog', { name: '谢谢你的心意', exact: true }).count(), 0)
       await page.keyboard.press('Escape')
       await sheet.waitFor({ state: 'detached' })

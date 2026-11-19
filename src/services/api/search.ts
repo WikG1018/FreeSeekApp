@@ -39,7 +39,7 @@ const reference = (value: unknown): WebSearchResult | undefined => {
   }
 }
 
-export const searchForCustomModel = async (
+export const searchForReply = async (
   question: string,
   apiKey: string | null,
   signal: AbortSignal

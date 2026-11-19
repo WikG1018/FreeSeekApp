@@ -79,7 +79,11 @@ export const validModel = (value: unknown): value is string =>
 /** 地址只用于用户指定的服务，不把 URL、查询参数或密钥写进日志/聊天备份。 */
 export const validateProviderUrl = (value: string): string => {
   try {
-    const url = new URL(value.trim())
+    const address = value.trim()
+    // OpenCode documentation and copied settings often omit the scheme.
+    const url = new URL(
+      /^opencode\.ai\/(?:zen|inference)(?:[/?]|$)/i.test(address) ? `https://${address}` : address
+    )
     if (
       !['https:', 'http:'].includes(url.protocol) ||
       url.username ||
