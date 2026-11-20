@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { createId } from '../utils/id.js'
 import { logEvent, registerLogSecret } from './diagnostics/log.js'
 import { useSettings } from './settings.js'
-import { providerAccess } from './providerPresets.js'
+import { providerAccess, providerPreset } from './providerPresets.js'
 import {
   customReasoning,
   isReasoningAdapter,
@@ -198,13 +198,15 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
     }
     headers[name] = value
   }
+  const preset = providerPreset(input.preset?.id)
+  const access = providerAccess(input.preset?.id, input.preset?.access)
   return {
     ...input,
     url,
     apiKey: input.apiKey.trim(),
     model: input.model.trim(),
     name: input.name.trim().slice(0, 80) || new URL(url).hostname,
-    preset: providerAccess(input.preset?.id, input.preset?.access) ? input.preset : undefined,
+    preset: preset && access ? { id: preset.id, access: access.id } : undefined,
     modelListUrl: input.modelListUrl.trim() ? validateProviderUrl(input.modelListUrl) : '',
     models: [...new Set(input.models.filter(validModel).map((model) => model.trim()))].slice(
       0,

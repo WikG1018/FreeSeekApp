@@ -11,7 +11,6 @@ import {
   modelSettingsFor,
   ProviderConfigError,
   providerModelLabel,
-  removeProvider,
   saveProvider,
   validModel,
   type ProviderModelSettings,
@@ -48,6 +47,7 @@ import {
   providerAccessLabel,
   providerErrorText,
   providerPresetDescriptions,
+  RemoveProviderDialog,
 } from './ProviderSettings.js'
 import { ReasoningRow } from './ReasoningRow.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
@@ -164,8 +164,24 @@ export const ProviderConnectionPage = ({
   const preset = providerPreset(initial.preset?.id)
   const usePresetUrl = access && form.url.trim().replace(/\/+$/, '') === access.url
   const presetDescription =
-    preset && usePresetUrl ? providerPresetDescriptions[preset.id] : undefined
+    preset && preset.access.length === 1 && usePresetUrl
+      ? providerPresetDescriptions[preset.id]
+      : undefined
   const isMiMoChinaPlan = preset?.id === 'xiaomimimo' && usePresetUrl && access.id === 'tokenPlan'
+  const accessKeyLabel =
+    access?.id === 'go'
+      ? 'providerOpenCodeGoKey'
+      : access && access.id !== 'api'
+        ? 'providerPlanKey'
+        : 'providerKey'
+  const accessKeyPlaceholder =
+    access?.id === 'go'
+      ? 'providerPasteOpenCodeGoKey'
+      : access?.id === 'codingPlan'
+        ? 'providerPasteCodingPlanKey'
+        : access?.id === 'tokenPlan'
+          ? 'providerPastePlanKey'
+          : 'providerPasteApiKey'
   const save = () => {
     try {
       let headers: ProviderProfile['headers'], extraBody: ProviderProfile['extraBody']
@@ -194,10 +210,10 @@ export const ProviderConnectionPage = ({
         <div className={styles.providerIdentity}>
           <ProviderMark id={preset.id} />
           <span>
-            <strong>{preset.name}</strong>
+            <strong>{access?.connectionName ?? preset.name}</strong>
             {access && (
               <small>
-                {t(presetDescription ?? providerAccessLabel(access))}
+                {t(presetDescription ?? providerAccessLabel(access, preset.id))}
                 {isMiMoChinaPlan && ' · ' + t('providerAccessChina')}
               </small>
             )}
@@ -246,26 +262,10 @@ export const ProviderConnectionPage = ({
       <Section title={t('providerAuthGroup')}>
         <div className={styles.formFields}>
           <KeyField
-            label={t(
-              preset?.id === 'opencode-go'
-                ? 'providerOpenCodeGoKey'
-                : access?.id === 'tokenPlan'
-                  ? 'providerPlanKey'
-                  : 'providerKey'
-            )}
+            label={t(accessKeyLabel)}
             value={form.apiKey}
             change={(value) => update('apiKey', value)}
-            placeholder={
-              preset &&
-              t(
-                preset.id === 'opencode-go'
-                  ? 'providerPasteOpenCodeGoKey'
-                  : access?.id === 'tokenPlan'
-                    ? 'providerPastePlanKey'
-                    : 'providerPasteApiKey',
-                { provider: preset.name }
-              )
-            }
+            placeholder={preset && t(accessKeyPlaceholder, { provider: preset.name })}
             helpHref={access?.docs}
           />
           {!access && <p className={styles.hint}>{t('providerKeyHint')}</p>}
@@ -364,34 +364,11 @@ export const ProviderConnectionPage = ({
       </div>
       {leave.dialog}
       {deleting && (
-        <Modal
-          centered
-          title={t('providerDelete')}
+        <RemoveProviderDialog
+          profile={initial}
           onClose={() => setDeleting(false)}
-          footer={
-            <>
-              <Button variant="outlined" onClick={() => setDeleting(false)}>
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  try {
-                    removeProvider(initial.id)
-                    onDeleted()
-                  } catch (reason) {
-                    setError(providerErrorText(reason, t))
-                    setDeleting(false)
-                  }
-                }}
-              >
-                {t('delete')}
-              </Button>
-            </>
-          }
-        >
-          {t('providerDeleteHint')}
-        </Modal>
+          onRemoved={onDeleted}
+        />
       )}
     </form>
   )

@@ -1,9 +1,11 @@
 import type { ProviderProtocol } from './providers.js'
 
-type AccessId = 'api' | 'tokenPlan'
+type AccessId = 'api' | 'tokenPlan' | 'codingPlan' | 'go'
 export type ProviderAccess = {
   id: AccessId
+  connectionName?: string
   url: string
+  modelListUrl?: string
   protocol: ProviderProtocol
   docs: string
   streamUsage?: boolean
@@ -49,6 +51,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         'https://open.bigmodel.cn/api/paas/v4',
         'https://docs.bigmodel.cn/cn/guide/models/text/glm-5'
       ),
+      {
+        ...api(
+          'https://open.bigmodel.cn/api/coding/paas/v4',
+          'https://docs.bigmodel.cn/cn/coding-plan/tool/others'
+        ),
+        id: 'codingPlan',
+        connectionName: '智谱 GLM · Coding Plan',
+      },
     ],
   },
   {
@@ -144,22 +154,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     ],
   },
   {
-    id: 'opencode-go',
-    name: 'OpenCode Go',
-    region: 'international',
-    access: [
-      {
-        ...plan(
-          openCodeOrigin + OPEN_CODE_GO_PATH + '/openai/v1',
-          openCodeOrigin + '/docs/console/go/'
-        ),
-        streamUsage: true,
-      },
-    ],
-  },
-  {
     id: 'opencode',
-    name: 'OpenCode Zen',
+    name: 'OpenCode',
     region: 'international',
     access: [
       {
@@ -167,6 +163,17 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
           openCodeOrigin + '/inference/openai/v1',
           openCodeOrigin + '/docs/console/api/inference'
         ),
+        connectionName: 'OpenCode Zen',
+        modelListUrl: openCodeOrigin + '/inference/v1/models',
+        streamUsage: true,
+      },
+      {
+        ...api(
+          openCodeOrigin + OPEN_CODE_GO_PATH + '/openai/v1',
+          openCodeOrigin + '/docs/console/go/'
+        ),
+        id: 'go',
+        connectionName: 'OpenCode Go',
         streamUsage: true,
       },
     ],
@@ -184,6 +191,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ]
 
-export const providerPreset = (id?: string) => PROVIDER_PRESETS.find((preset) => preset.id === id)
+export const providerPreset = (id?: string) =>
+  PROVIDER_PRESETS.find((preset) => preset.id === (id === 'opencode-go' ? 'opencode' : id))
 export const providerAccess = (id?: string, access?: string) =>
-  providerPreset(id)?.access.find((item) => item.id === access)
+  providerPreset(id)?.access.find(
+    (item) => item.id === (id === 'opencode-go' && access === 'tokenPlan' ? 'go' : access)
+  )

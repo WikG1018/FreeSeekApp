@@ -51,6 +51,7 @@ export const runProviderCases = async ({ run }) => {
             url: 'opencode.ai/zen/go/v1/',
             apiKey: 'go-test-key',
             model: 'kimi-k3',
+            preset: { id: 'opencode-go', access: 'tokenPlan' },
           },
           true
         )
@@ -101,11 +102,12 @@ export const runProviderCases = async ({ run }) => {
         } catch (error) {
           errorKey = error.localMessage?.key
         }
-        return { catalog, test: test.text, calls, errorKey }
+        return { catalog, test: test.text, calls, errorKey, preset: profile.preset }
       })
       assert.deepEqual(result.catalog, [{ id: 'kimi-k3', contextWindow: 1000000 }])
       assert.equal(result.test, 'Go 回复')
       assert.equal(result.errorKey, 'providerOpenCodeGoForbidden')
+      assert.deepEqual(result.preset, { id: 'opencode', access: 'go' })
       const [list, test, first, next, other, zen, denied] = result.calls
       assert.equal(list.url, 'https://opencode.ai/inference/go/v1/models')
       for (const call of [test, first, next, other, denied]) {
@@ -121,26 +123,174 @@ export const runProviderCases = async ({ run }) => {
       assert.equal(zen.headers['x-opencode-session'], undefined)
     }
   )
-  await run('provider setup offers separate OpenCode Go and Zen connections', async (page) => {
+  await run('OpenCode uses one access page and saves Go and Zen independently', async (page) => {
     await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
     await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
-    await page.getByRole('button', { name: '添加连接', exact: true }).click()
-    await page.getByRole('searchbox', { name: '搜索服务商', exact: true }).fill('opencode')
-    await page.getByText('OpenCode Zen', { exact: true }).waitFor()
-    await page.getByText('OpenCode Go', { exact: true }).click()
-    assert.equal(
-      await page.getByLabel('服务地址', { exact: true }).inputValue(),
-      'https://opencode.ai/inference/go/openai/v1'
+    const add = async (query, access, url, keyLabel, key) => {
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('searchbox', { name: '搜索服务商', exact: true }).fill(query)
+      await page.getByRole('button', { name: 'OpenCode', exact: true }).click()
+      const choices = page.getByRole('radiogroup', { name: '选择接入方式' })
+      await choices.waitFor()
+      assert.equal(await choices.getByRole('radio').count(), 2)
+      await choices.getByRole('radio', { name: new RegExp(access) }).check()
+      await page.getByRole('button', { name: '继续', exact: true }).click()
+      assert.equal(await page.getByLabel('服务地址', { exact: true }).inputValue(), url)
+      const input = page.getByLabel(keyLabel, { exact: true })
+      assert.equal(await input.inputValue(), '')
+      await input.fill(key)
+      await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
+      await page.locator('[data-settings-page="providerModels"]').waitFor()
+      await page.getByRole('button', { name: '返回', exact: true }).click()
+    }
+    await add(
+      'OpenCode Zen',
+      'Zen 按量 API',
+      'https://opencode.ai/inference/openai/v1',
+      'API 密钥',
+      'test-zen-key'
     )
-    await page.getByLabel('OpenCode Go 密钥', { exact: true }).fill('go-ui-test-key')
-    await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
-    await page.locator('[data-settings-page="providerModels"]').waitFor()
-    const saved = await page.evaluate(
-      () => window.__audit.providers.useProviders.getState().profiles[0]
+    await add(
+      'OpenCode Go',
+      'Go 订阅',
+      'https://opencode.ai/inference/go/openai/v1',
+      'OpenCode Go 密钥',
+      'test-go-key'
     )
-    assert.equal(saved.preset.id, 'opencode-go')
-    assert.equal(saved.url, 'https://opencode.ai/inference/go/openai/v1')
+    const profiles = await page.evaluate(
+      () => window.__audit.providers.useProviders.getState().profiles
+    )
+    assert.deepEqual(
+      profiles.map(({ name, preset, apiKey }) => ({ name, preset, apiKey })),
+      [
+        { name: 'OpenCode Zen', preset: { id: 'opencode', access: 'api' }, apiKey: 'test-zen-key' },
+        { name: 'OpenCode Go', preset: { id: 'opencode', access: 'go' }, apiKey: 'test-go-key' },
+      ]
+    )
+    assert.equal(profiles[0].modelListUrl, 'https://opencode.ai/inference/v1/models')
   })
+  await run(
+    'Zhipu Coding Plan has a dedicated endpoint and subscription key field',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('providers'))
+      await page.getByRole('button', { name: '添加连接', exact: true }).click()
+      await page.getByRole('button', { name: '智谱 GLM', exact: true }).click()
+      const choices = page.getByRole('radiogroup', { name: '选择接入方式' })
+      await choices.getByRole('radio', { name: /Coding Plan 订阅/ }).check()
+      assert.equal(await choices.getByRole('radio', { name: /按量 API/ }).isChecked(), false)
+      assert.equal(
+        await page.getByRole('link', { name: '官方接入说明' }).getAttribute('href'),
+        'https://docs.bigmodel.cn/cn/coding-plan/tool/others'
+      )
+      await page.getByRole('button', { name: '继续', exact: true }).click()
+      assert.equal(
+        await page.getByLabel('服务地址', { exact: true }).inputValue(),
+        'https://open.bigmodel.cn/api/coding/paas/v4'
+      )
+      await page.getByLabel('套餐密钥', { exact: true }).fill('coding-plan-test-key')
+      await page.getByRole('button', { name: '保存并管理模型', exact: true }).click()
+      await page.locator('[data-settings-page="providerModels"]').waitFor()
+      const saved = await page.evaluate(
+        () => window.__audit.providers.useProviders.getState().profiles[0]
+      )
+      assert.deepEqual(saved.preset, { id: 'zhipu', access: 'codingPlan' })
+      assert.equal(saved.apiKey, 'coding-plan-test-key')
+    }
+  )
+  await run(
+    'long press deletes a saved service connection only after confirmation',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const active = a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: '已保存的 Go 连接',
+            url: 'https://example.test/go/v1',
+            model: 'test-go',
+          },
+          true
+        )
+        a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name: '另一个已保存连接',
+          url: 'https://example.test/zen/v1',
+          model: 'test-zen',
+        })
+        await a.seed([
+          a.fixtures.session({
+            id: 'provider-history-kept',
+            title: '要保留的历史',
+            messages: [
+              a.fixtures.user('u', '已发送的问题'),
+              a.fixtures.assistant('a', '已保存的回答', {
+                connection: { providerId: active.id, revision: active.revision },
+              }),
+            ],
+          }),
+        ])
+        a.settingsDialog.openSettings('providers')
+      })
+      const saved = page.getByRole('button', { name: '已保存的 Go 连接', exact: true })
+      const confirmation = page.getByRole('dialog', { name: '删除配置', exact: true })
+      await saved.click()
+      await page.getByRole('heading', { name: '管理模型', exact: true }).waitFor()
+      await page.getByRole('button', { name: '返回', exact: true }).click()
+      const touch = await page.context().newCDPSession(page)
+      await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+      const touchStart = async () => {
+        await saved.scrollIntoViewIfNeeded()
+        const box = await saved.boundingBox()
+        const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] })
+        return point
+      }
+      const touchEnd = () =>
+        touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      const start = await touchStart()
+      await touch.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x: start.x, y: start.y + 28 }],
+      })
+      await page.waitForTimeout(550)
+      await touchEnd()
+      assert.equal(await confirmation.count(), 0)
+
+      await touchStart()
+      await touchEnd()
+      await page.getByRole('heading', { name: '管理模型', exact: true }).waitFor()
+      await page.getByRole('button', { name: '返回', exact: true }).click()
+
+      const hold = async () => {
+        await touchStart()
+        await confirmation
+          .getByText('删除「已保存的 Go 连接」这个服务连接？', { exact: true })
+          .waitFor()
+        await touchEnd()
+      }
+      await hold()
+      await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+      await confirmation.waitFor({ state: 'hidden' })
+      assert.equal(await saved.count(), 1)
+      await hold()
+      await confirmation.getByRole('button', { name: '删除', exact: true }).click()
+      await saved.waitFor({ state: 'hidden' })
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      const result = await page.evaluate(() => {
+        const a = window.__audit
+        const { profiles, selection } = a.providers.useProviders.getState()
+        return {
+          names: profiles.map(({ name }) => name),
+          provider: selection.providerId,
+          history: a.store.useChatStore
+            .getState()
+            .sessions.some(({ id }) => id === 'provider-history-kept'),
+        }
+      })
+      assert.deepEqual(result, { names: ['另一个已保存连接'], provider: 'deepseek', history: true })
+    }
+  )
   await run(
     'output token parameter errors are not mislabeled as a full context window',
     async (page) => {

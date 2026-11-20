@@ -15,6 +15,7 @@ import {
   OFFICIAL_MODELS,
   ProviderConfigError,
   providerModelLabel,
+  removeProvider,
   selectModel,
   setOfficialReasoningDefault,
   useProviders,
@@ -32,6 +33,7 @@ import {
 } from '../base/icons.js'
 import { Select } from '../base/Select.js'
 import { Button } from '../base/Button.js'
+import { Modal } from '../base/Modal.js'
 import { ReasoningRow } from './ReasoningRow.js'
 import { Row, Section } from './SettingsRows.js'
 import styles from './ProviderSettings.module.css'
@@ -75,8 +77,6 @@ export const providerPresetDescriptions: Record<string, TranslationKey | undefin
   openai: 'providerCatalogOpenAI',
   claude: 'providerCatalogClaude',
   openrouter: 'providerCatalogMultiModel',
-  opencode: 'providerCatalogOpenCodeZen',
-  'opencode-go': 'providerCatalogOpenCodeGo',
 }
 export const ProviderMark = ({ id }: { id?: string }) => {
   const src = id && icons[id]
@@ -96,6 +96,55 @@ export const providerErrorText = (error: unknown, t: ReturnType<typeof useTransl
     : error instanceof ApiError && error.localMessage
       ? t(error.localMessage.key, error.localMessage.params)
       : t('providerNetworkError')
+}
+
+export const RemoveProviderDialog = ({
+  profile,
+  onClose,
+  onRemoved,
+}: {
+  profile: ProviderProfile
+  onClose: () => void
+  onRemoved: () => void
+}) => {
+  const t = useTranslate()
+  const [error, setError] = useState('')
+  return (
+    <Modal
+      centered
+      title={t('providerDelete')}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outlined" onClick={onClose}>
+            {t('cancel')}
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              try {
+                removeProvider(profile.id)
+              } catch (reason) {
+                setError(providerErrorText(reason, t))
+                return
+              }
+              onRemoved()
+            }}
+          >
+            {t('delete')}
+          </Button>
+        </>
+      }
+    >
+      <p>{t('providerDeleteNamed', { name: profile.name })}</p>
+      <p className={styles.hint}>{t('providerDeleteHint')}</p>
+      {error && (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      )}
+    </Modal>
+  )
 }
 
 export const ConnectionSelector = () => {
@@ -205,6 +254,8 @@ export const ProviderSettingsPage = ({
   const { profiles, selection } = useProviders()
   const configured = useSettings((s) => s.thirdPartySearch.enabled)
   const officialConfigured = useSettings((s) => Boolean(s.apiKey))
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const removing = profiles.find((profile) => profile.id === removingId)
   return (
     <>
       <Section
@@ -243,10 +294,12 @@ export const ProviderSettingsPage = ({
               prominent
               badge={profile.id === selection.providerId ? t('providerActive') : undefined}
               onClick={() => edit(profile.id)}
+              onLongPress={() => setRemovingId(profile.id)}
               target="providerModels"
             />
           )
         })}
+        {profiles.length > 0 && <p className={styles.insetHint}>{t('providerHoldToDelete')}</p>}
       </Section>
       <Section title={t('providerChatTools')}>
         <Row
@@ -276,6 +329,13 @@ export const ProviderSettingsPage = ({
           </button>
         </div>
       </aside>
+      {removing && (
+        <RemoveProviderDialog
+          profile={removing}
+          onClose={() => setRemovingId(null)}
+          onRemoved={() => setRemovingId(null)}
+        />
+      )}
     </>
   )
 }
@@ -294,15 +354,18 @@ export const ProviderCatalogPage = ({
   const describe = (preset: ProviderPreset) => {
     const description = providerPresetDescriptions[preset.id]
     if (preset.access.length > 1) {
-      return t('providerAccessApi') + ' · ' + t('providerAccessTokenPlan')
+      return preset.access.map((access) => t(providerAccessLabel(access, preset.id))).join(' · ')
     }
     return description ? t(description) : new URL(preset.access[0].url).hostname
   }
   const options = PROVIDER_PRESETS.filter((item) =>
     needle
-      ? [item.name, item.id, describe(item)].some((value) =>
-          value.toLocaleLowerCase().includes(needle)
-        )
+      ? [
+          item.name,
+          item.id,
+          describe(item),
+          ...item.access.map((access) => access.connectionName ?? ''),
+        ].some((value) => value.toLocaleLowerCase().includes(needle))
       : item.region === region
   )
   return (
@@ -369,8 +432,17 @@ export const ProviderCatalogPage = ({
   )
 }
 
-export const providerAccessLabel = (access: ProviderAccess) =>
-  access.id === 'tokenPlan' ? 'providerAccessTokenPlan' : 'providerAccessApi'
+const accessLabels: Record<ProviderAccess['id'], TranslationKey> = {
+  api: 'providerAccessApi',
+  tokenPlan: 'providerAccessTokenPlan',
+  codingPlan: 'providerAccessCodingPlan',
+  go: 'providerAccessOpenCodeGo',
+}
+
+export const providerAccessLabel = (access: ProviderAccess, presetId?: string): TranslationKey =>
+  presetId === 'opencode' && access.id === 'api'
+    ? 'providerAccessOpenCodeZen'
+    : accessLabels[access.id]
 
 export const newProviderConnection = (
   preset: ProviderPreset,
@@ -379,8 +451,10 @@ export const newProviderConnection = (
   ...emptyProfile(),
   preset: { id: preset.id, access: access.id },
   url: access.url,
+  modelListUrl: access.modelListUrl ?? '',
   protocol: access.protocol,
   name:
+    access.connectionName ??
     preset.name + (preset.access.length > 1 && access.id === 'tokenPlan' ? ' · Token Plan' : ''),
   streamUsage: access.streamUsage ?? false,
   tokenParameter: access.completionTokens ? 'max_completion_tokens' : 'max_tokens',
@@ -420,15 +494,18 @@ export const ProviderAccessPage = ({
               onChange={() => setId(access.id)}
             />
             <span>
-              <strong>{t(providerAccessLabel(access))}</strong>
+              <strong>{t(providerAccessLabel(access, preset.id))}</strong>
               <small>
-                {t(access.id === 'tokenPlan' ? 'providerAccessPlanKey' : 'providerAccessApiKey')}
+                {t(access.id === 'api' ? 'providerAccessApiKey' : 'providerAccessPlanKey')}
               </small>
               <small>{access.url}</small>
             </span>
           </label>
         ))}
       </div>
+      {selected.id === 'codingPlan' && (
+        <p className={styles.hint}>{t('providerCodingPlanScope')}</p>
+      )}
       <a className={styles.docsLink} href={selected.docs} target="_blank" rel="noreferrer">
         <IconLinkOutline14 />
         {t('providerAccessDocs')}

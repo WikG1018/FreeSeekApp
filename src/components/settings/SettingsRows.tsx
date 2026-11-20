@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useId, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type PointerEvent, type ReactNode } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
 import styles from './Settings.module.css'
@@ -55,8 +55,59 @@ type RowProps = {
   danger?: boolean
   disabled?: boolean
   onClick?: () => void
+  onLongPress?: () => void
   target?: string
   current?: boolean
+}
+
+const useRowLongPress = (onLongPress?: () => void) => {
+  const gesture = useRef<{ id: number; x: number; y: number; timer: number }>()
+  const handled = useRef(false)
+  useEffect(() => () => window.clearTimeout(gesture.current?.timer), [])
+  const cancel = () => {
+    window.clearTimeout(gesture.current?.timer)
+    gesture.current = undefined
+  }
+  const open = () => {
+    cancel()
+    if (!handled.current) {
+      handled.current = true
+      onLongPress?.()
+    }
+  }
+  const start = (event: PointerEvent<HTMLButtonElement>) => {
+    cancel()
+    handled.current = !event.isPrimary
+    if (event.button !== 0 || handled.current) {
+      return
+    }
+    if (event.pointerType === 'touch') {
+      // A compatibility mousedown after the hold would land on the new dialog's backdrop.
+      event.preventDefault()
+    }
+    gesture.current = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      timer: window.setTimeout(open, 500),
+    }
+  }
+  const move = (event: PointerEvent<HTMLButtonElement>) => {
+    const press = gesture.current
+    if (
+      press?.id === event.pointerId &&
+      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8
+    ) {
+      handled.current = true
+      cancel()
+    }
+  }
+  const consume = () => {
+    const consumed = handled.current
+    handled.current = false
+    return consumed
+  }
+  return { start, move, cancel, open, consume }
 }
 
 export const Row = ({
@@ -71,11 +122,13 @@ export const Row = ({
   danger,
   disabled,
   onClick,
+  onLongPress,
   target,
   current,
 }: RowProps) => {
   const descriptionId = useId()
   const detailId = useId()
+  const press = useRowLongPress(onLongPress)
   const body = (
     <>
       {icon && (
@@ -130,7 +183,28 @@ export const Row = ({
       }
       data-settings-target={target}
       aria-current={current ? 'page' : undefined}
-      onClick={onClick}
+      onPointerDown={onLongPress ? press.start : undefined}
+      onPointerMove={onLongPress ? press.move : undefined}
+      onPointerUp={onLongPress ? press.cancel : undefined}
+      onPointerCancel={onLongPress ? press.cancel : undefined}
+      onPointerLeave={onLongPress ? press.cancel : undefined}
+      onContextMenu={
+        onLongPress
+          ? (event) => {
+              event.preventDefault()
+              press.open()
+            }
+          : undefined
+      }
+      onClick={
+        onLongPress
+          ? (event) => {
+              if (!press.consume() || event.detail === 0) {
+                onClick()
+              }
+            }
+          : onClick
+      }
     >
       {body}
     </button>
