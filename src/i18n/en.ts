@@ -232,7 +232,6 @@ export const en = {
   providerActive: 'Active',
   providerDelete: 'Delete configuration',
   providerDeleteNamed: 'Delete the connection “{name}”?',
-  providerHoldToDelete: 'Press and hold a saved connection to delete it.',
   providerDeleteHint:
     'Chat history is retained. Select another configuration to regenerate replies using this service.',
   providerParameters: 'More parameters and input capabilities',

@@ -299,7 +299,6 @@ export const ProviderSettingsPage = ({
             />
           )
         })}
-        {profiles.length > 0 && <p className={styles.insetHint}>{t('providerHoldToDelete')}</p>}
       </Section>
       <Section title={t('providerChatTools')}>
         <Row

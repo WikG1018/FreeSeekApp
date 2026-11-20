@@ -210,7 +210,6 @@ export const zh = {
   providerActive: '当前使用',
   providerDelete: '删除配置',
   providerDeleteNamed: '删除「{name}」这个服务连接？',
-  providerHoldToDelete: '长按已保存的连接可删除。',
   providerDeleteHint: '删除后保留聊天记录。使用该配置的旧回答需选择新配置后重新生成',
   providerParameters: '更多参数与输入能力',
   providerMaxOutput: '最大输出 Token',

@@ -233,6 +233,8 @@ export const runProviderCases = async ({ run }) => {
       })
       const saved = page.getByRole('button', { name: '已保存的 Go 连接', exact: true })
       const confirmation = page.getByRole('dialog', { name: '删除配置', exact: true })
+      await saved.waitFor()
+      assert.equal(await page.getByText('长按已保存的连接可删除。', { exact: true }).count(), 0)
       await saved.click()
       await page.getByRole('heading', { name: '管理模型', exact: true }).waitFor()
       await page.getByRole('button', { name: '返回', exact: true }).click()
