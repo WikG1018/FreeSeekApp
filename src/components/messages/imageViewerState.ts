@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { logEvent } from '../../services/diagnostics/log.js'
 
 export type PreviewImage = {
   src: string
@@ -21,6 +22,7 @@ export const showImageViewer = (src: string, name: string, thumbnail: HTMLButton
   useImageViewer.setState({
     image: { src, name, thumbnail, width: img.naturalWidth, height: img.naturalHeight },
   })
+  logEvent('ui', 'image-viewer.opened', { width: img.naturalWidth, height: img.naturalHeight })
 }
 
 // Reuse the decoded thumbnail source. If the message scrolls out of the rendered history,
@@ -37,6 +39,9 @@ export const closeImageViewer = () => {
   const { image, ownsUrl } = useImageViewer.getState()
   if (image && ownsUrl) {
     URL.revokeObjectURL(image.src)
+  }
+  if (image) {
+    logEvent('ui', 'image-viewer.closed')
   }
   useImageViewer.setState({ image: null, ownsUrl: false })
 }

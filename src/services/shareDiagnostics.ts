@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { saveBackup } from './saveBackup.js'
+import { blobBase64 } from '../utils/blobBase64.js'
+import { beginDiagnosticOperation, diagnosticError } from './diagnostics/log.js'
 
 const Native = registerPlugin<{
   create(options: { fileName: string; size: number }): Promise<{ id: string }>
@@ -7,43 +9,50 @@ const Native = registerPlugin<{
   finish(options: { id: string }): Promise<{ launched: boolean }>
   cancel(options: { id: string }): Promise<void>
 }>('DiagnosticShare')
-const base64 = (blob: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
-    reader.onerror = () => reject(reader.error)
-    reader.onabort = () => reject(new DOMException('Read cancelled', 'AbortError'))
-    reader.readAsDataURL(blob)
-  })
-
 /** 返回面板是否已打开，不将打开分享面板误称为已发送给他人。 */
 export const shareDiagnostics = async (
   name: string,
   blob: Blob
 ): Promise<'shared' | 'saved' | false> => {
-  if (Capacitor.getPlatform() !== 'android') {
-    const file = new File([blob], name, { type: 'application/zip' })
-    if (navigator.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: 'FreeSeek' })
-        return 'shared'
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
-          return false
-        }
-        throw error
-      }
-    }
-    return (await saveBackup(name, blob)) ? 'saved' : false
-  }
-  const { id } = await Native.create({ fileName: name, size: blob.size })
+  const native = Capacitor.getPlatform() === 'android'
+  const finish = beginDiagnosticOperation('diagnostics', 'share', { bytes: blob.size, native })
+  let stage = native ? 'prepare' : 'web-share'
+  let id: string | undefined
+  let writtenBytes = 0
   try {
-    for (let start = 0; start < blob.size; start += 256 * 1024) {
-      await Native.write({ id, data: await base64(blob.slice(start, start + 256 * 1024)) })
+    if (!native) {
+      const file = new File([blob], name, { type: 'application/zip' })
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'FreeSeek' })
+        finish('completed', { stage })
+        return 'shared'
+      }
+      stage = 'browser-download'
+      const saved = await saveBackup(name, blob, 'diagnostics')
+      finish(saved ? 'completed' : 'cancelled', { stage })
+      return saved ? 'saved' : false
     }
-    return (await Native.finish({ id })).launched ? 'shared' : false
+    const target = await Native.create({ fileName: name, size: blob.size })
+    id = target.id
+    stage = 'write'
+    for (let start = 0; start < blob.size; start += 256 * 1024) {
+      const part = blob.slice(start, start + 256 * 1024)
+      await Native.write({ id, data: await blobBase64(part) })
+      writtenBytes += part.size
+    }
+    stage = 'chooser'
+    const launched = (await Native.finish({ id })).launched
+    finish(launched ? 'completed' : 'cancelled', { stage, writtenBytes })
+    return launched ? 'shared' : false
   } catch (error) {
-    await Native.cancel({ id }).catch(() => {})
+    if (id) {
+      await Native.cancel({ id }).catch(() => {})
+    }
+    if (!native && stage === 'web-share' && error instanceof Error && error.name === 'AbortError') {
+      finish('cancelled', { stage })
+      return false
+    }
+    finish('failed', { stage, writtenBytes, ...diagnosticError(error) })
     throw error
   }
 }

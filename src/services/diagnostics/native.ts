@@ -1,13 +1,15 @@
 import { registerPlugin } from '@capacitor/core'
 import { diagnosticError } from './log.js'
 
-export type NativeSnapshot = {
+export type NativeLogSnapshot = {
   events: unknown[]
-  environment: Record<string, unknown>
   failedWrites: number
+  readFailure?: 'size-limit' | 'unreadable'
 }
+export type NativeSnapshot = NativeLogSnapshot & { environment: Record<string, unknown> }
 export const NativeDiagnostics = registerPlugin<{
   snapshot: () => Promise<NativeSnapshot>
+  readEvents: () => Promise<NativeLogSnapshot>
   exportStartup: (options: {
     mode: 'fallback'
     phase: 'diagnostics'

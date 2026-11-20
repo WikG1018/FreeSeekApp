@@ -8,6 +8,12 @@ import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import {
+  anthropicSearchTool,
+  collectAnthropicSearchTurn,
+  finishSearchTurn,
+  type SearchTool,
+} from './searchTool.js'
+import {
   supportsOfficialChatExtensions,
   type ApiErrorBody,
   type CreateMessageRequest,
@@ -275,15 +281,74 @@ export async function* streamMessage(
   apiKey: string,
   body: CreateMessageRequest,
   signal: AbortSignal,
-  requestId = createId()
+  requestId = createId(),
+  search?: SearchTool
 ): AsyncGenerator<MessageStreamEvent> {
   const payload = officialRequestForModel(body)
+  const includeFiles = hasFile(payload)
+  if (!search || payload.model !== 'deepseek-v4-pro') {
+    yield* streamMessageRound(apiKey, payload, signal, requestId, includeFiles)
+    return
+  }
+  // Pro accepts client tool calls on the Messages API. Flash-only metadata still
+  // goes through the sanitizer above, and both rounds keep safety_check enabled.
+  const withSearch = { ...payload, tools: [anthropicSearchTool], tool_choice: { type: 'auto' } }
+  const collector = collectAnthropicSearchTurn()
+  let turn: ReturnType<typeof collector.finish>
+  try {
+    turn = yield* streamMessageRound(apiKey, withSearch, signal, requestId, includeFiles, {
+      collector,
+    })
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      error.kind !== 'http' ||
+      error.localMessage?.key !== 'providerSearchToolRejected'
+    ) {
+      throw error
+    }
+    signal.throwIfAborted()
+    search.unavailable()
+    yield* streamMessageRound(apiKey, payload, signal, createId(), includeFiles)
+    return
+  }
+  if (turn) {
+    const followUp = await finishSearchTurn(turn, search, signal)
+    yield* streamMessageRound(
+      apiKey,
+      {
+        ...withSearch,
+        tool_choice: { type: 'none' },
+        messages: [...payload.messages, ...followUp],
+      },
+      signal,
+      createId(),
+      includeFiles,
+      { answerOnly: true }
+    )
+  }
+}
+
+async function* streamMessageRound(
+  apiKey: string,
+  payload: Record<string, unknown>,
+  signal: AbortSignal,
+  requestId: string,
+  includeFiles: boolean,
+  {
+    collector,
+    answerOnly,
+  }: { collector?: ReturnType<typeof collectAnthropicSearchTurn>; answerOnly?: boolean } = {}
+): AsyncGenerator<
+  MessageStreamEvent,
+  ReturnType<ReturnType<typeof collectAnthropicSearchTurn>['finish']>
+> {
   const response = await request(
     `${ANTHROPIC_BASE_URL}/messages`,
     {
       method: 'POST',
       headers: {
-        ...anthropicHeaders(apiKey, hasFile(payload)),
+        ...anthropicHeaders(apiKey, includeFiles),
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
@@ -297,6 +362,7 @@ export async function* streamMessage(
     throw await readErrorResponse(response, 'protocol', '')
   }
   try {
+    let toolRequested = false
     for await (const { event: eventName, data } of readServerSentEvents(
       response.body,
       signal,
@@ -324,13 +390,23 @@ export async function* streamMessage(
       if (eventName === 'error') {
         throw new ApiError('stream', data, undefined, describeKnownApiError(data))
       }
+      collector?.read(payload)
       const event = readMessageEvent(payload)
       if (!event) {
         continue
       }
+      if (event.type === 'message_delta') {
+        toolRequested = event.delta.stop_reason === 'tool_use'
+      } else if (event.type === 'message_stop' && toolRequested && (collector || answerOnly)) {
+        const turn = collector?.finish()
+        if (!turn) {
+          throw new ApiError('protocol', { key: 'providerToolUnsupported' })
+        }
+        return turn
+      }
       yield event
       if (event.type === 'message_stop') {
-        return
+        return undefined
       }
     }
   } catch (error) {

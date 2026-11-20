@@ -3,7 +3,7 @@ import * as db from './db.js'
 import { replaceHistory, useChatStore, loadBackupFile, flushChatUpdates } from './store.js'
 import type { Session } from './types.js'
 import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
-import { diagnosticError, logEvent } from '../diagnostics/log.js'
+import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ImportProgress } from './history/readJson.js'
 import { BackupError } from './history/errors.js'
 
@@ -12,15 +12,16 @@ export { BackupError } from './history/errors.js'
 // 导入、导出与全部删除串行处理，避免读取归档时数据被清空或两个替换事务交错。
 let backupQueue: Promise<unknown> = Promise.resolve()
 
-const enqueueBackup = <T>(operation: string, run: () => Promise<T>): Promise<T> => {
+const enqueueBackup = <T>(
+  operation: string,
+  run: () => Promise<T>,
+  details: Record<string, unknown> = {}
+): Promise<T> => {
   const task = backupQueue.then(async () => {
-    const started = performance.now()
-    logEvent('backup', operation + '.started')
+    const finish = beginDiagnosticOperation('backup', operation, details)
     try {
       const result = await run()
-      logEvent('backup', operation + '.completed', {
-        elapsedMs: Math.round(performance.now() - started),
-      })
+      finish('completed')
       return result
     } catch (error) {
       const failure =
@@ -29,15 +30,10 @@ const enqueueBackup = <T>(operation: string, run: () => Promise<T>): Promise<T> 
         error.name === 'QuotaExceededError'
           ? new BackupError('backupStorageFull')
           : error
-      logEvent(
-        'backup',
-        operation + '.failed',
-        {
-          ...diagnosticError(error),
-          ...(failure instanceof BackupError ? { failureKey: failure.key } : {}),
-        },
-        'error'
-      )
+      finish('failed', {
+        ...diagnosticError(error),
+        ...(failure instanceof BackupError ? { failureKey: failure.key } : {}),
+      })
       throw failure
     }
   })
@@ -77,22 +73,26 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
  * 通过后从 ZIP 流式写入暂存，成功才替换原有会话与图片原件。返回导入的会话数。
  */
 export const importHistory = (file: File, onProgress?: ImportProgress): Promise<number> =>
-  enqueueBackup('import', async () => {
-    const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
-    await checkArchiveFormat(file)
-    const previousSessionCount = useChatStore.getState().sessions.length
-    let settings: NativeBackupSettings | undefined
-    const count = await replaceHistory(async () => {
-      settings = await importArchive(file, onProgress)
-    })
-    restoreNativeSettings(settings)
-    logEvent('backup', 'import.archive', {
-      previousSessionCount,
-      sessionCount: count,
-      bytes: file.size,
-    })
-    return count
-  })
+  enqueueBackup(
+    'import',
+    async () => {
+      const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
+      await checkArchiveFormat(file)
+      const previousSessionCount = useChatStore.getState().sessions.length
+      let settings: NativeBackupSettings | undefined
+      const count = await replaceHistory(async () => {
+        settings = await importArchive(file, onProgress)
+      })
+      restoreNativeSettings(settings)
+      logEvent('backup', 'import.archive', {
+        previousSessionCount,
+        sessionCount: count,
+        bytes: file.size,
+      })
+      return count
+    },
+    { bytes: file.size }
+  )
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */
 export const clearHistory = (): Promise<void> =>

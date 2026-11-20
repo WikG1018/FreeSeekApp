@@ -142,7 +142,7 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
     }
     setBusy(true)
     try {
-      await saveBackup(pack.name, pack.blob)
+      await saveBackup(pack.name, pack.blob, 'persona')
     } catch (error) {
       report(error)
     } finally {

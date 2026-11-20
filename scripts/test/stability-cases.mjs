@@ -684,14 +684,20 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
           messages: [a.fixtures.user('private-user', 'CHAT_CONTENT_CANARY')],
         })
         await a.seed([session])
-        d.logEvent('api', 'privacy.canary', {
-          apiKey: 'sk-privacy-canary-12345678',
-          text: 'CHAT_CONTENT_CANARY',
-          filename: 'PRIVATE_FILENAME',
-          content: 'ATTACHMENT_CONTENT_CANARY',
-          detail: 'Bearer fake-secret-token sk-privacy-canary-12345678',
-          ...d.diagnosticError(new Error('CHAT_CONTENT_CANARY')),
-        })
+        d.logEvent(
+          'api',
+          'privacy.canary',
+          {
+            apiKey: 'sk-privacy-canary-12345678',
+            text: 'CHAT_CONTENT_CANARY',
+            filename: 'PRIVATE_FILENAME',
+            content: 'ATTACHMENT_CONTENT_CANARY',
+            detail: 'Bearer fake-secret-token sk-privacy-canary-12345678',
+            ...d.diagnosticError(new Error('CHAT_CONTENT_CANARY')),
+          },
+          'warn'
+        )
+        await d.flushDiagnosticLogs()
         for (let i = 0; i < 2100; i++) {
           d.logEvent('upload', 'retention.check', { index: i })
         }
@@ -705,6 +711,8 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
           filename: 'PRIVATE_FILENAME',
           content: 'ATTACHMENT_CONTENT_CANARY',
           title: 'PRIVATE_TITLE_CANARY',
+          query: 'PRIVATE_QUERY_CANARY',
+          sessionId: 'privateid-patientrecord',
           url: 'https://private-endpoint.example/request?apikey=QUERY_CANARY',
           detail: 'Bearer fake-secret-token sk-privacy-canary-12345678',
           ...d.diagnosticError(failure),
@@ -733,12 +741,278 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
       assert.equal(Object.keys(result.texts).length, 6)
       assert.doesNotMatch(
         JSON.stringify(result.texts),
-        /sk-privacy-canary-12345678|CHAT_CONTENT_CANARY|PRIVATE_FILENAME|ATTACHMENT_CONTENT_CANARY|fake-secret-token|MULTILINE_PRIVATE_CANARY|CUSTOM_ERROR_NAME_CANARY|PRIVATE_TITLE_CANARY|private-endpoint\.example|QUERY_CANARY/
+        /sk-privacy-canary-12345678|CHAT_CONTENT_CANARY|PRIVATE_FILENAME|ATTACHMENT_CONTENT_CANARY|fake-secret-token|MULTILINE_PRIVATE_CANARY|CUSTOM_ERROR_NAME_CANARY|PRIVATE_TITLE_CANARY|private-endpoint\.example|QUERY_CANARY|privateid-patientrecord/
       )
       assert.match(result.texts['environment.json'], /apiKeyConfigured/)
       assert.match(result.texts['client-events.jsonl'], /privacy.retained/)
+      assert.match(result.texts['client-events.jsonl'], /privacy.canary/)
+      assert.match(result.texts['client-events.jsonl'], /legacy.issue/)
       assert.match(result.texts['client-events.jsonl'], /REDACTED/)
       assert.match(result.texts['client-events.jsonl'], /main\.a1b2c3d4\.js:12:34/)
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        if (localStorage.getItem('diag-v1-fixture-seeded')) return
+        window.__seedReady = new Promise((resolve, reject) => {
+          const open = indexedDB.open('freeseek-diagnostics', 1)
+          open.onerror = () => reject(open.error)
+          open.onupgradeneeded = () => {
+            open.result
+              .createObjectStore('events', { keyPath: 'id' })
+              .createIndex('timestamp', 'timestamp')
+          }
+          open.onsuccess = () => {
+            const database = open.result
+            const transaction = database.transaction('events', 'readwrite')
+            transaction.objectStore('events').put({
+              id: '7ec29f83-7713-4bc8-b56c-9f84ff8b17e4',
+              timestamp: Date.now() - 1000,
+              source: 'client',
+              scope: 'storage',
+              event: 'legacy.issue',
+              level: 'warn',
+              details: {},
+            })
+            transaction.onabort = () => reject(transaction.error)
+            transaction.oncomplete = () => {
+              database.close()
+              localStorage.setItem('diag-v1-fixture-seeded', 'true')
+              resolve()
+            }
+          }
+        })
+      })
+    }
+  )
+
+  await run(
+    'diagnostic ZIP keeps Android environment probes and native events independently',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const collect = async () => {
+          const { blob, name } = await a.diagnosticBundle.createDiagnosticBundle()
+          const entries = {}
+          for await (const entry of a.readArchive(new File([blob], name))) {
+            entries[entry.path] = await (await a.readEntry(entry)).text()
+          }
+          return entries
+        }
+        const full = await collect()
+        window.__diagnosticProbeFailed = true
+        return { full, partial: await collect() }
+      })
+      const fullEnv = JSON.parse(result.full['environment.json'])
+      const fullSummary = JSON.parse(result.full['summary.json'])
+      assert.equal(fullEnv.app.platform, 'android')
+      assert.equal(fullEnv.native.model, 'RMX3619')
+      assert.equal(fullEnv.native.manufacturer, 'realme')
+      assert.equal(fullEnv.native.sdk, 32)
+      assert.equal(fullEnv.native.webviewVersion, '133.0.6943.78')
+      assert.deepEqual(fullEnv.native.collection.memory, {
+        state: 'unavailable',
+        exception: 'SecurityException',
+      })
+      assert.deepEqual(fullEnv.native.network, { wifi: true, validated: true })
+      assert.equal(fullSummary.collection.native, 'available')
+      assert.equal(fullSummary.collection.nativeEvents, 'available')
+      assert.equal(fullSummary.scopes.ui.issues >= 1, true)
+
+      const partialEnv = JSON.parse(result.partial['environment.json'])
+      const partialSummary = JSON.parse(result.partial['summary.json'])
+      assert.deepEqual(partialEnv.native, { unavailable: true })
+      assert.equal(partialSummary.collection.native, 'failed')
+      assert.equal(partialSummary.collection.nativeEvents, 'available')
+      assert.match(result.partial['native-events.jsonl'], /webview.renderer-exit/)
+      assert.doesNotMatch(
+        JSON.stringify(result),
+        /PRIVATE_HARDWARE_ID|PRIVATE_CONNECTIVITY_MESSAGE/
+      )
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.CapacitorCustomPlatform = { name: 'android' }
+        window.Capacitor = {
+          PluginHeaders: [
+            {
+              name: 'Diagnostics',
+              methods: [
+                { name: 'snapshot', rtype: 'promise' },
+                { name: 'readEvents', rtype: 'promise' },
+              ],
+            },
+          ],
+          nativePromise: async (plugin, method) => {
+            if (plugin !== 'Diagnostics') return {}
+            const logs = {
+              failedWrites: 0,
+              events: [
+                {
+                  scope: 'ui',
+                  event: 'webview.renderer-exit',
+                  level: 'warn',
+                  timestamp: Date.now(),
+                  details: { crashed: true, message: 'PRIVATE_CONNECTIVITY_MESSAGE' },
+                },
+              ],
+            }
+            if (method === 'readEvents') return logs
+            if (window.__diagnosticProbeFailed) throw new Error('PRIVATE_CONNECTIVITY_MESSAGE')
+            return {
+              ...logs,
+              environment: {
+                model: 'RMX3619',
+                manufacturer: 'realme',
+                sdk: 32,
+                webviewVersion: '133.0.6943.78',
+                imei: 'PRIVATE_HARDWARE_ID',
+                collection: { memory: { state: 'unavailable', exception: 'SecurityException' } },
+                ...Object.fromEntries(
+                  Array.from({ length: 42 }, (_, index) => ['field' + index, index])
+                ),
+                network: { wifi: true, validated: true },
+              },
+            }
+          },
+        }
+      })
+    }
+  )
+
+  await run(
+    'diagnostic ZIP links feature results without exposing provider or conversation data',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        a.settings.setStartupPage('new-chat')
+        a.settings.saveThirdPartySearch({
+          enabled: true,
+          keySource: 'separate',
+          apiKey: 'PRIVATE_DIAG_SEARCH_KEY',
+        })
+        a.settings.setThirdPartySearchOn(true)
+        const persona = a.personas.addPersona('PRIVATE_DIAG_PERSONA', 'PRIVATE_DIAG_PROMPT')
+        a.personas.setDefaultPersona(persona)
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            model: 'PRIVATE_DIAG_MODEL',
+            name: 'PRIVATE_DIAG_PROVIDER',
+            url: 'https://private-diagnostic-provider.example/v1',
+            apiKey: 'PRIVATE_DIAG_API_KEY',
+            headers: { 'X-Tenant-Secret': 'PRIVATE_DIAG_HEADER' },
+            stream: false,
+          },
+          true
+        )
+        const original = window.fetch
+        window.fetch = async (url, init) => {
+          if (String(url).endsWith('/v1/tools/search')) {
+            return Response.json({
+              results: [
+                {
+                  title: 'PRIVATE_DIAG_SOURCE',
+                  url: 'https://private-source.example',
+                  summary: 'PRIVATE_DIAG_EXCERPT',
+                },
+              ],
+            })
+          }
+          if (String(url).includes('private-diagnostic-provider.example')) {
+            const body = JSON.parse(init.body)
+            if (body.tool_choice === 'auto') {
+              return Response.json({
+                choices: [
+                  {
+                    message: {
+                      tool_calls: [
+                        {
+                          id: 'diag-tool-1',
+                          type: 'function',
+                          function: {
+                            name: 'freeseek_web_search',
+                            arguments: JSON.stringify({ query: 'PRIVATE_DIAG_TERMS', count: 12 }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: 'tool_calls',
+                  },
+                ],
+              })
+            }
+            return Response.json({
+              choices: [{ message: { content: 'PRIVATE_DIAG_ANSWER' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 25, completion_tokens: 6 },
+            })
+          }
+          return original(url, init)
+        }
+        a.drafts.addDraftFiles(
+          null,
+          [new File(['PRIVATE_DIAG_FILE_BYTES'], 'PRIVATE_DIAG_FILE.invalid')],
+          ''
+        )
+        a.drafts.setDraftText(null, 'PRIVATE_DIAG_QUESTION')
+        a.store.sendMessage(null)
+        await a.waitIdle()
+        const id = a.store.useChatStore.getState().activeId
+        if (!id) throw new Error('Fixture chat did not start')
+        await a.store.setSessionPinned(id, true)
+        a.store.renameSession(id, 'PRIVATE_DIAG_TITLE')
+        await a.backup
+          .importHistory(new File(['not a zip'], 'PRIVATE_DIAG_BACKUP.zip'))
+          .catch(() => {})
+        a.settingsDialog.openSettings('usage')
+      })
+      await page.waitForFunction(async () => {
+        const { events } = await window.__audit.diagnostics.readDiagnosticLogs()
+        return events.some((event) => event.event === 'totals.read.completed')
+      })
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const { blob, name } = await a.diagnosticBundle.createDiagnosticBundle()
+        const entries = {}
+        for await (const entry of a.readArchive(new File([blob], name))) {
+          entries[entry.path] = await (await a.readEntry(entry)).text()
+        }
+        return entries
+      })
+      const events = result['client-events.jsonl']
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      const find = (name) => events.find((event) => event.event === name)?.details
+      const prepared = find('request.prepared')
+      assert.equal(prepared.protocol, 'openai')
+      assert.equal(prepared.offersIndependentSearch, true)
+      assert.equal(find('provider.request').requestId, prepared.requestId)
+      const searched = events.find(
+        (event) => event.scope === 'search' && event.event === 'standalone.started'
+      ).details
+      const resultSearch = find('standalone.completed')
+      assert.equal(searched.requestedCount, 12)
+      assert.equal(resultSearch.operationId, searched.operationId)
+      assert.equal(resultSearch.resultCount, 1)
+      assert.equal(resultSearch.billed, true)
+      assert.equal(find('reply.settled').standaloneSearches, 1)
+      assert.equal(find('import.failed').failureKey, 'backupUnrecognized')
+      assert.equal(find('import.started').operationId, find('import.failed').operationId)
+      assert.equal(find('session.pin-changed').pinned, true)
+      assert.equal(find('session.rename-requested').hasTitle, true)
+      assert.ok(find('attachments.rejected'))
+      assert.ok(find('custom.added'))
+      assert.ok(find('totals.read.completed'))
+      const environment = JSON.parse(result['environment.json'])
+      const summary = JSON.parse(result['summary.json'])
+      assert.equal(environment.preferences.startupPage, 'new-chat')
+      assert.ok(environment.browser.capabilities.indexedDB)
+      assert.ok(summary.scopes.backup.issues > 0)
+      assert.ok(summary.scopes.persona.events > 0)
+      assert.doesNotMatch(
+        JSON.stringify(result),
+        /PRIVATE_DIAG_|private-diagnostic-provider\.example|private-source\.example/
+      )
     }
   )
 

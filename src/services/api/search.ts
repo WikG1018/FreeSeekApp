@@ -2,6 +2,8 @@ import { createId } from '../../utils/id.js'
 import { API_ORIGIN, request } from './client.js'
 import { ApiError } from './errorTypes.js'
 import { readApiJson } from './providerClient.js'
+import { beginDiagnosticOperation, diagnosticError } from '../diagnostics/log.js'
+import type { SearchInput } from './searchTool.js'
 import type { ServerToolUseBlock, WebSearchResult, WebSearchToolResultBlock } from './types.js'
 
 export const THIRD_PARTY_SEARCH_RATE = 5 / 1000
@@ -39,59 +41,70 @@ const reference = (value: unknown): WebSearchResult | undefined => {
   }
 }
 
+export const createSearchCall = (query: string): ServerToolUseBlock => ({
+  type: 'server_tool_use',
+  id: 'search-' + createId(),
+  name: 'deepseek_web_search',
+  input: { action: 'search', queries: [query] },
+  caller: { type: 'direct' },
+  kind: 'search',
+})
+
 export const searchForReply = async (
-  question: string,
+  { query, count }: SearchInput,
   apiKey: string | null,
   signal: AbortSignal
-): Promise<{ call: ServerToolUseBlock; result: WebSearchToolResultBlock; billed: boolean }> => {
+): Promise<{ content: WebSearchResult[]; billed: boolean }> => {
+  const requestId = createId()
+  const finish = beginDiagnosticOperation('search', 'standalone', {
+    requestId,
+    requestedCount: count,
+  })
   if (!apiKey) {
+    finish('failed', { localKey: 'thirdPartySearchMissingKey' })
     throw new ApiError('protocol', { key: 'thirdPartySearchMissingKey' })
   }
-  const query = Array.from(question.trim().replace(/\s+/g, ' ')).slice(0, 128).join('')
   const controller = new AbortController()
   const abort = () => controller.abort(signal.reason)
   signal.throwIfAborted()
   signal.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(() => controller.abort(), 30000)
   try {
-    const response = await request(API_ORIGIN + '/v1/tools/search', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, count: 5, need_content: false }),
-      signal: controller.signal,
-    })
+    const response = await request(
+      API_ORIGIN + '/v1/tools/search',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, count, need_content: false }),
+        signal: controller.signal,
+      },
+      requestId
+    )
     const data = await readApiJson(response, controller.signal, 512 * 1024)
     if (!Array.isArray(data.results)) {
       throw new ApiError('protocol', { key: 'thirdPartySearchFailed' })
     }
-    const id = 'search-' + createId()
-    return {
-      call: {
-        type: 'server_tool_use',
-        id,
-        name: 'deepseek_web_search',
-        input: { action: 'search', queries: [query] },
-        caller: { type: 'direct' },
-        kind: 'search',
-      },
-      result: {
-        type: 'web_search_tool_result',
-        tool_use_id: id,
-        kind: 'search',
-        content: data.results
-          .slice(0, 5)
-          .map(reference)
-          .filter((item) => item !== undefined),
-      },
+    const result = {
+      content: data.results
+        .slice(0, count)
+        .map(reference)
+        .filter((item) => item !== undefined),
       billed: data.results.length > 0,
     }
+    finish('completed', { resultCount: result.content.length, billed: result.billed })
+    return result
   } catch (error) {
+    finish(signal.aborted ? 'cancelled' : 'failed', {
+      timedOut: controller.signal.aborted && !signal.aborted,
+      ...diagnosticError(error),
+    })
     signal.throwIfAborted()
     throw new ApiError(
       'protocol',
       error instanceof ApiError && error.status
         ? { key: 'thirdPartySearchHttpError', params: { status: error.status } }
-        : { key: 'thirdPartySearchFailed' }
+        : { key: 'thirdPartySearchFailed' },
+      error instanceof ApiError ? error.status : undefined
     )
   } finally {
     clearTimeout(timeout)

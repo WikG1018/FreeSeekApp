@@ -6,6 +6,7 @@ type TransferEvent = { id: string; type: 'chunk' | 'end' | 'error'; data?: strin
 const Native = registerPlugin<{
   start(options: {
     id: string
+    requestId?: string
     url: string
     method: string
     headers: Record<string, string>
@@ -24,6 +25,7 @@ const Native = registerPlugin<{
 export const providerFetch = async (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
+  requestId?: string,
   allowPermission = true
 ): Promise<Response> => {
   init.signal.throwIfAborted()
@@ -88,6 +90,7 @@ export const providerFetch = async (
     init.signal.throwIfAborted()
     const response = await Native.start({
       id,
+      requestId,
       url,
       method: init.method,
       headers: init.headers,
@@ -109,7 +112,7 @@ export const providerFetch = async (
     ) {
       const result = await Native.requestLocalNetwork()
       if (result.granted) {
-        return providerFetch(url, init, false)
+        return providerFetch(url, init, requestId, false)
       }
     }
     throw init.signal.aborted ? abortReason(init.signal) : error

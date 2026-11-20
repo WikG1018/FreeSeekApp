@@ -37,6 +37,9 @@ public class CustomHttpPlugin extends Plugin {
     }
     @PluginMethod public void start(PluginCall call) {
         String id = call.getString("id", "");
+        String correlation = call.getString("requestId", "");
+        String requestId = correlation.matches("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+            ? correlation : null;
         Transfer transfer = new Transfer();
         if (!id.matches("[A-Za-z0-9-]{1,100}") || transfers.size() >= 8 || transfers.putIfAbsent(id, transfer) != null) {
             call.reject("Invalid or busy request", "INVALID_REQUEST"); return;
@@ -50,6 +53,8 @@ public class CustomHttpPlugin extends Plugin {
                     throw new IllegalArgumentException("Invalid API address");
                 }
                 if (Build.VERSION.SDK_INT >= 37 && localAddress(url) && getPermissionState("localNetwork") != PermissionState.GRANTED) {
+                    DiagnosticsLog.warn(getContext(), "api", "local-network.permission-required",
+                        new JSObject().put("requestId", requestId));
                     call.reject("Local network permission required", "LOCAL_NETWORK_PERMISSION"); return;
                 }
                 String method = call.getString("method", "GET");
@@ -85,7 +90,7 @@ public class CustomHttpPlugin extends Plugin {
                 JSObject result = new JSObject(); result.put("status", status);
                 result.put("contentType", connection.getContentType() == null ? "" : connection.getContentType());
                 call.resolve(result); started = true;
-                JSObject meta = new JSObject(); meta.put("status", status); meta.put("method", method);
+                JSObject meta = new JSObject().put("status", status).put("method", method).put("requestId", requestId);
                 DiagnosticsLog.record(getContext(), "api", "custom.response", meta);
                 InputStream input = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
                 String encoding = connection.getContentEncoding();
@@ -102,11 +107,21 @@ public class CustomHttpPlugin extends Plugin {
                         event(id, "chunk", Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP));
                     }
                 }
-                if (!transfer.cancelled) event(id, "end", null);
+                if (!transfer.cancelled) {
+                    DiagnosticsLog.record(getContext(), "api", "custom.body-completed",
+                        new JSObject().put("requestId", requestId).put("receivedBytes", received));
+                    event(id, "end", null);
+                }
             } catch (Exception error) {
                 String code = transfer.cancelled ? "CANCELLED" : error instanceof SocketTimeoutException ? "TIMEOUT" : "NETWORK_ERROR";
-                JSObject meta = new JSObject(); meta.put("cancelled", transfer.cancelled); meta.put("bytes", received); meta.put("code", code);
-                DiagnosticsLog.record(getContext(), "api", "custom.failed", meta);
+                JSObject meta = new JSObject().put("requestId", requestId)
+                    .put("stage", started ? "response-body" : "headers")
+                    .put("receivedBytes", received).put("code", code);
+                if (transfer.cancelled) {
+                    DiagnosticsLog.record(getContext(), "api", "custom.cancelled", meta);
+                } else {
+                    DiagnosticsLog.warn(getContext(), "api", "custom.failed", meta);
+                }
                 if (started) event(id, "error", code); else call.reject(code, code);
             } finally {
                 transfers.remove(id, transfer);
@@ -133,7 +148,10 @@ public class CustomHttpPlugin extends Plugin {
         requestPermissionForAlias("localNetwork", call, "permissionResult");
     }
     @PermissionCallback private void permissionResult(PluginCall call) {
-        JSObject result = new JSObject(); result.put("granted", Build.VERSION.SDK_INT < 37 || getPermissionState("localNetwork") == PermissionState.GRANTED); call.resolve(result);
+        JSObject result = new JSObject();
+        result.put("granted", Build.VERSION.SDK_INT < 37 || getPermissionState("localNetwork") == PermissionState.GRANTED);
+        DiagnosticsLog.record(getContext(), "api", "local-network.permission-result", result);
+        call.resolve(result);
     }
     @Override protected void handleOnDestroy() {
         for (Transfer transfer : transfers.values()) {

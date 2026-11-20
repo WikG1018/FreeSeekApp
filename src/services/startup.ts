@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { diagnosticError, logEvent } from './diagnostics/log.js'
 
 export const startupMarkUrl = './startup-mark.png'
 export const startupEndedEvent = 'freeseek:startup-ended'
@@ -22,7 +23,10 @@ const StartupHandoff = registerPlugin<{
 const bounds = ({ width, left, top }: DOMRect): Bounds => ({ width, left, top })
 
 export const isStartupVisible = () => document.documentElement.hasAttribute('data-fs-starting')
-export const markStartupMounted = () => window.__FreeSeekStartup?.mounted()
+export const markStartupMounted = () => {
+  logEvent('app', 'startup.mounted', { uptimeMs: Math.round(performance.now()) })
+  window.__FreeSeekStartup?.mounted()
+}
 
 export const markStartupReady = () =>
   window.__FreeSeekStartup?.ready((reveal) => {
@@ -33,6 +37,10 @@ export const markStartupReady = () =>
       document.visibilityState !== 'visible' ||
       matchMedia('(prefers-reduced-motion: reduce)').matches
     if (!panel || !mark || noMotion()) {
+      logEvent('app', 'startup.revealed', {
+        handoff: 'none',
+        uptimeMs: Math.round(performance.now()),
+      })
       reveal()
       return
     }
@@ -61,6 +69,11 @@ export const markStartupReady = () =>
       mark.style.removeProperty('transform')
       greeting?.style.removeProperty('opacity')
       reveal()
+      logEvent('app', 'startup.revealed', {
+        handoff: native ? 'native' : 'web',
+        destination: panel.dataset.handoff,
+        uptimeMs: Math.round(performance.now()),
+      })
       if (native) {
         void StartupHandoff.dismiss().catch(() => {})
       }
@@ -166,10 +179,11 @@ export const markStartupReady = () =>
           })
           finish()
         })
-        .catch(() => {
+        .catch((error) => {
           if (finished) {
             return
           }
+          logEvent('app', 'startup.native-handoff-failed', diagnosticError(error), 'warn')
           panel.style.removeProperty('visibility')
           void StartupHandoff.dismiss().catch(() => {})
           native = false

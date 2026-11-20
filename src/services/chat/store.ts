@@ -76,7 +76,8 @@ import {
   type Connection,
 } from '../providers.js'
 import { streamProviderMessage } from '../api/providerClient.js'
-import { searchContext, searchForReply } from '../api/search.js'
+import { createSearchCall, searchContext, searchForReply } from '../api/search.js'
+import type { SearchTool } from '../api/searchTool.js'
 import {
   documentTextFallback,
   inlineDocuments,
@@ -123,7 +124,8 @@ const ACTIVE_SESSION_KEY = 'freeseek:active-session'
 const readActiveSession = (): string | null => {
   try {
     return localStorage.getItem(ACTIVE_SESSION_KEY)
-  } catch {
+  } catch (error) {
+    logEvent('storage', 'active-session.read-failed', diagnosticError(error), 'warn')
     return null
   }
 }
@@ -135,8 +137,8 @@ const writeActiveSession = (id: string | null) => {
     } else {
       localStorage.removeItem(ACTIVE_SESSION_KEY)
     }
-  } catch {
-    // 存储不可用时忽略，仅影响重启恢复
+  } catch (error) {
+    logEvent('storage', 'active-session.write-failed', diagnosticError(error), 'warn')
   }
 }
 
@@ -422,7 +424,9 @@ const createReply = (persona: Session['persona'], sessionId: string | null): Ass
 const standaloneSearchResult = (blocks: AssistantMessage['blocks']) =>
   blocks.find(
     (block): block is WebSearchToolResultBlock =>
-      block.type === 'web_search_tool_result' && block.tool_use_id.startsWith('search-')
+      block.type === 'web_search_tool_result' &&
+      block.tool_use_id.startsWith('search-') &&
+      !block.content.some((item) => item.type === 'web_search_tool_result_error')
   )
 
 /** 仍在生成中的回复（页面关闭或导出时未结束）按「已停止」处理 */
@@ -459,9 +463,15 @@ export const initChat = (): Promise<void> => {
       const summaries = await db.loadSessionSummaries()
       logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
       if (epoch === historyEpoch) {
-        // 恢复上次打开的会话；记录不存在（已删除）时回到欢迎页
-        const saved = readActiveSession()
+        // 仅在选择恢复上次对话时读取保存的会话 ID。
+        const { startupPage } = useSettings.getState()
+        const saved = startupPage === 'last-chat' ? readActiveSession() : null
         const restore = saved && summaries.some((session) => session.id === saved) ? saved : null
+        logEvent('app', 'startup.chat-route', {
+          startupPage,
+          restored: Boolean(restore),
+          missing: Boolean(saved && !restore),
+        })
         lastActiveId = restore
         set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
         if (restore) {
@@ -492,6 +502,7 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
     return pending.promise
   }
   const epoch = historyEpoch
+  const started = performance.now()
   set((state) => ({ sessionLoadErrors: { ...state.sessionLoadErrors, [id]: false } }))
   const load = { promise: Promise.resolve() }
   sessionLoads.set(id, load)
@@ -513,6 +524,11 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
       const session = sameSummary(settled, summary) ? settled : { ...settled, ...summary }
       touchSession(id)
       set((state) => ({ sessionCache: { ...state.sessionCache, [id]: session } }))
+      logEvent('storage', 'session.loaded', {
+        sessionId: id,
+        messageCount: session.messages.length,
+        elapsedMs: Math.round(performance.now() - started),
+      })
       if (session !== stored) {
         persist(id)
       }
@@ -612,6 +628,7 @@ export const newChat = () => {
   if (!get().importingHistory) {
     inheritSequence += 1
     set({ activeId: null, targetMessageId: null, inheritFrom: null })
+    logEvent('chat', 'session.new')
     trimSessionCache()
   }
 }
@@ -648,6 +665,10 @@ export const startInheritSession = (id: string) => {
       activeId: null,
       targetMessageId: null,
     })
+    logEvent('chat', 'session.inheritance-prepared', {
+      sessionId: id,
+      messageCount: messages.length,
+    })
     trimSessionCache()
   }
   const cached = getSession(id)
@@ -664,6 +685,9 @@ export const startInheritSession = (id: string) => {
 /** 取消对话接续 */
 export const cancelInherit = () => {
   inheritSequence += 1
+  if (get().inheritFrom) {
+    logEvent('chat', 'session.inheritance-cancelled')
+  }
   set({ inheritFrom: null })
 }
 
@@ -671,6 +695,11 @@ export const selectSession = (id: string, messageId?: string) => {
   if (!get().importingHistory && get().sessions.some((session) => session.id === id)) {
     inheritSequence += 1
     touchSession(id)
+    logEvent('chat', 'session.opened', {
+      sessionId: id,
+      hasMessageTarget: Boolean(messageId),
+      cached: Boolean(getSession(id)),
+    })
     set({ activeId: id, targetMessageId: messageId ?? null, inheritFrom: null })
     void ensureSessionLoaded(id)
     trimSessionCache()
@@ -699,6 +728,7 @@ export const setSessionPinned = async (id: string, pinned: boolean): Promise<boo
     return false
   }
   updateSession(id, (session) => ({ ...session, pinned }))
+  logEvent('chat', 'session.pin-changed', { sessionId: id, pinned })
   persist(id)
   return true
 }
@@ -708,6 +738,7 @@ export const renameSession = (id: string, title: string) => {
     return
   }
   const controller = getStreamController(id)
+  logEvent('chat', 'session.rename-requested', { sessionId: id, hasTitle: Boolean(title.trim()) })
   if (controller) {
     titleRequests.delete(controller)
   }
@@ -789,7 +820,13 @@ const removeSessionData = async (id: string): Promise<boolean> => {
   }
 }
 
-export const stopReply = (sessionId: string) => getStreamController(sessionId)?.abort()
+export const stopReply = (sessionId: string) => {
+  const controller = getStreamController(sessionId)
+  if (controller) {
+    logEvent('chat', 'reply.stop-requested', { sessionId })
+    controller.abort()
+  }
+}
 
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
@@ -911,6 +948,11 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   }
   const history = path.slice(0, index - 1)
   const reply = createReply(session.persona, sessionId)
+  logEvent('chat', 'reply.regenerated', {
+    sessionId,
+    replyId: reply.id,
+    previousReplyId: previous.id,
+  })
   if (
     previous.status === 'error' &&
     reply.search &&
@@ -963,6 +1005,11 @@ export const editMessage = (sessionId: string, messageId: string, content: strin
     createdAt: Date.now(),
   }
   const reply = createReply(session.persona, sessionId)
+  logEvent('chat', 'question.edited', {
+    sessionId,
+    replyId: reply.id,
+    attachmentCount: question.files.length,
+  })
   updateSession(sessionId, (s) => ({
     ...appendBranch(s, path[index - 1]?.id ?? null, [question, reply]),
     updatedAt: Date.now(),
@@ -985,6 +1032,7 @@ export const selectMessageVersion = (sessionId: string, messageId: string) => {
     return
   }
   updateSession(sessionId, (session) => selectVersion(session, messageId))
+  logEvent('chat', 'reply.version-selected', { sessionId, messageId })
   persist(sessionId)
 }
 
@@ -1021,6 +1069,7 @@ export const continueReply = (sessionId: string, messageId: string) => {
     error: undefined,
   }
   updateReply(sessionId, reply)
+  logEvent('chat', 'reply.continued', { sessionId, replyId: reply.id })
   updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }))
   persist(sessionId)
   void streamReply(sessionId, reply, {
@@ -1053,6 +1102,7 @@ export const retryUpload = (sessionId: string, messageId: string) => {
     return
   }
   const reply: AssistantMessage = { ...previous, status: 'pending', error: undefined }
+  logEvent('upload', 'reply.retry-requested', { sessionId, replyId: reply.id })
   updateReply(sessionId, reply)
   persist(sessionId)
   void streamReply(sessionId, reply, {
@@ -1762,6 +1812,7 @@ const streamReply = async (
   let usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
   let searchResult = standaloneSearchResult(initial.blocks)
+  let searchAttempted = false
   const requestStartedAt = Date.now()
   let connection: Connection | undefined
   let inlineAttempted = false
@@ -1908,31 +1959,86 @@ const streamReply = async (
         const standaloneSearch =
           !serverExtensions &&
           initial.search &&
+          searchSettings.thirdPartySearch.enabled &&
           (connection.kind === 'custom' || searchSettings.proSearchOn)
-        if (standaloneSearch && original.question.content.trim()) {
-          if (searchResult?.type !== 'web_search_tool_result') {
-            const searched = await searchForReply(
-              original.question.content,
-              thirdPartySearchKey(searchSettings),
-              controller.signal
-            )
-            searchResult = searched.result
-            reply = { ...reply, blocks: [...reply.blocks, searched.call, searched.result] }
-            if (searched.billed) {
-              const usage = {
-                input_tokens: 0,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                output_tokens: 0,
-                standalone_search_requests: 1,
+        const searchModel = connection.model
+        const search: SearchTool | undefined =
+          standaloneSearch && !searchResult && !searchAttempted && !prepared.prefix
+            ? {
+                unavailable: () => {
+                  if (get().activeId === sessionId) {
+                    showToast({ key: 'providerSearchToolRejected' })
+                  }
+                },
+                execute: async (input) => {
+                  searchAttempted = true
+                  const call = createSearchCall(input.query)
+                  reply = { ...reply, blocks: [...reply.blocks, call] }
+                  flush()
+                  const result: WebSearchToolResultBlock = {
+                    type: 'web_search_tool_result',
+                    tool_use_id: call.id,
+                    kind: 'search',
+                    content: [],
+                  }
+                  let billed = false
+                  let failed = false
+                  try {
+                    const searched = await searchForReply(
+                      input,
+                      thirdPartySearchKey(searchSettings),
+                      controller.signal
+                    )
+                    result.content = searched.content
+                    billed = searched.billed
+                    searchResult = result
+                  } catch (error) {
+                    controller.signal.throwIfAborted()
+                    failed = true
+                    result.content = [
+                      { type: 'web_search_tool_result_error', error_code: 'unavailable' },
+                    ]
+                    logEvent(
+                      'chat',
+                      'search.failed',
+                      {
+                        sessionId,
+                        replyId: initial.id,
+                        ...diagnosticError(error),
+                      },
+                      'warn'
+                    )
+                  }
+                  reply = { ...reply, blocks: [...reply.blocks, result] }
+                  if (billed) {
+                    const usage = {
+                      input_tokens: 0,
+                      cache_creation_input_tokens: 0,
+                      cache_read_input_tokens: 0,
+                      output_tokens: 0,
+                      standalone_search_requests: 1,
+                    }
+                    usageBase = sumMessageUsage(usageBase, usage)
+                    usageHistory.push({ createdAt: Date.now(), usage, model: searchModel })
+                    reply = { ...reply, usage: usageBase, usageHistory: [...usageHistory] }
+                  }
+                  flush()
+                  persist(sessionId)
+                  if (failed) {
+                    return {
+                      isError: true,
+                      text: 'Web search failed. Answer using the available information and explain any limits on verification.',
+                    }
+                  }
+                  return {
+                    text:
+                      searchContext(result) ||
+                      'Web search returned no usable results. Answer using the available information.',
+                  }
+                },
               }
-              usageBase = sumMessageUsage(usageBase, usage)
-              usageHistory.push({ createdAt: Date.now(), usage, model: connection.model })
-              reply = { ...reply, usage: usageBase, usageHistory: [...usageHistory] }
-            }
-            flush()
-            persist(sessionId)
-          }
+            : undefined
+        if (standaloneSearch && searchResult) {
           const references = searchContext(searchResult)
           prepared = {
             ...prepared,
@@ -1962,9 +2068,15 @@ const streamReply = async (
             0
           )
         }
+        const requestId = createId()
         logEvent('chat', 'request.prepared', {
           sessionId,
           replyId: initial.id,
+          requestId,
+          protocol: connection.kind === 'custom' ? connection.profile.protocol : 'deepseek',
+          officialModel: connection.kind === 'deepseek' ? connection.model : undefined,
+          reasoningLevel: initial.reasoning?.level,
+          offersIndependentSearch: Boolean(search),
           attempt,
           messagesCount: messages.length,
           bodyBytes: new Blob([JSON.stringify(messages)]).size,
@@ -1995,7 +2107,7 @@ const streamReply = async (
                     : 'You are a helpful assistant.'),
                 controller.signal,
                 initial.reasoning,
-                { sessionId }
+                { sessionId, search, requestId }
               )
             : streamMessage(
                 connection.apiKey,
@@ -2018,10 +2130,13 @@ const streamReply = async (
                     ...(titleRequests.has(controller) && { title: { enabled: true } }),
                   }),
                 },
-                controller.signal
+                controller.signal,
+                requestId,
+                search
               )
         const blockIndexes = new Map<number, number>()
-        const usageStartedAt = Date.now()
+        let usageStartedAt = Date.now()
+        let roundUsage: (typeof usageHistory)[number] | undefined
         for await (const event of events) {
           if (event.type === 'message_start' && validModel(event.message.model)) {
             reply = { ...reply, responseModel: event.message.model }
@@ -2047,18 +2162,25 @@ const streamReply = async (
                 ? event.usage
                 : undefined
           if (usage) {
+            const entry = {
+              createdAt: usageStartedAt,
+              usage,
+              model: reply.responseModel ?? reply.model ?? undefined,
+            }
+            roundUsage = entry
             reply = {
               ...reply,
               usage: sumMessageUsage(usageBase, usage),
-              usageHistory: [
-                ...usageHistory,
-                {
-                  createdAt: usageStartedAt,
-                  usage,
-                  model: reply.responseModel ?? reply.model ?? undefined,
-                },
-              ],
+              usageHistory: [...usageHistory, entry],
             }
+          }
+          if (search && event.type === 'message_delta' && event.delta.stop_reason === 'tool_use') {
+            if (roundUsage) {
+              usageBase = reply.usage
+              usageHistory.push(roundUsage)
+              roundUsage = undefined
+            }
+            usageStartedAt = Date.now()
           }
           if (document.visibilityState === 'hidden') {
             flush()
@@ -2327,7 +2449,12 @@ const streamReply = async (
       elapsedMs: Date.now() - requestStartedAt,
       omittedFiles: omitted.size,
       inputTokens: reply.usage?.input_tokens,
+      cachedInputTokens: reply.usage?.cache_read_input_tokens,
       outputTokens: reply.usage?.output_tokens,
+      standaloneSearches: reply.usage?.standalone_search_requests,
+      searchAttempted,
+      localKey: reply.error?.localMessage?.key,
+      httpStatus: reply.error?.status,
     })
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
@@ -2368,6 +2495,7 @@ export const setSessionPersona = (
     updatedAt: Date.now(),
   }))
   persist(sessionId)
+  logEvent('persona', 'session.persona-changed', { sessionId, hasPersona: Boolean(persona) })
   return true
 }
 

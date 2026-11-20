@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { beginDiagnosticOperation, diagnosticError } from '../../services/diagnostics/log.js'
 import { providerModelLabel, useProviders, type ProviderProfile } from '../../services/providers.js'
 import { useSettings } from '../../services/settings.js'
 import {
@@ -47,14 +48,17 @@ export const useModelUsage = (active: boolean) => {
       return
     }
     const controller = new AbortController()
+    const finish = beginDiagnosticOperation('usage', 'models.read')
     setState({ rows: null, failed: false })
     void collectModelUsage(controller.signal)
       .then((rows) => {
+        finish(controller.signal.aborted ? 'cancelled' : 'completed', { modelCount: rows.length })
         if (!controller.signal.aborted) {
           setState({ rows, failed: false })
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        finish(controller.signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
         if (!controller.signal.aborted) {
           setState({ rows: null, failed: true })
         }

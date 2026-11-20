@@ -124,6 +124,12 @@ export const addDraftFiles = (
   }
   const error = validateFiles(files, getDraft(sessionId).attachments.length)
   if (error) {
+    logEvent(
+      'upload',
+      'attachments.rejected',
+      { sessionId, count: files.length, localKey: error.key },
+      'warn'
+    )
     return error
   }
   if (
@@ -131,6 +137,12 @@ export const addDraftFiles = (
     useProviders.getState().selection.model === 'deepseek-v4-pro' &&
     files.some((file) => isImage(resolveMimeType(file)))
   ) {
+    logEvent(
+      'upload',
+      'attachments.rejected',
+      { sessionId, count: files.length, localKey: 'providerProNoImages' },
+      'warn'
+    )
     return { key: 'providerProNoImages' }
   }
   const added = files.map((file): DraftAttachment => {
@@ -143,6 +155,13 @@ export const addDraftFiles = (
     }
   })
   updateDraft(sessionId, (draft) => ({ ...draft, attachments: [...draft.attachments, ...added] }))
+  logEvent('upload', 'attachments.added', {
+    sessionId,
+    count: added.length,
+    imageCount: added.filter((attachment) => attachment.isImage).length,
+    bytes: files.reduce((total, file) => total + file.size, 0),
+    local: useProviders.getState().selection.providerId !== 'deepseek',
+  })
   added.forEach((attachment) => upload(attachment, apiKey))
   return null
 }
@@ -154,6 +173,7 @@ export const retryDraftAttachment = (
 ) => {
   const attachment = getDraft(sessionId).attachments.find((item) => item.id === attachmentId)
   if (attachment) {
+    logEvent('upload', 'attachment.retry-requested', { sessionId, fileId: attachmentId })
     upload(attachment, apiKey)
   }
 }
@@ -202,6 +222,7 @@ export const removeDraftAttachment = (sessionId: string | null, attachmentId: st
     return
   }
   releaseAttachment(attachment, true)
+  logEvent('upload', 'attachment.removed', { sessionId, fileId: attachmentId })
   updateDraft(sessionId, (draft) => ({
     ...draft,
     attachments: draft.attachments.filter((item) => item.id !== attachmentId),

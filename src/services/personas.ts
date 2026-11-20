@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createId } from '../utils/id.js'
-import { diagnosticError, logEvent } from './diagnostics/log.js'
+import { beginDiagnosticOperation, diagnosticError, logEvent } from './diagnostics/log.js'
 
 export class PersonaError extends Error {
   constructor(readonly reason: 'invalid' | 'storage') {
@@ -192,6 +192,7 @@ export const addPersona = (name: string, prompt: string): string => {
   }
   const persona: Persona = { id: createId(), name: name.trim(), prompt: prompt.trim() }
   commit([...usePersonas.getState().personas, persona])
+  logEvent('persona', 'custom.added')
   return persona.id
 }
 
@@ -206,6 +207,7 @@ export const updatePersona = (id: string, name: string, prompt: string): void =>
           : persona
       )
   )
+  logEvent('persona', 'custom.updated')
 }
 
 export const removePersona = (id: string): void => {
@@ -217,11 +219,13 @@ export const removePersona = (id: string): void => {
     personas.filter((persona) => persona.id !== id),
     defaultId === id ? 'builtin-default' : defaultId
   )
+  logEvent('persona', 'custom.removed', { wasDefault: defaultId === id })
 }
 
 export const setDefaultPersona = (id: string): void => {
   if (usePersonas.getState().personas.some((persona) => persona.id === id)) {
     commit(usePersonas.getState().personas, id)
+    logEvent('persona', 'default.changed', { builtin: id.startsWith(BUILTIN_PREFIX) })
   }
 }
 
@@ -235,7 +239,7 @@ export const activePersona = (): { name: string; prompt: string } | null => {
 }
 
 /** 全量校验后追加，外部 ID 和默认选择不覆盖本机设置。 */
-export const importPersonas = async (file: File): Promise<number> => {
+const readPersonaImport = async (file: File): Promise<number> => {
   if (file.size > 16 * 1024 * 1024) {
     throw new PersonaError('invalid')
   }
@@ -285,11 +289,23 @@ export const importPersonas = async (file: File): Promise<number> => {
   commit([...current, ...additions])
   return additions.length
 }
+export const importPersonas = async (file: File): Promise<number> => {
+  const finish = beginDiagnosticOperation('persona', 'import', { bytes: file.size })
+  try {
+    const count = await readPersonaImport(file)
+    finish('completed', { count })
+    return count
+  } catch (error) {
+    finish('failed', diagnosticError(error))
+    throw error
+  }
+}
 export const exportPersonas = (): { name: string; blob: Blob } | null => {
   const personas = usePersonas
     .getState()
     .personas.filter((p) => !isBuiltin(p))
     .map(({ name, prompt }) => ({ name, prompt }))
+  logEvent('persona', 'export.prepared', { count: personas.length })
   return personas.length
     ? {
         name: `freeseek-personas-${new Date().toISOString().slice(0, 10)}.json`,

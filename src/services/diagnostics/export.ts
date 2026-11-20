@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { NativeDiagnostics } from './native.js'
+import { browserEnvironment } from './browser.js'
 import {
   readDiagnosticLogs,
   logEvent,
@@ -7,6 +8,9 @@ import {
   sanitizeDetails,
   boundedLogDetails,
   diagnosticError,
+  diagnosticId,
+  LOG_ISSUE_RESERVE,
+  LOG_LIMIT,
 } from './log.js'
 import { getStorageSummary } from '../chat/db.js'
 import { useChatStore } from '../chat/store.js'
@@ -17,20 +21,27 @@ import { API_ORIGIN } from '../api/client.js'
 import { writeArchive } from '../chat/history/zipWriter.js'
 import { useProviders } from '../providers.js'
 
-const bounded = async <T>(
-  task: () => Promise<T>,
-  timeoutMs = 4000
-): Promise<T | { unavailable: true }> => {
+type Capture<T> =
+  | { status: 'available'; value: T }
+  | {
+      status: 'unsupported' | 'failed' | 'timeout'
+      value?: undefined
+      problem?: Record<string, unknown>
+    }
+
+const capture = async <T>(task: () => Promise<T>, timeoutMs = 4000): Promise<Capture<T>> => {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      Promise.resolve().then(task),
-      new Promise<{ unavailable: true }>((resolve) => {
-        timer = setTimeout(() => resolve({ unavailable: true }), timeoutMs)
+      Promise.resolve()
+        .then(task)
+        .then((value) => ({ status: 'available' as const, value })),
+      new Promise<Capture<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs)
       }),
     ])
-  } catch {
-    return { unavailable: true }
+  } catch (error) {
+    return { status: 'failed', problem: diagnosticError(error) }
   } finally {
     clearTimeout(timer)
   }
@@ -42,10 +53,7 @@ const jsonl = (entries: unknown[]) =>
     type: 'application/x-ndjson',
   })
 
-const logIdentifier = (value: unknown) =>
-  typeof value === 'string' && /^(?:[0-9a-f-]{16,45}|[0-9a-z]{5,12}-[0-9a-z]{1,20})$/i.test(value)
-    ? value
-    : undefined
+const unavailable = { unavailable: true } as const
 
 const eventFields = (entry: unknown, source: 'client' | 'native') => {
   if (!entry || typeof entry !== 'object') {
@@ -67,8 +75,8 @@ const eventFields = (entry: unknown, source: 'client' | 'native') => {
     {
       source,
       timestamp,
-      id: logIdentifier(event.id),
-      runId: logIdentifier(event.runId),
+      id: diagnosticId(event.id),
+      runId: diagnosticId(event.runId),
       scope,
       event: name,
       level: level === 'warn' || level === 'error' ? level : 'info',
@@ -82,24 +90,33 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   const started = performance.now(),
     settings = useSettings.getState()
   registerLogSecret(settings.apiKey)
+  registerLogSecret(settings.thirdPartySearch.apiKey)
   const providers = useProviders.getState()
   providers.profiles.forEach((profile) => {
     registerLogSecret(profile.apiKey)
     Object.values(profile.headers).forEach(registerLogSecret)
   })
   logEvent('diagnostics', 'export.started')
-  const [client, storage, browserStorage, native] = await Promise.all([
+  const platform = Capacitor.getPlatform()
+  const [client, storage, browserStorage, browser, native] = await Promise.all([
     readDiagnosticLogs(),
-    bounded(getStorageSummary),
-    bounded(() => navigator.storage?.estimate?.() ?? Promise.resolve({})),
-    Capacitor.getPlatform() === 'android'
-      ? bounded(() => NativeDiagnostics.snapshot())
-      : Promise.resolve({ unavailable: true as const }),
+    capture(getStorageSummary),
+    navigator.storage?.estimate
+      ? capture(() => navigator.storage.estimate())
+      : { status: 'unsupported' as const, value: undefined },
+    capture(async () => browserEnvironment()),
+    platform === 'android'
+      ? capture(() => NativeDiagnostics.snapshot())
+      : { status: 'unsupported' as const, value: undefined },
   ])
-  const nativeEvents =
-    'events' in native && Array.isArray(native.events)
-      ? native.events.slice(-1000).flatMap((entry) => eventFields(entry, 'native'))
-      : []
+  const nativeLog = native.value
+    ? { status: 'available' as const, value: native.value }
+    : platform === 'android'
+      ? await capture(() => NativeDiagnostics.readEvents(), 1500)
+      : { status: 'unsupported' as const, value: undefined }
+  const nativeEvents = Array.isArray(nativeLog.value?.events)
+    ? nativeLog.value.events.slice(-1000).flatMap((entry) => eventFields(entry, 'native'))
+    : []
   const state = useChatStore.getState()
   const active = state.activeId ? state.sessionCache[state.activeId] : undefined
   const lastReply = active?.messages.findLast((message) => message.role === 'assistant')
@@ -112,9 +129,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     taskCounts[task.status]++
   })
   const update = useUpdate.getState()
-  const heap = (
-    performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }
-  ).memory
+  const profile = providers.profiles.find((item) => item.id === providers.selection.providerId)
   let apiHost = 'unknown'
   try {
     apiHost = new URL(API_ORIGIN).host
@@ -124,38 +139,55 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   const environment = sanitizeDetails({
     app: {
       version: document.querySelector('meta[name="application-version"]')?.getAttribute('content'),
-      platform: Capacitor.getPlatform(),
+      platform,
       apiHost,
       apiKeyConfigured: Boolean(settings.apiKey),
+      uptimeMs: Math.round(performance.now()),
+      nativePlugins:
+        platform === 'android'
+          ? Object.fromEntries(
+              [
+                'Diagnostics',
+                'DiagnosticShare',
+                'Backup',
+                'HistoryFiles',
+                'Update',
+                'CustomHttp',
+                'StartupHandoff',
+                'MicPermission',
+              ].map((plugin) => [plugin, Capacitor.isPluginAvailable(plugin)])
+            )
+          : undefined,
     },
-    browser: {
-      userAgent: navigator.userAgent,
-      language: navigator.language,
-      online: navigator.onLine,
-      secureContext: window.isSecureContext,
-      viewportWidth: innerWidth,
-      viewportHeight: innerHeight,
-      devicePixelRatio,
-      hardwareConcurrency: navigator.hardwareConcurrency,
-      createImageBitmap: typeof createImageBitmap === 'function',
-      mediaDevices: Boolean(navigator.mediaDevices),
-      jsHeap: heap
-        ? { usedJSHeapSize: heap.usedJSHeapSize, jsHeapSizeLimit: heap.jsHeapSizeLimit }
-        : undefined,
-    },
+    browser: browser.value ?? unavailable,
     preferences: {
       locale: settings.locale,
       theme: settings.themePreference,
+      startupPage: settings.startupPage,
       fontScale: settings.fontScale,
       showUsage: settings.showUsage,
       showModelSwitcher: settings.showModelSwitcher,
+      showReasoningPicker: settings.showReasoningPicker,
+      autoCompress: settings.autoCompress,
       customProvider: providers.selection.providerId !== 'deepseek',
       providerCount: providers.profiles.length,
-      protocol:
-        providers.profiles.find((profile) => profile.id === providers.selection.providerId)
-          ?.protocol ?? 'deepseek',
+      protocol: profile?.protocol ?? 'deepseek',
+      officialModel:
+        providers.selection.providerId === 'deepseek' ? providers.selection.model : undefined,
+      customStream: profile?.stream,
+      customStreamUsage: profile?.streamUsage,
+      customContextTokens: profile?.contextWindows?.[providers.selection.model],
+      customMaxOutputTokens:
+        profile?.modelSettings?.[providers.selection.model]?.maxOutputTokens ??
+        profile?.maxOutputTokens,
+      customVision: profile?.vision,
+      customPdf: profile?.pdf,
       thinking: settings.thinking,
       search: settings.search,
+      proSearch: settings.proSearchOn,
+      thirdPartySearch: settings.thirdPartySearchOn,
+      independentSearchConfigured: settings.thirdPartySearch.enabled,
+      searchKeySource: settings.thirdPartySearch.keySource,
       voice: settings.ttsVoice,
       locationConfigured: Boolean(settings.location),
     },
@@ -168,7 +200,13 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       activeMessages: active?.messages.length,
       inheritedMessages: active?.inherited?.messages.length ?? 0,
       streamingCount: Object.keys(state.streaming).length,
+      loadErrors: Object.values(state.sessionLoadErrors).filter(Boolean).length,
       saveErrors: Object.values(state.sessionSaveErrors).filter(Boolean).length,
+      lastReplyStatus: lastReply?.status,
+      lastStopReason: lastReply?.stopReason,
+      lastReplyHttpStatus: lastReply?.error?.status,
+      localKey: lastReply?.error?.localMessage?.key,
+      lastReasoningLevel: lastReply?.reasoning?.level,
       lastRequestInputTokens: usage
         ? usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens
         : undefined,
@@ -181,21 +219,46 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       percent: update.percent,
       lastCheckedAt: update.lastCheckedAt,
     },
-    storage,
-    browserStorage,
-    native: 'environment' in native ? native.environment : native,
+    storage: storage.value ?? unavailable,
+    browserStorage: browserStorage.value ?? unavailable,
+    native: native.value?.environment ?? unavailable,
   })
   const events = client.events.flatMap((entry) => eventFields(entry, 'client'))
-  const errorEvents = [...events, ...nativeEvents].filter(
-    (entry) => entry.level === 'error' || entry.level === 'warn'
-  )
+  const allEvents = [...events, ...nativeEvents]
+  const errorEvents = allEvents.filter((entry) => entry.level === 'error' || entry.level === 'warn')
+  const scopes: Record<string, { events: number; issues: number; latestAt: number }> =
+    Object.create(null)
+  for (const entry of allEvents) {
+    const scope = (scopes[entry.scope] ??= { events: 0, issues: 0, latestAt: 0 })
+    scope.events++
+    scope.issues += Number(entry.level !== 'info')
+    scope.latestAt = Math.max(scope.latestAt, entry.timestamp)
+  }
   const summary = {
     clientEvents: events.length,
     nativeEvents: nativeEvents.length,
     clientStorageAvailable: client.storageAvailable,
-    nativeSnapshotAvailable: 'environment' in native,
+    nativeSnapshotAvailable: Boolean(native.value?.environment),
     unavailableClientWrites: client.unavailableWrites,
-    unavailableNativeWrites: 'failedWrites' in native ? native.failedWrites : undefined,
+    unavailableNativeWrites: nativeLog.value?.failedWrites,
+    nativeLogReadFailure:
+      nativeLog.value?.readFailure === 'size-limit' || nativeLog.value?.readFailure === 'unreadable'
+        ? nativeLog.value.readFailure
+        : undefined,
+    collection: {
+      clientEvents: client.storageAvailable ? 'available' : 'memory-only',
+      native: native.status,
+      nativeEvents: nativeLog.status,
+      browser: browser.status,
+      storage: storage.status,
+      browserStorage: browserStorage.status,
+    },
+    collectionErrors: Object.fromEntries(
+      Object.entries({ native, nativeEvents: nativeLog, browser, storage, browserStorage }).flatMap(
+        ([source, entry]) => ('problem' in entry && entry.problem ? [[source, entry.problem]] : [])
+      )
+    ),
+    scopes,
     recentIssues: errorEvents.sort((a, b) => a.timestamp - b.timestamp).slice(-30),
     createdInMs: Math.round(performance.now() - started),
   }
@@ -207,10 +270,18 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     privacy: {
       apiKey: 'excluded',
       chatContent: 'excluded',
+      searchTerms: 'excluded',
+      deviceIdentifiers: 'excluded',
       attachmentOriginals: 'excluded',
       audio: 'excluded',
     },
-    retention: { days: 7, clientLimit: 2000, nativeLimit: 1000 },
+    retention: {
+      days: 7,
+      clientLimit: LOG_LIMIT,
+      nativeLimit: 1000,
+      clientIssueReserve: LOG_ISSUE_RESERVE,
+      nativeIssueReserve: 150,
+    },
   }
   try {
     const blob = await writeArchive([
@@ -223,7 +294,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
         name: 'README.txt',
         blob: new Blob(
           [
-            'FreeSeek 诊断包\n包含版本、环境、请求状态、上传、重试、存储、更新与运行错误。\n不包含 API Key、聊天正文、附件原件或录音。\n日志最多保留最近7天（客户端2000条、原生1000条）。\n反馈问题时请说明发生时间与操作步骤。\n不是聊天备份，请勿用此包恢复对话。\n',
+            'FreeSeek 诊断包\n环境信息见 environment.json，采集状态和近期问题见 summary.json。\nclient-events.jsonl 与 native-events.jsonl 记录操作、处理结果和失败阶段。带有相同 operationId 或 requestId 的记录可以一起查看。\n不包含 API Key、聊天正文、搜索词、附件原件、录音或设备唯一标识。\n日志最多保留最近 7 天。客户端最多 2000 条，原生最多 1000 条，满额时给近期警告和错误保留空间。\n反馈问题时请说明发生时间与操作步骤。\n',
           ],
           { type: 'text/plain' }
         ),

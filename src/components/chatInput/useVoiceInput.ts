@@ -77,8 +77,12 @@ export const useVoiceInput = (onText: (text: string) => void) => {
         recording.cancel()
       }
       if (operationRef.current !== operation || !audio) {
+        if (operationRef.current === operation) {
+          logEvent('speech', 'recording.empty', {}, 'warn')
+        }
         return
       }
+      logEvent('speech', 'recording.completed', { bytes: audio.size, mimeType: audio.type })
       controller = new AbortController()
       controllerRef.current = controller
       setStatus('transcribing')
@@ -95,8 +99,13 @@ export const useVoiceInput = (onText: (text: string) => void) => {
         showToast({ key: 'voiceInputEmpty' })
       }
     } catch (error) {
-      logEvent('speech', 'transcription.failed', diagnosticError(error), 'error')
       if (operationRef.current === operation && !controller?.signal.aborted) {
+        logEvent(
+          'speech',
+          controller ? 'transcription.failed' : 'recording.stop-failed',
+          diagnosticError(error),
+          'error'
+        )
         showToast({ key: 'voiceInputFailed' })
       }
     } finally {
@@ -109,6 +118,7 @@ export const useVoiceInput = (onText: (text: string) => void) => {
 
   const toggle = useCallback(async () => {
     if (!AVAILABLE) {
+      logEvent('speech', 'input.unavailable', { secureContext: window.isSecureContext }, 'warn')
       showToast({ key: 'voiceInputRequiresHttps' })
       return
     }

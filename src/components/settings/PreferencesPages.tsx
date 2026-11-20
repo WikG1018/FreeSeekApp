@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   setFontScale,
@@ -7,12 +7,14 @@ import {
   setShowModelSwitcher,
   setShowReasoningPicker,
   setShowUsage,
+  setStartupPage,
   setThemePreference,
   setTtsVoice,
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
 import { IconCheckOutline16 } from '../base/icons.js'
+import { Select } from '../base/Select.js'
 import { Section, SwitchRow } from './SettingsRows.js'
 import styles from './Settings.module.css'
 
@@ -120,6 +122,8 @@ const Choice = ({
 export const ChatPreferencesPage = () => {
   const t = useTranslate(),
     name = useId()
+  const startupPage = useSettings((s) => s.startupPage)
+  const [startupSaveFailed, setStartupSaveFailed] = useState(false)
   const showModelSwitcher = useSettings((s) => s.showModelSwitcher),
     showReasoningPicker = useSettings((s) => s.showReasoningPicker),
     autoCompress = useSettings((s) => s.autoCompress),
@@ -127,6 +131,23 @@ export const ChatPreferencesPage = () => {
     voice = useSettings((s) => s.ttsVoice)
   return (
     <>
+      <Section>
+        <Select
+          ariaLabel={t('settingsStartupPage')}
+          settingRow="value"
+          value={startupPage}
+          options={[
+            { value: 'last-chat', label: t('settingsStartupLastChat') },
+            { value: 'new-chat', label: t('settingsStartupNewChat') },
+          ]}
+          onChange={(page) => setStartupSaveFailed(!setStartupPage(page))}
+        />
+        {startupSaveFailed && (
+          <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
+            {t('settingsStartupSaveFailed')}
+          </p>
+        )}
+      </Section>
       <Section title={t('settingsChatDisplay')}>
         <SwitchRow
           label={t('providerShowSwitcher')}

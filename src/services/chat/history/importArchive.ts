@@ -1,4 +1,5 @@
 import * as db from '../db.js'
+import { logEvent } from '../../diagnostics/log.js'
 import { readJsonEntry as readJson, type ImportProgress } from './readJson.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
@@ -102,6 +103,11 @@ export const importArchive = async (
   let processed = 0
   const { total, expandedBytes } = await archiveSize(file)
   const useDisk = useDiskForArchive(expandedBytes)
+  logEvent('backup', 'import.directory-read', {
+    entryCount: total,
+    expandedBytes,
+    diskStaging: useDisk,
+  })
   const onRead = (bytes: number, size: number) =>
     onProgress?.(processed, total, { bytes, total: size })
 
@@ -129,12 +135,17 @@ export const importArchive = async (
         const data = await read(entry)
         if (isNativeManifest(data)) {
           const native = readNativeManifest(data)
+          logEvent('backup', 'import.format-detected', {
+            format: 'freeseek',
+            sessionCount: native.sessions.length,
+          })
           if (!native.sessions.length) {
             fail('backupEmptyHistory')
           }
           return await importNativeEntries(entries, native, total, useDisk, onProgress)
         }
         checkManifest(data)
+        logEvent('backup', 'import.format-detected', { format: 'deepseek' })
         manifest = true
       } else if (path === USER_PATH && !index && imported.size === 0) {
         // 账号信息（已脱敏）不导入；文件可能缺失。

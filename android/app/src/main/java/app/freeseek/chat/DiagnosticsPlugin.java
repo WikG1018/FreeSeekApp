@@ -1,20 +1,11 @@
 package app.freeseek.chat;
 
-import android.Manifest;
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
-import android.net.ConnectivityManager;
-import android.net.NetworkCapabilities;
 import android.net.Uri;
-import android.os.Build;
-import android.os.Debug;
 import android.provider.DocumentsContract;
 import androidx.activity.result.ActivityResult;
-import androidx.webkit.WebViewCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -30,103 +21,37 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.json.JSONArray;
 
 @CapacitorPlugin(name = "Diagnostics")
 public class DiagnosticsPlugin extends Plugin {
+    private static final ExecutorService deviceWorker = Executors.newSingleThreadExecutor();
+
+    @PluginMethod
+    public void readEvents(PluginCall call) {
+        DiagnosticsLog.afterPending(() -> call.resolve(DiagnosticsLog.snapshot(getContext())));
+    }
+
     @PluginMethod
     public void snapshot(PluginCall call) {
-        DiagnosticsLog.afterPending(() -> {
+        DiagnosticsLog.afterPending(() -> deviceWorker.execute(() -> {
             try {
                 call.resolve(snapshotNow());
             } catch (Exception error) {
                 DiagnosticsLog.error(getContext(), "diagnostics", "snapshot.failed", error);
                 call.reject("Diagnostics unavailable", error);
             }
-        });
-    }
-
-    private static JSObject baseEnvironment(Context context) {
-        JSObject env = new JSObject();
-        env.put("androidVersion", Build.VERSION.RELEASE);
-        env.put("sdk", Build.VERSION.SDK_INT);
-        env.put("manufacturer", Build.MANUFACTURER);
-        env.put("model", Build.MODEL);
-        env.put("debuggable", (context.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0);
-        env.put("abis", new JSONArray(Arrays.asList(Build.SUPPORTED_ABIS)));
-        env.put("pageSizeBytes", android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE));
-        try {
-            PackageInfo app = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
-            env.put("version", app.versionName);
-            env.put("versionCode", Build.VERSION.SDK_INT >= 28 ? app.getLongVersionCode() : app.versionCode);
-        } catch (PackageManager.NameNotFoundException ignored) {}
-        try {
-            PackageInfo webview = WebViewCompat.getCurrentWebViewPackage(context);
-            if (webview != null) {
-                env.put("webviewVersion", webview.versionName);
-                env.put("webviewPackage", webview.packageName);
-            }
-        } catch (Exception ignored) {}
-        return env;
+        }));
     }
 
     private JSObject snapshotNow() {
         Context context = getContext();
         JSObject result = DiagnosticsLog.snapshot(context);
-        JSObject env = baseEnvironment(context);
-        env.put("microphoneGranted", context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED);
-        if (Build.VERSION.SDK_INT >= 26) {
-            env.put("installPackagesAllowed", context.getPackageManager().canRequestPackageInstalls());
-        }
-
-        ActivityManager manager = context.getSystemService(ActivityManager.class);
-        if (manager != null) {
-            ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
-            manager.getMemoryInfo(memory);
-            Debug.MemoryInfo process = new Debug.MemoryInfo();
-            Debug.getMemoryInfo(process);
-            env.put("systemTotalMemoryBytes", memory.totalMem);
-            env.put("systemAvailableMemoryBytes", memory.availMem);
-            env.put("systemLowMemory", memory.lowMemory);
-            env.put("processPssKB", process.getTotalPss());
-            env.put("lowRamDevice", manager.isLowRamDevice());
-            if (Build.VERSION.SDK_INT >= 30) {
-                JSONArray exits = new JSONArray();
-                for (var exit : manager.getHistoricalProcessExitReasons(context.getPackageName(), 0, 5)) {
-                    JSObject entry = new JSObject();
-                    entry.put("timestamp", exit.getTimestamp());
-                    entry.put("reason", exit.getReason());
-                    entry.put("status", exit.getStatus());
-                    entry.put("pssKB", exit.getPss());
-                    entry.put("rssKB", exit.getRss());
-                    String description = exit.getDescription();
-                    entry.put("memoryLimiter", description != null && description.contains("MemoryLimiter:AnonSwap"));
-                    exits.put(entry);
-                }
-                env.put("recentProcessExits", exits);
-            }
-        }
-        env.put("javaHeapMaxBytes", Runtime.getRuntime().maxMemory());
-        File files = context.getFilesDir();
-        env.put("storageFreeBytes", files.getUsableSpace());
-        env.put("storageTotalBytes", files.getTotalSpace());
-
-        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
-        if (connectivity != null) {
-            NetworkCapabilities network = connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
-            JSObject connection = new JSObject();
-            connection.put("connected", network != null);
-            if (network != null) {
-                connection.put("validated", network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
-                connection.put("wifi", network.hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
-                connection.put("cellular", network.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR));
-                connection.put("vpn", network.hasTransport(NetworkCapabilities.TRANSPORT_VPN));
-            }
-            env.put("network", connection);
-        }
-        result.put("environment", env);
+        result.put("environment", DiagnosticDevice.snapshot(context));
         return result;
     }
 
@@ -201,16 +126,7 @@ public class DiagnosticsPlugin extends Plugin {
 
     private void writeBasicArchive(OutputStream output, JSObject report, String mode) throws Exception {
         try (ZipOutputStream zip = new ZipOutputStream(output)) {
-            Context context = getContext();
-            JSObject snapshot;
-            boolean complete = true;
-            try {
-                snapshot = snapshotNow();
-            } catch (Exception unavailable) {
-                complete = false;
-                snapshot = DiagnosticsLog.snapshot(context);
-                snapshot.put("environment", baseEnvironment(context));
-            }
+            JSObject snapshot = snapshotNow();
             JSObject nativeEnv = snapshot.getJSObject("environment");
             long timestamp = System.currentTimeMillis();
             JSObject manifest = new JSObject();
@@ -220,8 +136,10 @@ public class DiagnosticsPlugin extends Plugin {
             if (nativeEnv != null) manifest.put("version", nativeEnv.optString("version"));
             JSObject env = new JSObject().put("native", nativeEnv);
             JSObject summary = new JSObject(report.toString());
-            summary.put("nativeSnapshotAvailable", complete);
+            summary.put("nativeSnapshotAvailable", true);
+            summary.put("clientStorageAvailable", false);
             summary.put("unavailableNativeWrites", snapshot.optInt("failedWrites"));
+            if (snapshot.has("readFailure")) summary.put("nativeLogReadFailure", snapshot.optString("readFailure"));
 
             JSONArray events = snapshot.getJSONArray("events");
             summary.put("nativeEvents", events.length());

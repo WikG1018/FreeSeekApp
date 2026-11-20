@@ -24,6 +24,7 @@ export const en = {
     'The model service returned an error. Check the configuration or try another model.',
   providerInterrupted: 'The response ended unexpectedly. Received content is retained.',
   providerToolUnsupported: 'The model requested a client tool. Remove tool parameters and retry.',
+  providerSearchToolRejected: 'This model endpoint cannot use the FreeSeek search tool.',
   providerFileUnsupported:
     'Cannot read this attachment locally. Use text or DOCX, or enable image/PDF input for a capable model.',
   providerOriginalMissing:
@@ -108,7 +109,7 @@ export const en = {
   providerMoreSaveActions: 'More save options',
   providerSaveShort: 'Save',
   providerSearchThirdParty: 'DeepSeek V4 Pro and third-party models',
-  providerSearchEnableHint: 'Enable here, then turn on search in the model’s chat toolbar',
+  providerSearchEnableHint: 'Use the chat toolbar to let the model search as needed',
   providerSearchGroup: 'Search configuration',
   providerSearchBackend: 'Standalone search API',
   providerSearchBilling: 'Billing and data',
@@ -171,9 +172,9 @@ export const en = {
   thirdPartySearchKey: 'Search credential',
   thirdPartySearchOfficialKey: 'Use the official DeepSeek API key',
   thirdPartySearchSeparateKey: 'Use a separate DeepSeek API key',
-  thirdPartySearchPricing: 'Standalone Search API costs ¥5 per 1,000 requests with results',
+  thirdPartySearchPricing: 'Models search as needed, at ¥5 per 1,000 requests with results',
   thirdPartySearchPrivacy:
-    'With search enabled, the current search query goes to DeepSeek and the results go to the selected model with your message.',
+    'DeepSeek receives search terms only when the model calls the search tool. The results go to the selected model for its answer.',
   thirdPartySearchMissingKey:
     'Set a DeepSeek API key in Chat web search or turn off search and try again.',
   thirdPartySearchHttpError:
@@ -340,6 +341,10 @@ export const en = {
   settingsApiKey: 'API Key',
   settingsChatGroup: 'Connections & chat',
   settingsChatPreferences: 'Chat preferences',
+  settingsStartupPage: 'On startup',
+  settingsStartupLastChat: 'Last chat',
+  settingsStartupNewChat: 'New chat',
+  settingsStartupSaveFailed: 'Could not save the startup option. Try again.',
   settingsEditPersona: 'Edit persona',
   siderEmptySearch: 'No matching chats',
   siderSearching: 'Searching messages…',
@@ -840,7 +845,7 @@ export const en = {
   diagnosticsExportFailed: 'Could not export diagnostics. Please retry.',
   diagnosticsFallback: 'Full diagnostics are unavailable. Preparing basic diagnostics.',
   diagnosticsPrivacy:
-    'Includes version, device environment and runtime errors. Excludes API keys, chat content, attachment originals and recordings. Logs remain on this device for up to 7 days.',
+    'Includes device model, system and WebView versions, operation results and errors. Logs stay on this device for up to 7 days and omit API keys, chats, search terms, original attachments and recordings.',
   replyNoReadableAttachment:
     'This message has no readable attachment. Replace it or add text and retry. The original is preserved.',
   contextAttachmentsSkipped:

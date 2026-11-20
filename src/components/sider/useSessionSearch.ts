@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { loadSession, reportStorageError } from '../../services/chat/db.js'
 import { useChatStore } from '../../services/chat/store.js'
+import { beginDiagnosticOperation } from '../../services/diagnostics/log.js'
 import type { Session, SessionSummary } from '../../services/chat/types.js'
 
 export type MessageMatch = {
@@ -76,6 +77,9 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
       }
     }
     const search = async () => {
+      const finish = beginDiagnosticOperation('search', 'history', {
+        sessionCount: sessions.length,
+      })
       // One record at a time keeps imported history out of the open-chat cache.
       for (let index = 0; index < sessions.length && !cancelled; index++) {
         const { id } = sessions[index]
@@ -101,6 +105,9 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
         }
       }
       publish(true)
+      finish(cancelled ? 'cancelled' : failed ? 'failed' : 'completed', {
+        matchedSessionCount: matches.size,
+      })
     }
     const timer = window.setTimeout(() => void search(), 160)
     return () => {

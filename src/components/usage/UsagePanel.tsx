@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { beginDiagnosticOperation, diagnosticError } from '../../services/diagnostics/log.js'
 import {
   collectUsage,
   isDefaultPricing,
@@ -45,16 +46,22 @@ export const UsageContent = ({
 
   useEffect(() => {
     const controller = new AbortController()
+    const finish = beginDiagnosticOperation('usage', 'totals.read')
     setLoading(true)
     setFailed(false)
     void collectUsage(controller.signal)
       .then((result) => {
+        finish(controller.signal.aborted ? 'cancelled' : 'completed', {
+          dayCount: result.days.length,
+          requestCount: result.total.requests,
+        })
         if (!controller.signal.aborted) {
           setStats(result)
           setLoading(false)
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        finish(controller.signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
         if (!controller.signal.aborted) {
           setFailed(true)
           setLoading(false)

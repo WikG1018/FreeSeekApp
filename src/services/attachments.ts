@@ -237,7 +237,7 @@ export const uploadAttachment = (
   const started = performance.now()
   logEvent('upload', 'queued', {
     fileId: id,
-    extension: getFileExt(name),
+    extension: isAcceptedExt(name) ? getFileExt(name) : 'unknown',
     bytes: blob.size,
     mimeType: blob.type,
     image: isImage,

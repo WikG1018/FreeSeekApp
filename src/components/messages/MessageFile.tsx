@@ -21,6 +21,9 @@ const useFileUrl = (id: string) => {
       .then((blob) => {
         if (!cancelled) {
           objectUrl = blob ? URL.createObjectURL(blob) : null
+          if (!blob) {
+            logEvent('storage', 'attachment.preview.missing', { fileId: id })
+          }
           setFileUrl({ id, url: objectUrl })
         }
       })
@@ -82,7 +85,19 @@ export const MessageFile = ({
           <IconPhotoErrorFill20 />
         </span>
       ) : (
-        <img src={url} alt={file.name} onError={() => setFailedUrl(url)} />
+        <img
+          src={url}
+          alt={file.name}
+          onError={() => {
+            logEvent(
+              'ui',
+              'attachment.preview.decode-failed',
+              { fileId: file.id, bytes: file.size },
+              'warn'
+            )
+            setFailedUrl(url)
+          }}
+        />
       )
     ) : null
 

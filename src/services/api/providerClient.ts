@@ -2,12 +2,23 @@ import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
+import {
+  announceProviderSearch,
+  collectProviderSearchTurn,
+  finishSearchTurn,
+  type SearchTool,
+} from './searchTool.js'
 import { providerOutputBudget, validateProfile, type ProviderProfile } from '../providers.js'
 import { isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
 import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
-import { logEvent, diagnosticError, registerLogSecret } from '../diagnostics/log.js'
+import {
+  beginDiagnosticOperation,
+  logEvent,
+  diagnosticError,
+  registerLogSecret,
+} from '../diagnostics/log.js'
 import { createId } from '../../utils/id.js'
 import type { TranslationKey } from '../../i18n/index.js'
 
@@ -197,8 +208,16 @@ const fetchResponse = async (
   signal: AbortSignal,
   { requestId = createId(), sessionId }: RequestContext = {}
 ) => {
+  const started = performance.now()
   const serialized = body === undefined ? undefined : JSON.stringify(body)
-  if (serialized && new Blob([serialized]).size > 32 * 1024 * 1024) {
+  const bodyBytes = serialized ? new Blob([serialized]).size : 0
+  if (bodyBytes > 32 * 1024 * 1024) {
+    logEvent(
+      'api',
+      'provider.request-too-large',
+      { requestId, protocol: profile.protocol, bodyBytes },
+      'warn'
+    )
     throw new ApiError('protocol', { key: 'providerFileTooLarge' })
   }
   const controller = new AbortController(),
@@ -216,14 +235,26 @@ const fetchResponse = async (
     requestId,
     protocol: profile.protocol,
     operation: body === undefined ? 'models' : 'chat',
+    bodyBytes,
   })
   try {
     const go = isOpenCodeGoUrl(new URL(url))
-    const response = await providerFetch(url, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: await headersFor(profile, go, body !== undefined, sessionId),
-      body: serialized,
-      signal: controller.signal,
+    const response = await providerFetch(
+      url,
+      {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: await headersFor(profile, go, body !== undefined, sessionId),
+        body: serialized,
+        signal: controller.signal,
+      },
+      requestId
+    )
+    logEvent('api', 'provider.response', {
+      requestId,
+      status: response.status,
+      openCodeGo: go,
+      streaming: response.headers.get('Content-Type')?.includes('text/event-stream'),
+      elapsedMs: Math.round(performance.now() - started),
     })
     if (!response.ok) {
       const known =
@@ -251,7 +282,17 @@ const fetchResponse = async (
     }
   } catch (error) {
     signal.removeEventListener('abort', abort)
-    logEvent('api', 'provider.failed', { requestId, ...diagnosticError(error) }, 'error')
+    logEvent(
+      'api',
+      signal.aborted ? 'provider.cancelled' : 'provider.failed',
+      {
+        requestId,
+        timedOut,
+        elapsedMs: Math.round(performance.now() - started),
+        ...diagnosticError(error),
+      },
+      signal.aborted ? 'info' : 'error'
+    )
     if (signal.aborted) {
       signal.throwIfAborted()
     }
@@ -264,7 +305,7 @@ const fetchResponse = async (
   }
 }
 export type ProviderCatalogModel = { id: string; contextWindow?: number }
-export const fetchProviderCatalog = async (
+const loadProviderCatalog = async (
   input: ProviderProfile,
   signal: AbortSignal
 ): Promise<ProviderCatalogModel[]> => {
@@ -328,6 +369,21 @@ export const fetchProviderCatalog = async (
     throw new ApiError('protocol', { key: 'providerModelsEmpty' })
   }
   return [...models.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 5000)
+}
+
+export const fetchProviderCatalog = async (
+  input: ProviderProfile,
+  signal: AbortSignal
+): Promise<ProviderCatalogModel[]> => {
+  const finish = beginDiagnosticOperation('api', 'provider.catalog', { protocol: input.protocol })
+  try {
+    const models = await loadProviderCatalog(input, signal)
+    finish('completed', { modelCount: models.length })
+    return models
+  } catch (error) {
+    finish(signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
+    throw error
+  }
 }
 
 export const fetchProviderModels = async (input: ProviderProfile, signal: AbortSignal) =>
@@ -468,7 +524,6 @@ const stopReason = (value: unknown): StopReason =>
       ? 'tool_use'
       : 'end_turn'
 
-/** 各协议统一成现有消息事件，保留停止、用量和错误语义。 */
 export async function* streamProviderMessage(
   input: ProviderProfile,
   model: string,
@@ -476,13 +531,76 @@ export async function* streamProviderMessage(
   system: string,
   signal: AbortSignal,
   reasoning?: ReasoningChoice,
-  { requestId = createId(), sessionId }: RequestContext = {}
+  { requestId = createId(), sessionId, search }: RequestContext & { search?: SearchTool } = {}
 ): AsyncGenerator<MessageStreamEvent> {
   const profile = validateProfile({ ...input, model })
+  const body: Json = applyReasoning(
+    providerBody(profile, model, messages, system),
+    profile.protocol,
+    reasoning
+  )
+  const context = { requestId, sessionId }
+  // Keep explicitly configured provider tools intact.
+  if (search && (array(body.tools).length || array(body.functions).length)) {
+    logEvent(
+      'search',
+      'tool.unavailable',
+      { protocol: profile.protocol, reason: 'provider-tools-configured' },
+      'warn'
+    )
+    search.unavailable()
+    search = undefined
+  }
+  if (!search) {
+    yield* streamProviderRound(profile, model, body, signal, context)
+    return
+  }
+  const withSearch = announceProviderSearch(body, profile.protocol)
+  const collector = collectProviderSearchTurn(withSearch, profile.protocol)
+  let turn: ReturnType<typeof collector.finish>
+  try {
+    turn = yield* streamProviderRound(profile, model, withSearch, signal, context, collector)
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      error.kind !== 'http' ||
+      error.localMessage?.key !== 'providerSearchToolRejected'
+    ) {
+      throw error
+    }
+    signal.throwIfAborted()
+    logEvent(
+      'search',
+      'tool.unavailable',
+      { protocol: profile.protocol, reason: 'endpoint-rejected', ...diagnosticError(error) },
+      'warn'
+    )
+    search.unavailable()
+    yield* streamProviderRound(profile, model, body, signal, { sessionId })
+    return
+  }
+  if (turn) {
+    const followUp = await finishSearchTurn(turn, search, signal)
+    yield* streamProviderRound(profile, model, followUp, signal, { sessionId })
+  }
+}
+
+/** 各协议统一成现有消息事件，保留停止、用量和错误语义。 */
+async function* streamProviderRound(
+  profile: ProviderProfile,
+  model: string,
+  body: Json,
+  signal: AbortSignal,
+  { requestId = createId(), sessionId }: RequestContext,
+  collector?: ReturnType<typeof collectProviderSearchTurn>
+): AsyncGenerator<
+  MessageStreamEvent,
+  ReturnType<ReturnType<typeof collectProviderSearchTurn>['finish']>
+> {
   const { response, dispose } = await fetchResponse(
     profile,
     endpoint(profile, 'chat', model, profile.stream),
-    applyReasoning(providerBody(profile, model, messages, system), profile.protocol, reasoning),
+    body,
     signal,
     { requestId, sessionId }
   )
@@ -519,6 +637,7 @@ export async function* streamProviderMessage(
     if (data.error || data.type === 'error' || data.type === 'response.failed') {
       throw new ApiError('stream', remoteLimit(data) ?? { key: 'providerRemoteError' })
     }
+    collector?.read(data)
     if (profile.protocol === 'openai') {
       const choice = record(Array.isArray(data.choices) ? data.choices[0] : undefined),
         content = record(choice.delta || choice.message)
@@ -666,10 +785,16 @@ export async function* streamProviderMessage(
     if (!completed) {
       throw new ApiError('interrupted', { key: 'providerInterrupted' })
     }
-    if ((reason as StopReason) === 'tool_use') {
+    const turn =
+      reason === 'end_turn' && (profile.protocol === 'responses' || profile.protocol === 'gemini')
+        ? collector?.finish()
+        : (reason as StopReason) === 'tool_use'
+          ? collector?.finish()
+          : undefined
+    if ((reason as StopReason) === 'tool_use' && !turn) {
       throw new ApiError('protocol', { key: 'providerToolUnsupported' })
     }
-    if (!emitted) {
+    if (!emitted && !turn) {
       throw new ApiError('protocol', { key: 'providerInvalidResponse' })
     }
     for (const index of opened) {
@@ -677,10 +802,14 @@ export async function* streamProviderMessage(
     }
     yield {
       type: 'message_delta',
-      delta: { stop_reason: reason, stop_sequence: null },
+      delta: { stop_reason: turn ? 'tool_use' : reason, stop_sequence: null },
       ...(usage ? { usage } : {}),
     }
+    if (turn) {
+      return turn
+    }
     yield { type: 'message_stop' }
+    return undefined
   } catch (error) {
     if (error instanceof StreamReadError) {
       logEvent(
@@ -705,22 +834,34 @@ export const testProviderModel = async (
   signal: AbortSignal
 ): Promise<{ text: string; elapsedMs: number }> => {
   const started = performance.now()
-  const capability = customReasoning(validateProfile(profile), profile.model)
-  let result = ''
-  for await (const event of streamProviderMessage(
-    { ...profile, maxOutputTokens: Math.min(providerOutputBudget(profile, profile.model), 1024) },
-    profile.model,
-    [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
-    'This is a connection test. Reply briefly.',
-    signal,
-    capability && { adapter: capability.adapter, level: capability.defaultLevel }
-  )) {
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-      result += event.delta.text
+  const requestId = createId()
+  const finish = beginDiagnosticOperation('api', 'provider.test', {
+    requestId,
+    protocol: profile.protocol,
+  })
+  try {
+    const capability = customReasoning(validateProfile(profile), profile.model)
+    let result = ''
+    for await (const event of streamProviderMessage(
+      { ...profile, maxOutputTokens: Math.min(providerOutputBudget(profile, profile.model), 1024) },
+      profile.model,
+      [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
+      'This is a connection test. Reply briefly.',
+      signal,
+      capability && { adapter: capability.adapter, level: capability.defaultLevel },
+      { requestId }
+    )) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        result += event.delta.text
+      }
     }
+    if (!result.trim()) {
+      throw new ApiError('protocol', { key: 'providerInvalidResponse' })
+    }
+    finish('completed')
+    return { text: result.slice(0, 200), elapsedMs: Math.round(performance.now() - started) }
+  } catch (error) {
+    finish(signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
+    throw error
   }
-  if (!result.trim()) {
-    throw new ApiError('protocol', { key: 'providerInvalidResponse' })
-  }
-  return { text: result.slice(0, 200), elapsedMs: Math.round(performance.now() - started) }
 }

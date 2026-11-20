@@ -68,6 +68,7 @@ export class ProviderConfigError extends Error {
   constructor(readonly reason: 'url' | 'model' | 'parameters' | 'storage' | 'missing' | 'changed') {
     super(`Provider configuration: ${reason}`)
     this.name = 'ProviderConfigError'
+    logEvent('settings', 'provider.configuration-rejected', { reason }, 'warn')
   }
 }
 export const validModel = (value: unknown): value is string =>
@@ -356,7 +357,16 @@ export const saveProvider = (
           : fallback
         : current,
   })
-  logEvent('app', 'provider.saved', { protocol: saved.protocol, count: profiles.length })
+  logEvent('settings', 'provider.saved', {
+    protocol: saved.protocol,
+    connectionCount: profiles.length,
+    modelCount: modelsInProfile(saved).length,
+    created: !previous,
+    activated: Boolean(activate),
+    streaming: saved.stream,
+    streamUsage: saved.streamUsage,
+    outputTokens: saved.maxOutputTokens,
+  })
   return saved
 }
 export const removeProvider = (id: string) => {
@@ -366,6 +376,7 @@ export const removeProvider = (id: string) => {
     profiles: state.profiles.filter((p) => p.id !== id),
     selection: state.selection.providerId === id ? fallback : state.selection,
   })
+  logEvent('settings', 'provider.removed', { active: state.selection.providerId === id })
 }
 export const selectModel = (selection: ModelSelection) => {
   const state = useProviders.getState()
@@ -378,7 +389,11 @@ export const selectModel = (selection: ModelSelection) => {
     throw new ProviderConfigError('model')
   }
   commit({ ...state, selection })
-  logEvent('app', 'model.selected', { custom: selection.providerId !== 'deepseek' })
+  logEvent('settings', 'model.selected', {
+    custom: selection.providerId !== 'deepseek',
+    officialModel: selection.providerId === 'deepseek' ? selection.model : undefined,
+    protocol: state.profiles.find((profile) => profile.id === selection.providerId)?.protocol,
+  })
 }
 export const activeConnectionRef = (): ConnectionRef => {
   const { selection, profiles } = useProviders.getState()
@@ -457,6 +472,7 @@ export const setOfficialReasoningDefault = (model: string, level: ReasoningLevel
   }
   const state = useProviders.getState()
   commit({ ...state, officialDefaults: { ...state.officialDefaults, [model]: level } })
+  logEvent('settings', 'reasoning.default-changed', { officialModel: model, level })
   if (state.selection.providerId === 'deepseek' && state.selection.model === model) {
     useProviders.setState({ reasoningOverride: null })
   }
@@ -492,5 +508,7 @@ export const selectedReasoning = (sessionId: string | null): ReasoningChoice | u
   }
 }
 
-export const setReasoningOverride = (sessionId: string | null, level: ReasoningLevel) =>
+export const setReasoningOverride = (sessionId: string | null, level: ReasoningLevel) => {
   useProviders.setState({ reasoningOverride: { sessionId, level } })
+  logEvent('settings', 'reasoning.session-changed', { sessionId, level })
+}

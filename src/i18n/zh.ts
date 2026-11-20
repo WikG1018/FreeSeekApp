@@ -16,6 +16,7 @@ export const zh = {
   providerRemoteError: '模型服务返回错误，请检查配置或换一个模型后重试',
   providerInterrupted: '响应意外中断，已收到的内容已保留',
   providerToolUnsupported: '该模型要求执行客户端工具，本次请求未完成，请移除工具参数后重试',
+  providerSearchToolRejected: '当前模型接口无法使用 FreeSeek 的搜索工具。',
   providerFileUnsupported:
     '该附件暂不支持本机解析。可用文本、DOCX，或为支持图片/PDF的模型启用相应输入',
   providerOriginalMissing: '本机缺少历史附件原件，无法发送到此服务，请重新选择附件或新建对话',
@@ -91,7 +92,7 @@ export const zh = {
   providerMoreSaveActions: '更多保存方式',
   providerSaveShort: '保存',
   providerSearchThirdParty: 'DeepSeek V4 Pro 和第三方模型',
-  providerSearchEnableHint: '启用后，可在对应模型的对话工具栏打开智能搜索',
+  providerSearchEnableHint: '可在对话工具栏允许模型按需搜索',
   providerSearchGroup: '搜索配置',
   providerSearchBackend: '独立搜索 API',
   providerSearchBilling: '计费与数据',
@@ -153,9 +154,9 @@ export const zh = {
   thirdPartySearchKey: '搜索密钥',
   thirdPartySearchOfficialKey: '使用 DeepSeek 官方 API Key',
   thirdPartySearchSeparateKey: '使用单独的 DeepSeek API Key',
-  thirdPartySearchPricing: '独立搜索每千次有结果的请求 ¥5',
+  thirdPartySearchPricing: '模型按需搜索，每千次有结果的请求 ¥5',
   thirdPartySearchPrivacy:
-    '开启智能搜索后，本轮搜索词发给 DeepSeek，搜索结果随本轮问题发给所选模型。',
+    '只有模型调用搜索工具时，才会将搜索词发给 DeepSeek。网页搜索结果会交给当前模型用于回答。',
   thirdPartySearchMissingKey:
     '智能搜索需要 DeepSeek API Key，请在对话联网搜索中配置，或关闭搜索后重试。',
   thirdPartySearchHttpError:
@@ -311,6 +312,10 @@ export const zh = {
   settingsApiKey: 'API Key',
   settingsChatGroup: '连接与对话',
   settingsChatPreferences: '对话偏好',
+  settingsStartupPage: '启动时打开',
+  settingsStartupLastChat: '上次对话',
+  settingsStartupNewChat: '新对话首页',
+  settingsStartupSaveFailed: '启动选项保存失败，请重试。',
   settingsEditPersona: '编辑人设',
   siderEmptySearch: '没有匹配的对话',
   siderSearching: '正在搜索聊天正文…',
@@ -782,7 +787,7 @@ export const zh = {
   diagnosticsExportFailed: '诊断包导出失败，请重试',
   diagnosticsFallback: '完整诊断暂不可用，正在准备基础诊断',
   diagnosticsPrivacy:
-    '包含版本、设备环境和运行错误记录；不含 API Key、对话正文、附件原件或录音。日志仅在本机保留最近 7 天。',
+    '包含设备型号、系统与 WebView 版本，以及功能操作、失败阶段和运行错误。日志在本机保留最多 7 天，不含 API Key、对话正文、搜索词、附件原件或录音。',
   replyNoReadableAttachment: '本条消息的附件无法读取，请更换附件或补充文字后重试。原记录已保留。',
   contextAttachmentsSkipped:
     '本轮未读取 {count} 个附件（{files}）。原附件已保留，回答可能不含这些附件的内容。',

@@ -360,7 +360,9 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
       bundleReady = true
       const saved = await (share
         ? shareDiagnostics(pack.name, pack.blob)
-        : saveBackup(pack.name, pack.blob).then((saved) => (saved ? ('saved' as const) : false)))
+        : saveBackup(pack.name, pack.blob, 'diagnostics').then((saved) =>
+            saved ? ('saved' as const) : false
+          ))
       logEvent(
         'diagnostics',
         saved ? (saved === 'shared' ? 'export.share-opened' : 'export.saved') : 'export.cancelled',
@@ -893,12 +895,16 @@ const useHistoryImport = () => {
     progress,
     errorKey,
     select: (next: File) => {
+      logEvent('backup', 'import.file-selected', { bytes: next.size })
       setErrorKey(null)
       setStatus(null)
       setProgress(null)
       setFile(next)
     },
-    cancel: () => setFile(null),
+    cancel: () => {
+      logEvent('backup', 'import.confirmation-cancelled')
+      setFile(null)
+    },
     dismissResult: () => setResult(null),
     confirm,
   }

@@ -28,6 +28,15 @@ export const describeKnownApiError = (
     return { key: 'replyProExtensionsUnavailable' }
   }
   if (
+    /^(?:tool_use_not_supported|tools_not_supported|function_calling_not_supported)$/i.test(code) ||
+    /\b(?:tools|tool_choice|tool_config|toolConfig|function calling|tool calling)\b.{0,50}\b(?:not supported|unsupported|unavailable)\b|\b(?:does not support|doesn't support|unsupported|(?:unknown|unrecognized) (?:field|name|parameter))\b.{0,25}\b(?:tools|tool_choice|tool_config|toolConfig|function calling|tool calling)\b/i.test(
+      message
+    ) ||
+    /^tools: other tools cannot be used together with .{0,80}safety_check/i.test(message)
+  ) {
+    return { key: 'providerSearchToolRejected' }
+  }
+  if (
     /\brich_layout_recognition\b/i.test(message) &&
     /\bcontains\s+images\b[\s\S]{0,48}\bnot\s+supported\s+by\s+(?:this|the(?: current)?)\s+model\b/i.test(
       message

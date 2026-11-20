@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { selectSession, useChatStore } from '../../services/chat/store.js'
 import { readScreenTime } from '../../services/screenTime.js'
+import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { useSettings } from '../../services/settings.js'
 import { localDayKey } from '../../utils/localDate.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
@@ -50,7 +51,8 @@ export const ScreenTimePage = () => {
 
   useEffect(() => {
     let disposed = false,
-      inProgress = false
+      inProgress = false,
+      lastDurable: boolean | undefined
     const refresh = async (includeChats: boolean) => {
       if (inProgress || document.visibilityState !== 'visible') {
         return
@@ -58,12 +60,35 @@ export const ScreenTimePage = () => {
       inProgress = true
       try {
         const next = await readScreenTime(includeChats)
+        if (includeChats || next.durable !== lastDurable) {
+          logEvent(
+            'usage',
+            'screen-time.read',
+            {
+              includeChats,
+              chatCount: next.chats.size,
+              durable: next.durable,
+            },
+            next.durable ? 'info' : 'warn'
+          )
+        }
+        lastDurable = next.durable
         if (!disposed) {
           setSnapshot((old) => ({
             ...next,
             chats: includeChats ? next.chats : (old?.chats ?? next.chats),
           }))
         }
+      } catch (error) {
+        if (lastDurable !== false) {
+          logEvent(
+            'usage',
+            'screen-time.read-failed',
+            { includeChats, ...diagnosticError(error) },
+            'warn'
+          )
+        }
+        lastDurable = false
       } finally {
         inProgress = false
       }

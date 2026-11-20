@@ -11,18 +11,21 @@ const stored = (key: string) => {
   }
 }
 
-const remember = (key: string, value: string) => {
+const remember = (key: string, value: string, event: string) => {
   volatile.set(key, value)
   try {
     localStorage.setItem(key, value)
-  } catch {
+    logEvent('app', event, { persisted: true })
+  } catch (error) {
     // The current launch still remembers the reader's choice.
+    logEvent('app', event, { persisted: false, ...diagnosticError(error) }, 'warn')
   }
 }
 
 export const hasSeenOnboarding = () => stored(GUIDE_KEY) === '1'
-export const markOnboardingSeen = () => remember(GUIDE_KEY, '1')
-export const acceptUsageNotice = () => remember(NOTICE_KEY, NOTICE_VERSION)
+export const markOnboardingSeen = () => remember(GUIDE_KEY, '1', 'onboarding.guide-seen')
+export const acceptUsageNotice = () =>
+  remember(NOTICE_KEY, NOTICE_VERSION, 'onboarding.notice-accepted')
 export type OnboardingStep = 'notice' | 'guide'
 export const initialOnboardingStep = (configured: boolean): OnboardingStep | null => {
   if (
@@ -36,3 +39,4 @@ export const initialOnboardingStep = (configured: boolean): OnboardingStep | nul
   }
   return configured || hasSeenOnboarding() ? null : 'guide'
 }
+import { diagnosticError, logEvent } from './diagnostics/log.js'

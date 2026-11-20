@@ -442,6 +442,105 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
+    'startup page selection persists and opens the new-chat home while preserving history',
+    async (page) => {
+      const id = 'startup-page-saved-chat'
+      const title = '周末计划'
+      const originalText = '周六上午去图书馆'
+      const draft = '还没发出的补充计划'
+      await page.evaluate(
+        async ({ id, title, originalText, draft }) => {
+          const a = window.__audit
+          await a.seed([
+            a.fixtures.session({
+              id,
+              title,
+              messages: [a.fixtures.user('weekend-plan', originalText)],
+            }),
+          ])
+          a.drafts.setDraftText(id, draft)
+          a.drafts.flushDraftTexts()
+        },
+        { id, title, originalText, draft }
+      )
+
+      const openPreferences = async () => {
+        await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+        await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+        await page.getByRole('button', { name: '对话偏好', exact: true }).click()
+      }
+      const row = page.getByRole('button', { name: '启动时打开', exact: true })
+      const menu = page.getByRole('listbox', { name: '启动时打开', exact: true })
+
+      await openPreferences()
+      await row.getByText('上次对话', { exact: true }).waitFor()
+      await row.click()
+      await menu.waitFor()
+      assert.deepEqual(await menu.getByRole('option').allTextContents(), ['上次对话', '新对话首页'])
+      assert.equal(
+        await menu
+          .getByRole('option', { name: '上次对话', exact: true })
+          .getAttribute('aria-selected'),
+        'true'
+      )
+      await page.evaluate(() => {
+        const setItem = Storage.prototype.setItem
+        window.__restoreStartupStorage = () => {
+          Storage.prototype.setItem = setItem
+        }
+        Storage.prototype.setItem = function (key, value) {
+          if (key === 'freeseek:startup-page') {
+            throw new DOMException('Test storage failure', 'QuotaExceededError')
+          }
+          return setItem.call(this, key, value)
+        }
+      })
+      await menu.getByRole('option', { name: '新对话首页', exact: true }).click()
+      await page.getByRole('alert').filter({ hasText: '启动选项保存失败' }).waitFor()
+      await row.getByText('上次对话', { exact: true }).waitFor()
+      await page.evaluate(() => window.__restoreStartupStorage())
+
+      await row.click()
+      await menu.getByRole('option', { name: '新对话首页', exact: true }).click()
+      await row.getByText('新对话首页', { exact: true }).waitFor()
+      assert.equal(
+        await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId),
+        id
+      )
+
+      await page.reload()
+      await page.getByTestId('welcome-whale').waitFor()
+      assert.deepEqual(
+        await page.evaluate(async (id) => {
+          const a = window.__audit
+          const state = a.store.useChatStore.getState()
+          return {
+            active: state.activeId,
+            ids: state.sessions.map((session) => session.id),
+            loaded: Object.keys(state.sessionCache),
+            savedText: (await a.db.loadSession(id)).messages[0].content,
+            savedDraft: a.drafts.getDraft(id).text,
+          }
+        }, id),
+        { active: null, ids: [id], loaded: [], savedText: originalText, savedDraft: draft }
+      )
+
+      await openPreferences()
+      await row.getByText('新对话首页', { exact: true }).waitFor()
+      await row.click()
+      await menu.getByRole('option', { name: '上次对话', exact: true }).click()
+      await row.getByText('上次对话', { exact: true }).waitFor()
+      await page.reload()
+      await page.getByTestId('chat-header').getByText(title, { exact: true }).waitFor()
+      await page.getByText(originalText, { exact: true }).waitFor()
+      assert.equal(
+        await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId),
+        id
+      )
+    }
+  )
+
+  await run(
     'blocked application script shows recovery controls without loading the application',
     async (page) => {
       await page.getByRole('heading', { name: 'FreeSeek 未能启动', exact: true }).waitFor()

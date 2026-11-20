@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { hasChatConnection } from '../../services/providers.js'
+import { logEvent } from '../../services/diagnostics/log.js'
 
 /** 设置页路由：一级目录与各二级页面 */
 export type SettingsPageId =
@@ -67,6 +68,14 @@ export const useSettingsDialog = create(() => ({
   page: 'home' as SettingsPageId,
   showTutorial: false,
 }))
+
+useSettingsDialog.subscribe((current, previous) => {
+  if (current.open && !current.closing && (!previous.open || current.page !== previous.page)) {
+    logEvent('settings', 'page.opened', { page: current.page })
+  } else if (current.closing && !previous.closing) {
+    logEvent('settings', 'page.closed', { page: current.page })
+  }
+})
 
 export const openSettings = (page: SettingsPageId = 'home', { showTutorial = false } = {}) =>
   useSettingsDialog.setState({ open: true, closing: false, page, showTutorial })

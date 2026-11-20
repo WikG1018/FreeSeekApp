@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { logEvent, registerLogSecret } from './diagnostics/log.js'
+import { diagnosticError, logEvent, registerLogSecret } from './diagnostics/log.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -7,6 +7,7 @@ export type Locale = 'zh-CN' | 'en-US'
 
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
+export type StartupPagePreference = 'last-chat' | 'new-chat'
 export type ThirdPartySearch = {
   enabled: boolean
   keySource: 'official' | 'separate'
@@ -18,6 +19,7 @@ type Settings = {
   apiKey: string | null
   locale: Locale
   themePreference: ThemePreference
+  startupPage: StartupPagePreference
   location: UserLocation | null
   ttsVoice: TtsVoice
   thinking: boolean
@@ -41,6 +43,7 @@ const KEYS = {
   locale: 'freeseek:locale',
   location: 'freeseek:location',
   themePreference: 'freeseek:theme-preference',
+  startupPage: 'freeseek:startup-page',
   ttsVoice: 'freeseek:tts-voice',
   thinking: 'freeseek:thinking',
   search: 'freeseek:search',
@@ -59,12 +62,7 @@ const read = (key: string) => {
   try {
     return localStorage.getItem(key)
   } catch (error) {
-    logEvent(
-      'storage',
-      'settings.read.failed',
-      { errorName: error instanceof Error ? error.name : 'Error' },
-      'warn'
-    )
+    logEvent('storage', 'settings.read.failed', { setting: key, ...diagnosticError(error) }, 'warn')
     return null
   }
 }
@@ -81,7 +79,7 @@ const write = (key: string, value: string | null) => {
     logEvent(
       'storage',
       'settings.write.failed',
-      { errorName: error instanceof Error ? error.name : 'Error' },
+      { setting: key, ...diagnosticError(error) },
       'error'
     )
     return false
@@ -146,6 +144,7 @@ export const useSettings = create<Settings>(() => ({
   locale: initialLocale(),
   location: initialLocation(),
   themePreference: initialThemePreference(),
+  startupPage: read(KEYS.startupPage) === 'new-chat' ? 'new-chat' : 'last-chat',
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
   hasLegacyThinking: read(KEYS.thinking) !== null,
@@ -164,6 +163,42 @@ export const useSettings = create<Settings>(() => ({
   })(),
 }))
 
+// Only record values from this explicit list of non-sensitive preferences.
+useSettings.subscribe((current, previous) => {
+  const fields = [
+    'locale',
+    'themePreference',
+    'startupPage',
+    'ttsVoice',
+    'thinking',
+    'search',
+    'proSearchOn',
+    'thirdPartySearchOn',
+    'fontScale',
+    'showUsage',
+    'showModelSwitcher',
+    'showReasoningPicker',
+    'autoCompress',
+    'siderCollapsed',
+  ] as const
+  const changes: Record<string, unknown> = Object.fromEntries(
+    fields
+      .filter((field) => current[field] !== previous[field])
+      .map((field) => [field, current[field]])
+  )
+  if (current.location !== previous.location) {
+    changes.locationConfigured = Boolean(current.location)
+  }
+  if (current.thirdPartySearch !== previous.thirdPartySearch) {
+    changes.independentSearchEnabled = current.thirdPartySearch.enabled
+    changes.searchKeySource = current.thirdPartySearch.keySource
+    changes.separateSearchKeyConfigured = Boolean(current.thirdPartySearch.apiKey)
+  }
+  if (Object.keys(changes).length) {
+    logEvent('settings', 'preferences.changed', changes)
+  }
+})
+
 export const setLocale = (locale: Locale) => {
   write(KEYS.locale, locale)
   useSettings.setState({ locale })
@@ -178,6 +213,14 @@ export const setLocation = (value: UserLocation | null) => {
 export const setThemePreference = (themePreference: ThemePreference) => {
   write(KEYS.themePreference, themePreference)
   useSettings.setState({ themePreference })
+}
+
+export const setStartupPage = (startupPage: StartupPagePreference): boolean => {
+  if (!write(KEYS.startupPage, startupPage)) {
+    return false
+  }
+  useSettings.setState({ startupPage })
+  return true
 }
 
 export const setTtsVoice = (ttsVoice: TtsVoice) => {

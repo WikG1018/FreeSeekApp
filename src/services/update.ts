@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import { openExternal } from '../utils/openExternal.js'
-import { diagnosticError, logEvent } from './diagnostics/log.js'
+import { beginDiagnosticOperation, diagnosticError, logEvent } from './diagnostics/log.js'
 
 /**
  * 应用内更新：检查版本，展示发行说明，用户选择下载和安装。
@@ -398,7 +398,14 @@ export const downloadUpdate = async (): Promise<boolean> => {
   }
 
   useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
+  const finish = beginDiagnosticOperation('update', 'download.transfer', {
+    version: release.version,
+    expectedBytes: apk.size,
+    checksumAvailable: Boolean(apk.sha256),
+  })
+  let receivedBytes = 0
   const listener = await UpdateNative.addListener('progress', ({ received, total }) => {
+    receivedBytes = received
     useUpdate.setState({
       percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
     })
@@ -410,19 +417,23 @@ export const downloadUpdate = async (): Promise<boolean> => {
     const cached = await UpdateNative.hasFile({ fileName, ...check })
     if (cached.exists) {
       useUpdate.setState({ status: 'ready', percent: 100, filePath: cached.path })
+      finish('completed', { cached: true })
       return true
     }
     const mirrors = MIRRORS.map((m) => mirrored(m, apk.url))
     for (const url of mirrors) {
+      receivedBytes = 0
+      const source = new URL(url).host
       try {
         const result = await UpdateNative.download({ url, fileName, ...check })
         useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
+        finish('completed', { source, receivedBytes })
         return true
       } catch (error) {
         logEvent(
           'update',
           'download.source-failed',
-          { source: new URL(url).host, ...diagnosticError(error) },
+          { source, receivedBytes, ...diagnosticError(error) },
           'warn'
         )
         // 换下一个源
@@ -430,8 +441,10 @@ export const downloadUpdate = async (): Promise<boolean> => {
     }
     // 不让系统下载器绕过包名、证书与摘要验证；保留手动重试入口。
     useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
+    finish('failed', { reason: 'sources-exhausted', attempts: mirrors.length, receivedBytes })
     return false
   } catch (error) {
+    finish('failed', { receivedBytes, ...diagnosticError(error) })
     logEvent('update', 'download.failed', diagnosticError(error), 'error')
     useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
     return false
@@ -456,6 +469,7 @@ export const installUpdate = async (): Promise<{ installed: boolean; reason?: st
     if (!release?.apk) {
       return { installed: false, reason: 'no-release' }
     }
+    logEvent('update', 'install.requested', { version: release.version })
     const { saveChatsBeforeRestart } = await import('./chat/store.js')
     if (!(await saveChatsBeforeRestart())) {
       logEvent('update', 'install.waiting-for-history', {}, 'warn')
@@ -467,6 +481,16 @@ export const installUpdate = async (): Promise<{ installed: boolean; reason?: st
       sha256: release.apk.sha256 ?? null,
       version: release.version,
     })
+    logEvent(
+      'update',
+      'install.result',
+      {
+        launched: result.installed,
+        permissionRequired: result.reason === 'permission',
+        version: release.version,
+      },
+      result.installed ? 'info' : 'warn'
+    )
     if (!result.installed && result.reason !== 'permission') {
       useUpdate.setState({ status: 'available', filePath: '', percent: 0, error: 'install-failed' })
     }
