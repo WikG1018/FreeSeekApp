@@ -421,12 +421,12 @@ const createReply = (persona: Session['persona'], sessionId: string | null): Ass
   }
 }
 
-const standaloneSearchResult = (blocks: AssistantMessage['blocks']) =>
-  blocks.find(
+const standaloneSearchResults = (blocks: AssistantMessage['blocks']) =>
+  blocks.filter(
     (block): block is WebSearchToolResultBlock =>
       block.type === 'web_search_tool_result' &&
       block.tool_use_id.startsWith('search-') &&
-      !block.content.some((item) => item.type === 'web_search_tool_result_error')
+      block.content.some((item) => item.type === 'web_search_result')
   )
 
 /** 仍在生成中的回复（页面关闭或导出时未结束）按「已停止」处理 */
@@ -959,12 +959,15 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     (reply.connection?.providerId !== 'deepseek' ||
       !supportsOfficialChatExtensions(reply.model ?? MODEL))
   ) {
-    const result = standaloneSearchResult(previous.blocks)
-    if (result) {
+    const resultIds = new Set(
+      standaloneSearchResults(previous.blocks).map(({ tool_use_id }) => tool_use_id)
+    )
+    if (resultIds.size) {
       // Carry the sources into the new reply version. The old version already records the search cost.
-      reply.blocks = previous.blocks.filter(
-        (block) =>
-          block === result || (block.type === 'server_tool_use' && block.id === result.tool_use_id)
+      reply.blocks = previous.blocks.filter((block) =>
+        block.type === 'server_tool_use'
+          ? resultIds.has(block.id)
+          : block.type === 'web_search_tool_result' && resultIds.has(block.tool_use_id)
       )
     }
   }
@@ -1811,8 +1814,9 @@ const streamReply = async (
   })
   let usageBase = request.prefix ? initial.usage : undefined
   const usageHistory = request.prefix ? usageEntries(initial) : []
-  let searchResult = standaloneSearchResult(initial.blocks)
-  let searchAttempted = false
+  const searchResults = standaloneSearchResults(initial.blocks)
+  const searchUrls = new Set<string>()
+  let searchAttempts = 0
   const requestStartedAt = Date.now()
   let connection: Connection | undefined
   let inlineAttempted = false
@@ -1963,15 +1967,15 @@ const streamReply = async (
           (connection.kind === 'custom' || searchSettings.proSearchOn)
         const searchModel = connection.model
         const search: SearchTool | undefined =
-          standaloneSearch && !searchResult && !searchAttempted && !prepared.prefix
+          standaloneSearch && !searchResults.length && !searchAttempts && !prepared.prefix
             ? {
                 unavailable: () => {
                   if (get().activeId === sessionId) {
                     showToast({ key: 'providerSearchToolRejected' })
                   }
                 },
-                execute: async (input) => {
-                  searchAttempted = true
+                execute: async (input, timeoutMs) => {
+                  searchAttempts += 1
                   const call = createSearchCall(input.query)
                   reply = { ...reply, blocks: [...reply.blocks, call] }
                   flush()
@@ -1987,11 +1991,21 @@ const streamReply = async (
                     const searched = await searchForReply(
                       input,
                       thirdPartySearchKey(searchSettings),
-                      controller.signal
+                      controller.signal,
+                      timeoutMs
                     )
-                    result.content = searched.content
                     billed = searched.billed
-                    searchResult = result
+                    result.content = searched.content.filter(({ url }) => {
+                      const page = url.split('#', 1)[0]
+                      if (searchUrls.has(page)) {
+                        return false
+                      }
+                      searchUrls.add(page)
+                      return true
+                    })
+                    if (result.content.length) {
+                      searchResults.push(result)
+                    }
                   } catch (error) {
                     controller.signal.throwIfAborted()
                     failed = true
@@ -2032,14 +2046,14 @@ const streamReply = async (
                   }
                   return {
                     text:
-                      searchContext(result) ||
-                      'Web search returned no usable results. Answer using the available information.',
+                      searchContext([result]) ||
+                      'Web search returned no new usable results. Use the available sources or try different keywords if more evidence is needed.',
                   }
                 },
               }
             : undefined
-        if (standaloneSearch && searchResult) {
-          const references = searchContext(searchResult)
+        if (standaloneSearch && searchResults.length) {
+          const references = searchContext(searchResults)
           prepared = {
             ...prepared,
             question: { ...prepared.question, content: prepared.question.content + references },
@@ -2138,8 +2152,11 @@ const streamReply = async (
         let usageStartedAt = Date.now()
         let roundUsage: (typeof usageHistory)[number] | undefined
         for await (const event of events) {
-          if (event.type === 'message_start' && validModel(event.message.model)) {
-            reply = { ...reply, responseModel: event.message.model }
+          if (event.type === 'message_start') {
+            blockIndexes.clear()
+            if (validModel(event.message.model)) {
+              reply = { ...reply, responseModel: event.message.model }
+            }
           }
           receivedContent ||= event.type === 'content_block_start'
           if (
@@ -2396,7 +2413,12 @@ const streamReply = async (
           }
           continue
         }
-        if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
+        if (
+          error instanceof ApiError &&
+          error.kind === 'interrupted' &&
+          reply.stopReason &&
+          reply.stopReason !== 'tool_use'
+        ) {
           // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
           reply = settleReply(reply, 'done', Date.now())
         } else if (error instanceof ApiError) {
@@ -2452,7 +2474,7 @@ const streamReply = async (
       cachedInputTokens: reply.usage?.cache_read_input_tokens,
       outputTokens: reply.usage?.output_tokens,
       standaloneSearches: reply.usage?.standalone_search_requests,
-      searchAttempted,
+      searchAttempts,
       localKey: reply.error?.localMessage?.key,
       httpStatus: reply.error?.status,
     })

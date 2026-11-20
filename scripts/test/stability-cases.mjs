@@ -920,7 +920,7 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
           }
           if (String(url).includes('private-diagnostic-provider.example')) {
             const body = JSON.parse(init.body)
-            if (body.tool_choice === 'auto') {
+            if (body.tool_choice === 'auto' && !body.messages.some(({ role }) => role === 'tool')) {
               return Response.json({
                 choices: [
                   {

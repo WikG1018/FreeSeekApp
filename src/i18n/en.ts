@@ -110,7 +110,7 @@ export const en = {
   providerMoreSaveActions: 'More save options',
   providerSaveShort: 'Save',
   providerSearchThirdParty: 'DeepSeek V4 Pro and third-party models',
-  providerSearchEnableHint: 'Use the chat toolbar to let the model search as needed',
+  providerSearchEnableHint: 'Enable in the chat toolbar to allow up to 3 searches per reply',
   providerSearchGroup: 'Search configuration',
   providerSearchBackend: 'Standalone search API',
   providerSearchBilling: 'Billing and data',

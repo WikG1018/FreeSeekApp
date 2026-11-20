@@ -3,10 +3,9 @@ import { ApiError } from './errorTypes.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
 import {
-  announceProviderSearch,
-  collectProviderSearchTurn,
-  finishSearchTurn,
+  streamWithProviderSearch,
   type SearchTool,
+  type SearchTurnCollector,
 } from './searchTool.js'
 import { providerOutputBudget, validateProfile, type ProviderProfile } from '../providers.js'
 import { isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
@@ -555,34 +554,12 @@ export async function* streamProviderMessage(
     yield* streamProviderRound(profile, model, body, signal, context)
     return
   }
-  const withSearch = announceProviderSearch(body, profile.protocol)
-  const collector = collectProviderSearchTurn(withSearch, profile.protocol)
-  let turn: ReturnType<typeof collector.finish>
-  try {
-    turn = yield* streamProviderRound(profile, model, withSearch, signal, context, collector)
-  } catch (error) {
-    if (
-      !(error instanceof ApiError) ||
-      error.kind !== 'http' ||
-      error.localMessage?.key !== 'providerSearchToolRejected'
-    ) {
-      throw error
-    }
-    signal.throwIfAborted()
-    logEvent(
-      'search',
-      'tool.unavailable',
-      { protocol: profile.protocol, reason: 'endpoint-rejected', ...diagnosticError(error) },
-      'warn'
-    )
-    search.unavailable()
-    yield* streamProviderRound(profile, model, body, signal, { sessionId })
-    return
-  }
-  if (turn) {
-    const followUp = await finishSearchTurn(turn, search, signal)
-    yield* streamProviderRound(profile, model, followUp, signal, { sessionId })
-  }
+  let nextRequestId: string | undefined = context.requestId
+  yield* streamWithProviderSearch(body, profile.protocol, search, signal, (round, collector) => {
+    const requestId = nextRequestId
+    nextRequestId = undefined
+    return streamProviderRound(profile, model, round, signal, { requestId, sessionId }, collector)
+  })
 }
 
 /** 各协议统一成现有消息事件，保留停止、用量和错误语义。 */
@@ -592,11 +569,8 @@ async function* streamProviderRound(
   body: Json,
   signal: AbortSignal,
   { requestId = createId(), sessionId }: RequestContext,
-  collector?: ReturnType<typeof collectProviderSearchTurn>
-): AsyncGenerator<
-  MessageStreamEvent,
-  ReturnType<ReturnType<typeof collectProviderSearchTurn>['finish']>
-> {
+  collector?: SearchTurnCollector
+): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
   const { response, dispose } = await fetchResponse(
     profile,
     endpoint(profile, 'chat', model, profile.stream),

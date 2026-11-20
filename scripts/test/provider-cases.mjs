@@ -561,7 +561,7 @@ export const runProviderCases = async ({ run }) => {
     }
   )
   await run(
-    'V4 Pro can answer directly or choose standalone search and its result count',
+    'V4 Pro can answer directly and stops standalone search after three requests',
     async (page) => {
       await page.evaluate((reminderError) => {
         const a = window.__audit
@@ -584,19 +584,29 @@ export const runProviderCases = async ({ run }) => {
         window.fetch = async (url, init) => {
           const path = new URL(url).pathname
           if (path.endsWith('/v1/tools/search')) {
+            const body = JSON.parse(init.body)
             window.__searchRound.push({
               path,
               key: new Headers(init.headers).get('Authorization'),
-              body: JSON.parse(init.body),
+              body,
             })
+            const shared = {
+              title: '独立搜索结果',
+              url: 'https://example.test/search',
+              summary: '联网参考内容',
+            }
             return Response.json({
-              results: [
-                {
-                  title: '独立搜索结果',
-                  url: 'https://example.test/search',
-                  summary: '联网参考内容',
-                },
-              ],
+              results:
+                body.query === 'DeepSeek 官方说明'
+                  ? [
+                      { ...shared, url: shared.url + '#intro' },
+                      {
+                        title: '官方说明',
+                        url: 'https://example.test/details',
+                        summary: '新的参考内容',
+                      },
+                    ]
+                  : [shared],
             })
           }
           if (path.endsWith('/messages')) {
@@ -613,6 +623,8 @@ export const runProviderCases = async ({ run }) => {
               return a.response('你好！')
             }
             if (body.tool_choice?.type === 'auto') {
+              const round = body.messages.filter((message) => message.role === 'assistant').length
+              const queries = ['DeepSeek 更新公告', 'DeepSeek 官方说明', 'DeepSeek 版本说明']
               const events = [
                 { type: 'message_start', message: { usage: { ...usage, output_tokens: 0 } } },
                 {
@@ -628,7 +640,7 @@ export const runProviderCases = async ({ run }) => {
                 {
                   type: 'content_block_delta',
                   index: 0,
-                  delta: { type: 'signature_delta', signature: 'test-signature' },
+                  delta: { type: 'signature_delta', signature: 'test-signature-' + round },
                 },
                 { type: 'content_block_stop', index: 0 },
                 {
@@ -636,7 +648,7 @@ export const runProviderCases = async ({ run }) => {
                   index: 1,
                   content_block: {
                     type: 'tool_use',
-                    id: 'pro-search-call',
+                    id: 'pro-search-call-' + round,
                     name: 'freeseek_web_search',
                     input: {},
                   },
@@ -646,10 +658,7 @@ export const runProviderCases = async ({ run }) => {
                   index: 1,
                   delta: {
                     type: 'input_json_delta',
-                    partial_json: JSON.stringify({ query: 'DeepSeek 更新公告', count: 12 }).slice(
-                      0,
-                      -1
-                    ),
+                    partial_json: JSON.stringify({ query: queries[round], count: 12 }).slice(0, -1),
                   },
                 },
                 {
@@ -695,13 +704,15 @@ export const runProviderCases = async ({ run }) => {
           usage: reply.usage,
           charges: reply.usageHistory.map((entry) => entry.usage),
           direct: { text: a.reply.getReplyText(direct), usage: direct.usage },
-          searchResult: reply.blocks.some((block) => block.type === 'web_search_tool_result'),
+          sources: reply.blocks
+            .filter((block) => block.type === 'web_search_tool_result')
+            .flatMap((block) => block.content.map(({ url }) => url)),
           prompt: session.messages[0].content,
           flashSearch: a.settings.useSettings.getState().search,
         }
       })
-      assert.equal(result.requests.length, 4)
-      const [direct, select, lookup, answer] = result.requests
+      assert.equal(result.requests.length, 8)
+      const [direct, select, lookup, supplement, second, verify, third, answer] = result.requests
       assert.match(direct.path, /\/messages$/)
       assert.equal(direct.body.tool_choice.type, 'auto')
       assert.deepEqual(
@@ -715,32 +726,73 @@ export const runProviderCases = async ({ run }) => {
       assert.equal(lookup.path, '/v1/tools/search')
       assert.equal(lookup.key, 'Bearer shared-search-key')
       assert.deepEqual(lookup.body, { query: 'DeepSeek 更新公告', count: 12, need_content: false })
+      assert.equal(supplement.body.tool_choice.type, 'auto')
+      assert.equal(verify.body.tool_choice.type, 'auto')
+      assert.equal(second.body.query, 'DeepSeek 官方说明')
+      assert.equal(third.body.query, 'DeepSeek 版本说明')
       assert.equal(answer.key, 'pro-chat-key')
       assert.equal(answer.body.model, 'deepseek-v4-pro')
       assert.equal(answer.body.safety_check.level, 'high')
       assert.equal(answer.body.tool_choice.type, 'none')
       assert.equal('title' in answer.body, false)
-      assert.equal(answer.body.messages.at(-2).content[0].signature, 'test-signature')
-      assert.equal(answer.body.messages.at(-1).content[0].tool_use_id, 'pro-search-call')
-      assert.match(answer.body.messages.at(-1).content[0].content, /联网参考内容/)
+      const [question, ...exchanges] = answer.body.messages
+      assert.deepEqual(question, { role: 'user', content: '请搜一下' })
+      for (let i = 0; i < 3; i++) {
+        assert.equal(exchanges[i * 2].content[0].signature, 'test-signature-' + i)
+        assert.equal(exchanges[i * 2 + 1].content[0].tool_use_id, 'pro-search-call-' + i)
+      }
+      assert.match(exchanges[1].content[0].content, /联网参考内容/)
+      assert.match(exchanges[3].content[0].content, /新的参考内容/)
+      assert.doesNotMatch(exchanges[3].content[0].content, /\/search#intro/)
+      assert.match(exchanges[5].content[0].content, /No more web searches/)
       assert.equal(result.status, 'done')
       assert.deepEqual(result.usage, {
-        input_tokens: 19,
+        input_tokens: 53,
         cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 5,
-        output_tokens: 5,
-        standalone_search_requests: 1,
+        cache_read_input_tokens: 15,
+        output_tokens: 11,
+        standalone_search_requests: 3,
       })
-      assert.equal(result.charges.length, 3)
-      assert.equal(result.searchResult, true)
+      assert.equal(result.charges.length, 7)
+      assert.deepEqual(result.sources, [
+        'https://example.test/search',
+        'https://example.test/details',
+      ])
       assert.equal(result.prompt, '请搜一下')
       assert.equal(result.flashSearch, false)
     }
   )
-  await run('retrying a saved Pro reminder error reuses five paid search results', async (page) => {
+  await run('retrying a saved Pro error reuses results from all paid searches', async (page) => {
     const id = await page.evaluate(async (message) => {
       const a = window.__audit
-      const searched = 'search-saved-paid-result'
+      const savedSearch = (label, count) => {
+        const id = 'search-saved-' + label
+        return [
+          {
+            type: 'server_tool_use',
+            id,
+            name: 'deepseek_web_search',
+            kind: 'search',
+            input: { action: 'search', queries: [label] },
+            caller: { type: 'direct' },
+          },
+          {
+            type: 'web_search_tool_result',
+            tool_use_id: id,
+            kind: 'search',
+            content: Array.from({ length: count }, (_, i) => ({
+              type: 'web_search_result',
+              title: `原网页 ${label} ${i + 1}`,
+              url: `https://example.test/${label}/${i + 1}`,
+              snippet: `已付费的搜索内容 ${label} ${i + 1}`,
+              site_icon: null,
+              site_name: null,
+              encrypted_content: '',
+              page_age: null,
+            })),
+          },
+        ]
+      }
       const session = a.fixtures.session({
         title: '',
         messages: [
@@ -757,33 +809,9 @@ export const runProviderCases = async ({ run }) => {
               output_tokens: 0,
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
-              standalone_search_requests: 1,
+              standalone_search_requests: 2,
             },
-            blocks: [
-              {
-                type: 'server_tool_use',
-                id: searched,
-                name: 'deepseek_web_search',
-                kind: 'search',
-                input: { action: 'search', queries: ['1'] },
-                caller: { type: 'direct' },
-              },
-              {
-                type: 'web_search_tool_result',
-                tool_use_id: searched,
-                kind: 'search',
-                content: Array.from({ length: 5 }, (_, i) => ({
-                  type: 'web_search_result',
-                  title: `原网页 ${i + 1}`,
-                  url: `https://example.test/source/${i + 1}`,
-                  snippet: `已付费的搜索内容 ${i + 1}`,
-                  site_icon: null,
-                  site_name: null,
-                  encrypted_content: '',
-                  page_age: null,
-                })),
-              },
-            ],
+            blocks: [...savedSearch('first', 5), ...savedSearch('second', 1)],
           }),
         ],
       })
@@ -834,19 +862,22 @@ export const runProviderCases = async ({ run }) => {
         oldCharge: oldReply.usage.standalone_search_requests,
         oldStatus: oldReply.status,
         newCharge: newReply.usage?.standalone_search_requests ?? 0,
-        newSources: newReply.blocks.find((b) => b.type === 'web_search_tool_result')?.content
-          .length,
+        newSources: newReply.blocks
+          .filter((b) => b.type === 'web_search_tool_result')
+          .map((b) => b.content.length),
         title: session.title,
       }
     }, id)
     assert.equal(result.lookups, 0)
     assert.equal(result.requests.length, 1)
     assert.equal(result.requests[0].model, 'deepseek-v4-pro')
-    assert.ok(JSON.stringify(result.requests[0].messages).includes('已付费的搜索内容 5'))
-    assert.equal(result.oldCharge, 1)
+    const prompt = JSON.stringify(result.requests[0].messages)
+    assert.match(prompt, /已付费的搜索内容 first 5/)
+    assert.match(prompt, /已付费的搜索内容 second 1/)
+    assert.equal(result.oldCharge, 2)
     assert.equal(result.oldStatus, 'error')
     assert.equal(result.newCharge, 0)
-    assert.equal(result.newSources, 5)
+    assert.deepEqual(result.newSources, [5, 1])
     assert.equal(result.title, '1')
   })
   await run(
@@ -1562,7 +1593,7 @@ export const runProviderCases = async ({ run }) => {
     }
   )
   await run(
-    'Gemini search replays the signed function call and counts the standalone fee',
+    'Gemini can stop after one search and replays the signed function call',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit
@@ -1613,7 +1644,10 @@ export const runProviderCases = async ({ run }) => {
               header: new Headers(init.headers).get('x-goog-api-key'),
               body,
             })
-            if (body.toolConfig?.functionCallingConfig.mode === 'AUTO') {
+            if (
+              body.toolConfig?.functionCallingConfig.mode === 'AUTO' &&
+              body.contents.length === 1
+            ) {
               return Response.json({
                 candidates: [
                   {
@@ -1664,6 +1698,7 @@ export const runProviderCases = async ({ run }) => {
       assert.equal(search.header, 'Bearer search-fixture')
       assert.deepEqual(search.body, { query: 'Source research', count: 9, need_content: false })
       assert.equal(answer.header, 'model-fixture')
+      assert.equal(answer.body.toolConfig.functionCallingConfig.mode, 'AUTO')
       assert.equal(answer.body.contents.at(-2).parts[0].thoughtSignature, 'gemini-signature')
       const output = answer.body.contents.at(-1).parts[0].functionResponse
       assert.equal(output.id, 'gemini-search-call')
@@ -1676,7 +1711,7 @@ export const runProviderCases = async ({ run }) => {
     }
   )
   await run(
-    'Chat Completions only executes a complete valid search once and preserves streamed reasoning',
+    'Chat Completions skips invalid and repeated searches while preserving streamed reasoning',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit
@@ -1707,20 +1742,30 @@ export const runProviderCases = async ({ run }) => {
             type: 'function',
             function: { name, arguments: args },
           })
-          const events = [
-            chunk({
-              reasoning_content: 'Need a source.',
-              reasoning_details: [{ type: 'reasoning.encrypted', data: 'signed-openrouter' }],
-              tool_calls: [
-                call(0, 'other_tool', '{"query":"Unknown","count":1}'),
-                call(1, 'freeseek_web_search', '{"query":"Invalid","count":51}'),
-                call(2, 'freeseek_web_search', '{"query":"official source",'),
-                call(3, 'freeseek_web_search', '{"query":"Duplicate","count":2}'),
-              ],
-            }),
-            chunk({ tool_calls: [{ index: 2, function: { arguments: '"count":18}' } }] }),
-            chunk({}, 'tool_calls'),
-          ]
+          const events =
+            bodies.length === 1
+              ? [
+                  chunk({
+                    reasoning_content: 'Need a source.',
+                    reasoning_details: [{ type: 'reasoning.encrypted', data: 'signed-openrouter' }],
+                    tool_calls: [
+                      call(0, 'other_tool', '{"query":"Unknown","count":1}'),
+                      call(1, 'freeseek_web_search', '{"query":"Invalid","count":51}'),
+                      call(2, 'freeseek_web_search', '{"query":"official source",'),
+                      call(3, 'freeseek_web_search', '{"query":"OFFICIAL  source","count":2}'),
+                    ],
+                  }),
+                  chunk({ tool_calls: [{ index: 2, function: { arguments: '"count":18}' } }] }),
+                  chunk({}, 'tool_calls'),
+                ]
+              : [
+                  chunk({
+                    tool_calls: [
+                      call(4, 'freeseek_web_search', '{"query":"official source","count":3}'),
+                    ],
+                  }),
+                  chunk({}, 'tool_calls'),
+                ]
           return new Response(
             events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('') +
               'data: [DONE]\n\n',
@@ -1752,15 +1797,17 @@ export const runProviderCases = async ({ run }) => {
         return { bodies, searches, events }
       })
       assert.deepEqual(result.searches, [{ query: 'official source', count: 18 }])
-      assert.equal(result.bodies.length, 2)
-      const [first, answer] = result.bodies
+      assert.equal(result.bodies.length, 3)
+      const [first, followUp, answer] = result.bodies
       assert.equal(first.tool_choice, 'auto')
+      assert.equal(followUp.tool_choice, 'auto')
+      assert.equal(answer.tool_choice, 'none')
       assert.equal(first.tools[0].function.name, 'freeseek_web_search')
-      assert.equal(answer.messages.at(-5).reasoning_content, 'Need a source.')
-      assert.deepEqual(answer.messages.at(-5).reasoning_details, [
+      assert.equal(followUp.messages.at(-5).reasoning_content, 'Need a source.')
+      assert.deepEqual(followUp.messages.at(-5).reasoning_details, [
         { type: 'reasoning.encrypted', data: 'signed-openrouter' },
       ])
-      const outputs = answer.messages.slice(-4)
+      const outputs = followUp.messages.slice(-4)
       assert.deepEqual(
         outputs.map((item) => item.tool_call_id),
         ['call-0', 'call-1', 'call-2', 'call-3']
@@ -1768,13 +1815,15 @@ export const runProviderCases = async ({ run }) => {
       assert.match(outputs[0].content, /could not run/)
       assert.match(outputs[1].content, /could not run/)
       assert.equal(outputs[2].content, 'Source result')
-      assert.match(outputs[3].content, /already used/)
+      assert.match(outputs[3].content, /already searched/)
+      assert.equal(answer.messages.at(-1).tool_call_id, 'call-4')
+      assert.match(answer.messages.at(-1).content, /already searched/)
       assert.equal(result.events.filter((item) => item.type === 'message_stop').length, 1)
     }
   )
   for (const protocol of ['responses', 'anthropic']) {
     await run(
-      `${protocol} continues the answer when the model's web search fails`,
+      `${protocol} keeps earlier sources when a follow-up web search fails`,
       async (page) => {
         const result = await page.evaluate(async (protocol) => {
           const a = window.__audit
@@ -1796,7 +1845,6 @@ export const runProviderCases = async ({ run }) => {
           )
           const requests = []
           const original = window.fetch
-          const args = { query: 'official references', count: 11 }
           const thinking = {
             type: 'thinking',
             thinking: 'Look up details.',
@@ -1805,7 +1853,13 @@ export const runProviderCases = async ({ run }) => {
           window.fetch = async (url, init) => {
             const route = String(url)
             if (route.endsWith('/v1/tools/search')) {
-              requests.push({ route, body: JSON.parse(init.body) })
+              const body = JSON.parse(init.body)
+              requests.push({ route, body })
+              if (body.query === 'reference 1') {
+                return Response.json({
+                  results: [{ title: 'Verified source', url: 'https://example.test/verified' }],
+                })
+              }
               return Response.json({ error: { message: 'Search unavailable' } }, { status: 503 })
             }
             if (!route.includes('search-tool-failure.example.test')) {
@@ -1813,19 +1867,25 @@ export const runProviderCases = async ({ run }) => {
             }
             const body = JSON.parse(init.body)
             requests.push({ route, body })
+            const step =
+              (protocol === 'anthropic'
+                ? body.messages.filter(({ role }) => role === 'assistant').length
+                : body.input.filter(({ type }) => type === 'function_call_output').length) + 1
+            const id = 'lookup-' + step
+            const args = { query: 'reference ' + step, count: 11 }
             if (protocol === 'anthropic') {
               return body.tool_choice?.type === 'auto'
                 ? Response.json({
                     type: 'message',
                     content: [
                       thinking,
-                      { type: 'tool_use', id: 'lookup', name: 'freeseek_web_search', input: args },
+                      { type: 'tool_use', id, name: 'freeseek_web_search', input: args },
                     ],
                     stop_reason: 'tool_use',
                   })
                 : Response.json({
                     type: 'message',
-                    content: [{ type: 'text', text: 'Answer without sources' }],
+                    content: [{ type: 'text', text: 'Answer with the first source' }],
                     stop_reason: 'end_turn',
                   })
             }
@@ -1834,14 +1894,14 @@ export const runProviderCases = async ({ run }) => {
                 ? [
                     {
                       type: 'reasoning',
-                      id: 'rs-test',
+                      id: 'rs-test-' + step,
                       encrypted_content: 'opaque-reasoning',
                       summary: [],
                     },
                     {
                       type: 'function_call',
-                      id: 'fc-test',
-                      call_id: 'lookup',
+                      id: 'fc-test-' + step,
+                      call_id: id,
                       name: 'freeseek_web_search',
                       arguments: JSON.stringify(args),
                       status: 'completed',
@@ -1850,7 +1910,7 @@ export const runProviderCases = async ({ run }) => {
                 : [
                     {
                       type: 'message',
-                      content: [{ type: 'output_text', text: 'Answer without sources' }],
+                      content: [{ type: 'output_text', text: 'Answer with the first source' }],
                     },
                   ]
             return new Response(
@@ -1870,37 +1930,143 @@ export const runProviderCases = async ({ run }) => {
             status: reply.status,
             text: a.reply.getReplyText(reply),
             searchCount: reply.usage?.standalone_search_requests ?? 0,
-            searchBlock: reply.blocks.find((block) => block.type === 'web_search_tool_result'),
+            searchBlocks: reply.blocks.filter((block) => block.type === 'web_search_tool_result'),
           }
         }, protocol)
         assert.equal(result.status, 'done')
-        assert.equal(result.text, 'Answer without sources')
-        assert.equal(result.searchCount, 0)
-        assert.equal(result.searchBlock.content[0].error_code, 'unavailable')
-        assert.equal(result.requests.length, 3)
-        const [first, search, final] = result.requests
+        assert.equal(result.text, 'Answer with the first source')
+        assert.equal(result.searchCount, 1)
+        assert.equal(result.searchBlocks[0].content[0].url, 'https://example.test/verified')
+        assert.equal(result.searchBlocks[1].content[0].error_code, 'unavailable')
+        assert.equal(result.requests.length, 5)
+        const [first, search, second, failed, final] = result.requests
         assert.match(search.route, /\/v1\/tools\/search$/)
         assert.deepEqual(search.body, {
-          query: 'official references',
+          query: 'reference 1',
           count: 11,
           need_content: false,
         })
+        assert.equal(failed.body.query, 'reference 2')
         if (protocol === 'anthropic') {
           assert.equal(first.body.tools[0].name, 'freeseek_web_search')
+          assert.equal(second.body.tool_choice.type, 'auto')
+          assert.equal(final.body.tool_choice.type, 'none')
           assert.equal(final.body.messages.at(-2).content[0].signature, 'opaque-signature')
+          assert.match(final.body.messages.at(-3).content[0].content, /Verified source/)
           const output = final.body.messages.at(-1).content[0]
-          assert.equal(output.tool_use_id, 'lookup')
+          assert.equal(output.tool_use_id, 'lookup-2')
           assert.equal(output.is_error, true)
         } else {
           assert.equal(first.body.tools[0].type, 'function')
           assert.ok(first.body.include.includes('reasoning.encrypted_content'))
+          assert.equal(second.body.tool_choice, 'auto')
+          assert.equal(final.body.tool_choice, 'none')
+          assert.match(final.body.input.at(-4).output, /Verified source/)
           assert.equal(final.body.input.at(-3).encrypted_content, 'opaque-reasoning')
-          assert.equal(final.body.input.at(-1).call_id, 'lookup')
+          assert.equal(final.body.input.at(-1).call_id, 'lookup-2')
           assert.match(final.body.input.at(-1).output, /Web search failed/)
         }
       }
     )
   }
+  await run('standalone web search shares one timeout budget across requests', async (page) => {
+    await page.clock.install()
+    await page.evaluate(() => {
+      const a = window.__audit
+      a.settings.saveThirdPartySearch({
+        enabled: true,
+        keySource: 'separate',
+        apiKey: 'search-key',
+      })
+      a.settings.setThirdPartySearchOn(true)
+      a.providers.saveProvider(
+        {
+          ...a.providers.emptyProfile(),
+          url: 'https://search-timeout.example.test/v1',
+          model: 'tool-model',
+          stream: false,
+        },
+        true
+      )
+      const calls = (window.__searchBudgetCalls = [])
+      let searches = 0
+      const original = window.fetch
+      window.fetch = async (url, init) => {
+        const route = String(url)
+        if (route.endsWith('/v1/tools/search')) {
+          calls.push(JSON.parse(init.body))
+          searches++
+          if (searches === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 20_000))
+            return Response.json({
+              results: [{ title: 'Available source', url: 'https://example.test/available' }],
+            })
+          }
+          return new Promise((_, reject) => {
+            init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true })
+          })
+        }
+        if (!route.includes('search-timeout.example.test')) return original(url, init)
+        const body = JSON.parse(init.body)
+        calls.push(body)
+        if (body.tool_choice === 'none') {
+          return Response.json({
+            choices: [
+              { message: { content: 'Answer using available sources' }, finish_reason: 'stop' },
+            ],
+          })
+        }
+        return Response.json({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    type: 'function',
+                    id: 'budget-' + searches,
+                    function: {
+                      name: 'freeseek_web_search',
+                      arguments: JSON.stringify({ query: 'reference ' + searches, count: 2 }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        })
+      }
+      a.drafts.setDraftText(null, 'Check two sources')
+      a.store.sendMessage(null)
+    })
+    await page.waitForFunction(() => window.__searchBudgetCalls?.length === 2)
+    await page.clock.fastForward(20_000)
+    await page.waitForFunction(() => window.__searchBudgetCalls?.length === 4)
+    await page.clock.fastForward(10_500)
+    const result = await page.evaluate(async () => {
+      const a = window.__audit
+      await a.waitIdle()
+      const state = a.store.useChatStore.getState()
+      const reply = state.sessionCache[state.activeId].messages.at(-1)
+      const { events } = await a.diagnostics.readDiagnosticLogs()
+      const failed = events.find(({ event }) => event === 'standalone.failed')
+      return {
+        calls: window.__searchBudgetCalls,
+        text: a.reply.getReplyText(reply),
+        status: reply.status,
+        charged: reply.usage?.standalone_search_requests,
+        timedOut: failed?.details.timedOut,
+      }
+    })
+    assert.equal(result.status, 'done')
+    assert.equal(result.text, 'Answer using available sources')
+    assert.equal(result.charged, 1)
+    assert.equal(result.timedOut, true)
+    assert.equal(result.calls.length, 5)
+    assert.equal(result.calls[4].tool_choice, 'none')
+    assert.match(result.calls[4].messages.at(-3).content, /Available source/)
+    assert.match(result.calls[4].messages.at(-1).content, /Web search failed/)
+  })
   await run(
     'a model endpoint that rejects tools still answers without sending a search request',
     async (page) => {

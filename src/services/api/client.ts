@@ -8,10 +8,9 @@ import { readMessageEvent } from './parseEvent.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import {
-  anthropicSearchTool,
-  collectAnthropicSearchTurn,
-  finishSearchTurn,
+  streamWithProviderSearch,
   type SearchTool,
+  type SearchTurnCollector,
 } from './searchTool.js'
 import {
   supportsOfficialChatExtensions,
@@ -290,43 +289,16 @@ export async function* streamMessage(
     yield* streamMessageRound(apiKey, payload, signal, requestId, includeFiles)
     return
   }
-  // Pro accepts client tool calls on the Messages API. Flash-only metadata still
-  // goes through the sanitizer above, and both rounds keep safety_check enabled.
-  const withSearch = { ...payload, tools: [anthropicSearchTool], tool_choice: { type: 'auto' } }
-  const collector = collectAnthropicSearchTurn()
-  let turn: ReturnType<typeof collector.finish>
-  try {
-    turn = yield* streamMessageRound(apiKey, withSearch, signal, requestId, includeFiles, {
+  // Pro uses client tools on the Messages API with the sanitized request and safety check.
+  let nextRequestId: string | undefined = requestId
+  yield* streamWithProviderSearch(payload, 'anthropic', search, signal, (round, collector) => {
+    const id = nextRequestId ?? createId()
+    nextRequestId = undefined
+    return streamMessageRound(apiKey, round, signal, id, includeFiles, {
       collector,
+      answerOnly: !collector,
     })
-  } catch (error) {
-    if (
-      !(error instanceof ApiError) ||
-      error.kind !== 'http' ||
-      error.localMessage?.key !== 'providerSearchToolRejected'
-    ) {
-      throw error
-    }
-    signal.throwIfAborted()
-    search.unavailable()
-    yield* streamMessageRound(apiKey, payload, signal, createId(), includeFiles)
-    return
-  }
-  if (turn) {
-    const followUp = await finishSearchTurn(turn, search, signal)
-    yield* streamMessageRound(
-      apiKey,
-      {
-        ...withSearch,
-        tool_choice: { type: 'none' },
-        messages: [...payload.messages, ...followUp],
-      },
-      signal,
-      createId(),
-      includeFiles,
-      { answerOnly: true }
-    )
-  }
+  })
 }
 
 async function* streamMessageRound(
@@ -335,14 +307,8 @@ async function* streamMessageRound(
   signal: AbortSignal,
   requestId: string,
   includeFiles: boolean,
-  {
-    collector,
-    answerOnly,
-  }: { collector?: ReturnType<typeof collectAnthropicSearchTurn>; answerOnly?: boolean } = {}
-): AsyncGenerator<
-  MessageStreamEvent,
-  ReturnType<ReturnType<typeof collectAnthropicSearchTurn>['finish']>
-> {
+  { collector, answerOnly }: { collector?: SearchTurnCollector; answerOnly?: boolean } = {}
+): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
   const response = await request(
     `${ANTHROPIC_BASE_URL}/messages`,
     {
@@ -390,7 +356,9 @@ async function* streamMessageRound(
       if (eventName === 'error') {
         throw new ApiError('stream', data, undefined, describeKnownApiError(data))
       }
-      collector?.read(payload)
+      if (collector && payload && typeof payload === 'object') {
+        collector.read(payload as Record<string, unknown>)
+      }
       const event = readMessageEvent(payload)
       if (!event) {
         continue

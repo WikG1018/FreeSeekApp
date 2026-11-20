@@ -53,12 +53,15 @@ export const createSearchCall = (query: string): ServerToolUseBlock => ({
 export const searchForReply = async (
   { query, count }: SearchInput,
   apiKey: string | null,
-  signal: AbortSignal
+  signal: AbortSignal,
+  timeoutMs: number
 ): Promise<{ content: WebSearchResult[]; billed: boolean }> => {
+  signal.throwIfAborted()
   const requestId = createId()
   const finish = beginDiagnosticOperation('search', 'standalone', {
     requestId,
     requestedCount: count,
+    timeoutMs: Math.floor(timeoutMs),
   })
   if (!apiKey) {
     finish('failed', { localKey: 'thirdPartySearchMissingKey' })
@@ -66,9 +69,8 @@ export const searchForReply = async (
   }
   const controller = new AbortController()
   const abort = () => controller.abort(signal.reason)
-  signal.throwIfAborted()
   signal.addEventListener('abort', abort, { once: true })
-  const timeout = setTimeout(() => controller.abort(), 30000)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await request(
       API_ORIGIN + '/v1/tools/search',
@@ -113,9 +115,9 @@ export const searchForReply = async (
   }
 }
 
-export const searchContext = ({ content }: WebSearchToolResultBlock) => {
-  const references = content.filter(
-    (item): item is WebSearchResult => item.type === 'web_search_result'
+export const searchContext = (results: readonly WebSearchToolResultBlock[]) => {
+  const references = results.flatMap(({ content }) =>
+    content.filter((item): item is WebSearchResult => item.type === 'web_search_result')
   )
   if (!references.length) {
     return ''

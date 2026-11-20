@@ -1,5 +1,7 @@
 import { ApiError } from './errorTypes.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ProviderProfile } from '../providers.js'
+import type { MessageStreamEvent } from './types.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json =>
@@ -8,8 +10,9 @@ const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
 const str = (value: unknown) => (typeof value === 'string' ? value : '')
 
 const name = 'freeseek_web_search'
-const description =
-  'Search public web pages when current information or a source is needed. Answer directly when a search would not help. Send only public keywords, never private details. Choose the number of results needed. One search is available for this reply.'
+const MAX_SEARCH_REQUESTS = 3
+const SEARCH_BUDGET_MS = 30_000
+const description = `Search public web pages when current information or a source is needed. Answer directly when a search would not help. Send only public keywords, never private details. Choose the number of results needed. Up to ${MAX_SEARCH_REQUESTS} searches are available for this reply. Use different focused queries only when existing sources are insufficient. Cite relevant sources and explain any limits on verification.`
 const MAX_QUERY_LENGTH = 128
 const MAX_RESULTS = 50
 const parameters = {
@@ -26,7 +29,7 @@ export const anthropicSearchTool = { name, description, input_schema: parameters
 export type SearchInput = { query: string; count: number }
 export type SearchOutput = { text: string; isError?: boolean }
 export type SearchTool = {
-  execute: (input: SearchInput) => Promise<SearchOutput>
+  execute: (input: SearchInput, timeoutMs: number) => Promise<SearchOutput>
   unavailable: () => void
 }
 
@@ -58,41 +61,12 @@ const searchInput = (value: unknown): SearchInput | undefined => {
   return { query, count }
 }
 
-export const finishSearchTurn = async <T>(
-  turn: ToolTurn<T> | undefined,
-  tool: SearchTool,
-  signal: AbortSignal
-): Promise<T> => {
-  if (!turn?.calls.length) {
-    throw new ApiError('protocol', { key: 'providerToolUnsupported' })
-  }
-  const outputs: SearchOutput[] = []
-  let searched = false
-  for (const call of turn.calls) {
-    signal.throwIfAborted()
-    const args = call.name === name ? searchInput(call.input) : undefined
-    if (args && !searched) {
-      searched = true
-      outputs.push(await tool.execute(args))
-    } else {
-      outputs.push({
-        isError: true,
-        text: args
-          ? 'This reply has already used its web search. Answer using the available results.'
-          : 'This tool call could not run. Answer using the information already available.',
-      })
-    }
-  }
-  signal.throwIfAborted()
-  return turn.continuation(outputs)
-}
-
 const uniqueCallIds = (calls: ToolCall[]) =>
   calls.every((call) => call.id && call.name) &&
   new Set(calls.map((call) => call.id)).size === calls.length
 
 /** The companion request needs complete native blocks, especially signed thinking and tool IDs. */
-export const collectAnthropicSearchTurn = () => {
+const collectAnthropicSearchTurn = () => {
   const blocks = new Map<number, Json>()
   const argumentsByIndex = new Map<number, string>()
   const invalidArguments = new Set<number>()
@@ -162,7 +136,7 @@ export const collectAnthropicSearchTurn = () => {
   }
 }
 
-export const announceProviderSearch = (body: Json, protocol: ProviderProfile['protocol']): Json => {
+const announceProviderSearch = (body: Json, protocol: ProviderProfile['protocol']): Json => {
   const declaration = { name, description, parameters }
   if (protocol === 'gemini') {
     return {
@@ -233,7 +207,6 @@ const collectChatCompletions = (body: Json) => {
         calls: toolCalls,
         continuation: (outputs) => ({
           ...body,
-          tool_choice: 'none',
           messages: [
             ...list(body.messages),
             {
@@ -284,7 +257,6 @@ const collectResponses = (body: Json) => {
         calls,
         continuation: (outputs) => ({
           ...body,
-          tool_choice: 'none',
           input: [
             ...list(body.input),
             ...output,
@@ -326,7 +298,6 @@ const collectGemini = (body: Json) => {
         calls,
         continuation: (outputs) => ({
           ...body,
-          toolConfig: { functionCallingConfig: { mode: 'NONE' } },
           contents: [
             ...list(body.contents),
             { role: 'model', parts },
@@ -347,7 +318,7 @@ const collectGemini = (body: Json) => {
   }
 }
 
-export const collectProviderSearchTurn = (body: Json, protocol: ProviderProfile['protocol']) => {
+const collectProviderSearchTurn = (body: Json, protocol: ProviderProfile['protocol']) => {
   if (protocol === 'openai') {
     return collectChatCompletions(body)
   }
@@ -367,11 +338,106 @@ export const collectProviderSearchTurn = (body: Json, protocol: ProviderProfile[
           calls: result.calls,
           continuation: (outputs) => ({
             ...body,
-            tool_choice: { type: 'none' },
             messages: [...list(body.messages), ...result.continuation(outputs)],
           }),
         }
       )
     },
   }
+}
+
+export type SearchTurnCollector = ReturnType<typeof collectProviderSearchTurn>
+
+const answerWithoutMoreSearch = (body: Json, protocol: ProviderProfile['protocol']): Json => {
+  if (protocol === 'gemini') {
+    return { ...body, toolConfig: { functionCallingConfig: { mode: 'NONE' } } }
+  }
+  return { ...body, tool_choice: protocol === 'anthropic' ? { type: 'none' } : 'none' }
+}
+
+const searchUnavailable =
+  'No more web searches are available for this reply. Use the sources already collected and explain any limits on verification.'
+
+export async function* streamWithProviderSearch(
+  body: Json,
+  protocol: ProviderProfile['protocol'],
+  tool: SearchTool,
+  signal: AbortSignal,
+  stream: (
+    body: Json,
+    collector?: SearchTurnCollector
+  ) => AsyncGenerator<MessageStreamEvent, ProviderToolTurn | undefined>
+): AsyncGenerator<MessageStreamEvent> {
+  let request = announceProviderSearch(body, protocol)
+  const queries = new Set<string>()
+  let remainingMs = SEARCH_BUDGET_MS
+  let canSearch = true
+  while (canSearch) {
+    signal.throwIfAborted()
+    let turn: ProviderToolTurn | undefined
+    try {
+      turn = yield* stream(request, collectProviderSearchTurn(request, protocol))
+    } catch (error) {
+      if (
+        !(error instanceof ApiError) ||
+        error.kind !== 'http' ||
+        error.localMessage?.key !== 'providerSearchToolRejected'
+      ) {
+        throw error
+      }
+      signal.throwIfAborted()
+      logEvent(
+        'search',
+        'tool.unavailable',
+        { protocol, reason: 'endpoint-rejected', ...diagnosticError(error) },
+        'warn'
+      )
+      tool.unavailable()
+      // On a later round, keep the completed tool calls and their results in the request.
+      yield* stream(queries.size ? answerWithoutMoreSearch(request, protocol) : body)
+      return
+    }
+    if (!turn) {
+      return
+    }
+
+    const previousCount = queries.size
+    const outputs: SearchOutput[] = []
+    for (const call of turn.calls) {
+      signal.throwIfAborted()
+      const args = call.name === name ? searchInput(call.input) : undefined
+      if (!args) {
+        outputs.push({
+          isError: true,
+          text: 'This tool call could not run. Use valid search arguments.',
+        })
+        continue
+      }
+      const key = args.query.normalize().toLowerCase()
+      if (queries.has(key)) {
+        outputs.push({
+          isError: true,
+          text: 'This query was already searched. Use its results or a different focused query.',
+        })
+        continue
+      }
+      if (!canSearch) {
+        outputs.push({ isError: true, text: searchUnavailable })
+        continue
+      }
+      queries.add(key)
+      const startedAt = performance.now()
+      const output = await tool.execute(args, remainingMs)
+      remainingMs -= performance.now() - startedAt
+      canSearch = !output.isError && queries.size < MAX_SEARCH_REQUESTS && remainingMs > 0
+      outputs.push(
+        canSearch || output.isError ? output : { text: output.text + '\n' + searchUnavailable }
+      )
+    }
+    signal.throwIfAborted()
+    // A batch of only invalid or repeated calls cannot consume another model round.
+    canSearch &&= queries.size > previousCount
+    request = turn.continuation(outputs)
+  }
+  yield* stream(answerWithoutMoreSearch(request, protocol))
 }

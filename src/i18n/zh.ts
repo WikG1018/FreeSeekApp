@@ -93,7 +93,7 @@ export const zh = {
   providerMoreSaveActions: '更多保存方式',
   providerSaveShort: '保存',
   providerSearchThirdParty: 'DeepSeek V4 Pro 和第三方模型',
-  providerSearchEnableHint: '可在对话工具栏允许模型按需搜索',
+  providerSearchEnableHint: '在对话工具栏开启后，模型按需搜索，每条回复最多 3 次',
   providerSearchGroup: '搜索配置',
   providerSearchBackend: '独立搜索 API',
   providerSearchBilling: '计费与数据',
