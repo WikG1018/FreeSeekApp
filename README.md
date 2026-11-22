@@ -31,7 +31,7 @@ DeepSeek 官方 App 在算力紧张时会限制使用：每日额度、长对话
 
 Android 聊天页铺满屏幕，正文和侧边栏延伸到状态栏、导航栏背后。菜单与输入框按实际安全区避让，正文通过工具行后继续向屏幕底边渐隐，悬浮输入框使用实底。打开「＋」附件菜单时保留软键盘和光标。输入、附件或大字号展开时会自动调整末条消息的留白。[观看聊天底栏滚动效果](docs/screenshots/floating-dock-v2.6.1.mp4)
 
-手机主界面中部右滑可打开侧边栏，左滑收起，拖动与主界面过渡同步。对话更多菜单支持置顶/取消置顶；底部左侧打赏、右侧设置齿轮，用量统计从设置进入。[观看 Android 17 模拟器滑动实录（5 秒）](docs/screenshots/immersive-drawer.mp4)
+手机主界面中部右滑可打开侧边栏，左滑收起，拖动与主界面过渡同步。对话更多菜单支持置顶/取消置顶。用量统计从设置进入。[观看 Android 17 模拟器滑动实录（5 秒）](docs/screenshots/immersive-drawer.mp4)
 
 <p>
   <img src="docs/screenshots/immersive-light.png" width="40%" alt="浅色沉浸聊天" />
@@ -142,7 +142,7 @@ cd android && .\gradlew.bat assembleDebug   # macOS/Linux 用 ./gradlew
 
 ```
 src/                 React 客户端（组件、服务、i18n）
-  components/        界面：会话、消息、设置、人设、打赏、更新…
+  components/        界面：会话、消息、设置、人设和更新
   services/          业务：chat、usage、speech、update、settings…
 android/             Capacitor Android 工程
 assets/              图标与启动图源文件
@@ -169,6 +169,10 @@ scripts/             图标生成与冒烟脚本
 
 **为什么没有账号登录？** 这是纯本地客户端，不做账号体系，也不需要你把 Key 交给任何服务器。
 
+## 问题反馈
+
+在 Issues 中提供版本号、设备系统版本和复现步骤。含个人信息的诊断材料适合通过已有的私下反馈渠道交给维护者。
+
 ## 更新日志
 
 见 [CHANGELOG.md](CHANGELOG.md)；发行与下载数据见 [docs/stats](docs/stats/README.md)。
@@ -179,12 +183,3 @@ scripts/             图标生成与冒烟脚本
 - 界面字体 [MiSans](https://hyperos.mi.com/font/)（小米），许可协议见 `docs/fonts/`
 - 第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 与 DeepSeek 官方无隶属关系；请遵守 DeepSeek API 服务条款使用
-
-## 打赏
-
-如果这个 App 帮到了你，可以在应用内「侧边栏底部 → 打赏开发者」扫码支持，或直接扫下面的码：
-
-<p>
-  <img src="src/assets/donate-wechat.png" width="160" alt="微信赞赏码" />
-  <img src="src/assets/donate-alipay.png" width="160" alt="支付宝收款码" />
-</p>

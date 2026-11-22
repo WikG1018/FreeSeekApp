@@ -25,7 +25,7 @@ DeepSeek's official app throttles heavy users: daily quotas, long conversations 
 - **Local history** — chats and files live in IndexedDB, with no cloud conversation sync
 - **Long conversations** — compress older turns into an editable summary and retain the full transcript and attachments locally. Summaries use the current model and incur additional token usage. Automatic compression is off by default in Settings → Chat preferences.
 - **In-app updates** — shows the new version in the sidebar, opens release notes first, then downloads and verifies the APK when requested. About also includes offline notes for the installed version
-- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Chat content and the drawer extend behind Android system bars while controls respect cutouts and navigation. Pin chats from their menus. The footer places donations on the left and settings on the right. Messages fade around the opaque composer, and the attachment menu keeps the keyboard and caret in place.
+- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Chat content and the drawer extend behind Android system bars while controls respect cutouts and navigation. Pin chats from their menus. Messages fade around the opaque composer, and the attachment menu keeps the keyboard and caret in place.
 - **Backup import** — streams official DeepSeek chat records up to 128 MiB each. Existing data is replaced after the archive and record counts pass validation. Older Android WebViews can restore multiple chats and attachments.
 
 ## Install
@@ -71,6 +71,10 @@ Before installation, updates are checked for the expected length, upstream SHA-2
 MIT, inherited from the upstream project — see [LICENSE](LICENSE). Not affiliated with DeepSeek; follow their API terms.
 
 Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The UI font is [MiSans](https://hyperos.mi.com/font/) (Xiaomi).
+
+## Reporting problems
+
+Include the app version, device OS version and relevant steps in an issue. Share diagnostic materials with personal information privately with the maintainer.
 
 ## Changelog
 
