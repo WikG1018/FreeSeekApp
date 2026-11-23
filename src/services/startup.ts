@@ -87,6 +87,7 @@ export const markStartupReady = () =>
       }
     }
     const begin = () => {
+      clearTimeout(timeout)
       if (noMotion() || mark.style.display === 'none') {
         finish()
         return
@@ -193,6 +194,7 @@ export const markStartupReady = () =>
     const schedule = () => {
       clearTimeout(timeout)
       window.removeEventListener(nativeSplashEndedEvent, schedule)
+      timeout = setTimeout(finish, 800)
       frame = requestAnimationFrame(begin)
     }
 

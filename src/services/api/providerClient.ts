@@ -1,17 +1,28 @@
+import { agentProbePrompt, agentProbeSystem, verifyAgentTools } from './toolProbe.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import { providerFetch } from './providerTransport.js'
 import {
   streamWithProviderSearch,
+  streamWithTaskTools,
   type SearchTool,
   type SearchTurnCollector,
+  type TaskToolset,
 } from './searchTool.js'
-import { providerOutputBudget, validateProfile, type ProviderProfile } from '../providers.js'
+import {
+  modelSettingsFor,
+  providerModelParameters,
+  providerOutputBudget,
+  validateProfile,
+  type ProviderModelParameters,
+  type ProviderProfile,
+} from '../providers.js'
 import { isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
 import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
+import { normalizeProviderUsage } from './providerUsage.js'
 import {
   beginDiagnosticOperation,
   logEvent,
@@ -22,11 +33,10 @@ import { createId } from '../../utils/id.js'
 import type { TranslationKey } from '../../i18n/index.js'
 
 type Json = Record<string, unknown>
+type ProviderRequestProfile = ProviderProfile & ProviderModelParameters
 const array = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
 const record = (value: unknown): Json =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {}
-const count = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 const goProtocolPath: Record<ProviderProfile['protocol'], string> = {
   openai: '/openai/v1',
@@ -426,7 +436,7 @@ const partFor = (
         }
 }
 export const providerBody = (
-  profile: ProviderProfile,
+  profile: ProviderRequestProfile,
   model: string,
   messages: ProviderMessage[],
   system: string
@@ -487,35 +497,6 @@ export const providerBody = (
   }
 }
 
-const usageFor = (raw: unknown, protocol: ProviderProfile['protocol']): MessageUsage => {
-  const u = record(raw)
-  if (protocol === 'anthropic') {
-    return {
-      input_tokens: count(u.input_tokens),
-      cache_creation_input_tokens: count(u.cache_creation_input_tokens),
-      cache_read_input_tokens: count(u.cache_read_input_tokens),
-      output_tokens: count(u.output_tokens),
-    }
-  }
-  const cached = count(
-    protocol === 'gemini'
-      ? u.cachedContentTokenCount
-      : record(u.prompt_tokens_details || u.input_tokens_details).cached_tokens
-  )
-  const input = count(
-    protocol === 'gemini' ? u.promptTokenCount : (u.prompt_tokens ?? u.input_tokens)
-  )
-  return {
-    input_tokens: Math.max(0, input - cached),
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: cached,
-    output_tokens: count(
-      protocol === 'gemini'
-        ? count(u.candidatesTokenCount) + count(u.thoughtsTokenCount)
-        : (u.completion_tokens ?? u.output_tokens)
-    ),
-  }
-}
 const stopReason = (value: unknown): StopReason =>
   /length|max_tokens|MAX_TOKENS|max_output_tokens/.test(text(value))
     ? 'max_tokens'
@@ -530,15 +511,48 @@ export async function* streamProviderMessage(
   system: string,
   signal: AbortSignal,
   reasoning?: ReasoningChoice,
-  { requestId = createId(), sessionId, search }: RequestContext & { search?: SearchTool } = {}
+  {
+    requestId = createId(),
+    sessionId,
+    search,
+    maxOutputTokens,
+    managedTools,
+    task,
+  }: RequestContext & {
+    search?: SearchTool
+    maxOutputTokens?: number
+    managedTools?: boolean
+    task?: TaskToolset
+  } = {}
 ): AsyncGenerator<MessageStreamEvent> {
-  const profile = validateProfile({ ...input, model })
+  const configuration = validateProfile({
+    ...input,
+    model,
+    ...(maxOutputTokens === undefined
+      ? {}
+      : {
+          modelSettings: {
+            ...input.modelSettings,
+            [model]: { ...modelSettingsFor(input, model), maxOutputTokens },
+          },
+        }),
+  })
+  const profile = { ...configuration, ...providerModelParameters(configuration, model) }
   const body: Json = applyReasoning(
     providerBody(profile, model, messages, system),
     profile.protocol,
     reasoning
   )
   const context = { requestId, sessionId }
+  if (managedTools || task) {
+    // Agent runs expose the app's allowed tools, not tools inherited from provider options.
+    delete body.tools
+    delete body.tool_choice
+    delete body.tool_config
+    delete body.toolConfig
+    delete body.functions
+    delete body.function_call
+  }
   // Keep explicitly configured provider tools intact.
   if (search && (array(body.tools).length || array(body.functions).length)) {
     logEvent(
@@ -550,26 +564,51 @@ export async function* streamProviderMessage(
     search.unavailable()
     search = undefined
   }
-  if (!search) {
+  if (!search && !task) {
     yield* streamProviderRound(profile, model, body, signal, context)
     return
   }
+  if (
+    task?.host &&
+    (await task.host({
+      protocol: profile.protocol,
+      url: endpoint(profile, 'chat', model, profile.stream),
+      headers: await headersFor(profile, isOpenCodeGoUrl(new URL(profile.url)), true, sessionId),
+      body,
+    }))
+  ) {
+    return
+  }
   let nextRequestId: string | undefined = context.requestId
-  yield* streamWithProviderSearch(body, profile.protocol, search, signal, (round, collector) => {
+  const runRound = (round: Json, collector?: SearchTurnCollector, requestSignal = signal) => {
     const requestId = nextRequestId
     nextRequestId = undefined
-    return streamProviderRound(profile, model, round, signal, { requestId, sessionId }, collector)
-  })
+    return streamProviderRound(
+      profile,
+      model,
+      round,
+      requestSignal,
+      { requestId, sessionId },
+      collector,
+      Boolean(task)
+    )
+  }
+  if (task) {
+    yield* streamWithTaskTools(body, profile.protocol, task, signal, runRound)
+  } else if (search) {
+    yield* streamWithProviderSearch(body, profile.protocol, search, signal, runRound)
+  }
 }
 
 /** 各协议统一成现有消息事件，保留停止、用量和错误语义。 */
 async function* streamProviderRound(
-  profile: ProviderProfile,
+  profile: ProviderRequestProfile,
   model: string,
   body: Json,
   signal: AbortSignal,
   { requestId = createId(), sessionId }: RequestContext,
-  collector?: SearchTurnCollector
+  collector?: SearchTurnCollector,
+  showToolInput = false
 ): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
   const { response, dispose } = await fetchResponse(
     profile,
@@ -582,18 +621,33 @@ async function* streamProviderRound(
     emitted = false,
     reason: StopReason = 'end_turn',
     usage: MessageUsage | undefined
-  const opened = new Set<number>()
+  let rawAnthropicUsage: Json = {}
+  let nextBlock = 0
+  let activeBlock: { index: number; thinking: boolean } | undefined
+  const closeBlock = function* (): Generator<MessageStreamEvent> {
+    if (activeBlock) {
+      const { index } = activeBlock
+      activeBlock = undefined
+      yield { type: 'content_block_stop', index }
+    }
+  }
+  const toolInput = function* (): Generator<MessageStreamEvent> {
+    yield* closeBlock()
+    if (showToolInput) {
+      yield { type: 'agent_tool_input' }
+    }
+  }
   const delta = function* (value: unknown, thinking = false): Generator<MessageStreamEvent> {
     if (typeof value !== 'string' || !value) {
       return
     }
     emitted = true
-    const index = thinking ? 1 : 0
-    if (!opened.has(index)) {
-      opened.add(index)
+    if (!activeBlock || activeBlock.thinking !== thinking) {
+      yield* closeBlock()
+      activeBlock = { index: nextBlock++, thinking }
       yield {
         type: 'content_block_start',
-        index,
+        index: activeBlock.index,
         content_block: thinking
           ? { type: 'thinking', thinking: '', signature: '' }
           : { type: 'text', text: '' },
@@ -601,7 +655,7 @@ async function* streamProviderRound(
     }
     yield {
       type: 'content_block_delta',
-      index,
+      index: activeBlock.index,
       delta: thinking
         ? { type: 'thinking_delta', thinking: value }
         : { type: 'text_delta', text: value },
@@ -625,15 +679,22 @@ async function* streamProviderRound(
       }
       if (array(content.tool_calls).length) {
         reason = 'tool_use'
+        yield* toolInput()
       }
       if (choice.finish_reason) {
         reason = stopReason(choice.finish_reason)
         completed = true
       }
       if (data.usage) {
-        usage = usageFor(data.usage, profile.protocol)
+        usage = normalizeProviderUsage(data.usage, profile.protocol)
       }
     } else if (profile.protocol === 'responses') {
+      if (
+        data.type === 'response.function_call_arguments.delta' ||
+        (data.type === 'response.output_item.added' && record(data.item).type === 'function_call')
+      ) {
+        yield* toolInput()
+      }
       if (data.type === 'response.output_text.delta' || data.type === 'response.refusal.delta') {
         yield* delta(data.delta)
       }
@@ -662,7 +723,7 @@ async function* streamProviderRound(
         completed = true
         reason = stopReason(record(result.incomplete_details).reason)
         if (result.usage) {
-          usage = usageFor(result.usage, profile.protocol)
+          usage = normalizeProviderUsage(result.usage, profile.protocol)
         }
       }
     } else if (profile.protocol === 'gemini') {
@@ -673,7 +734,12 @@ async function* streamProviderRound(
       const parts = record(candidate.content).parts
       if (Array.isArray(parts)) {
         for (const part of parts) {
-          yield* delta(record(part).text, record(part).thought === true)
+          const value = record(part)
+          if (value.functionCall) {
+            yield* toolInput()
+          } else {
+            yield* delta(value.text, value.thought === true)
+          }
         }
       }
       if (candidate.finishReason) {
@@ -681,11 +747,12 @@ async function* streamProviderRound(
         reason = stopReason(candidate.finishReason)
       }
       if (data.usageMetadata) {
-        usage = usageFor(data.usageMetadata, profile.protocol)
+        usage = normalizeProviderUsage(data.usageMetadata, profile.protocol)
       }
     } else {
       if (data.type === 'message_start') {
-        usage = usageFor(record(data.message).usage, profile.protocol)
+        rawAnthropicUsage = record(record(data.message).usage)
+        usage = normalizeProviderUsage(rawAnthropicUsage, profile.protocol)
       }
       if (data.type === 'content_block_start') {
         const block = record(data.content_block)
@@ -695,6 +762,7 @@ async function* streamProviderRound(
           yield* delta(block.thinking, true)
         } else if (block.type === 'tool_use') {
           reason = 'tool_use'
+          yield* toolInput()
         }
       }
       if (data.type === 'content_block_delta') {
@@ -705,11 +773,18 @@ async function* streamProviderRound(
         if (change.type === 'thinking_delta') {
           yield* delta(change.thinking, true)
         }
+        if (change.type === 'input_json_delta' && reason === 'tool_use') {
+          yield* toolInput()
+        }
+      }
+      if (data.type === 'content_block_stop') {
+        yield* closeBlock()
       }
       if (data.type === 'message_delta') {
         reason = stopReason(record(data.delta).stop_reason)
         if (data.usage) {
-          usage = usageFor({ ...usage, ...record(data.usage) }, profile.protocol)
+          rawAnthropicUsage = { ...rawAnthropicUsage, ...record(data.usage) }
+          usage = normalizeProviderUsage(rawAnthropicUsage, profile.protocol)
         }
       }
       if (data.type === 'message_stop') {
@@ -721,7 +796,7 @@ async function* streamProviderRound(
           yield* delta(block.text || block.thinking, block.type === 'thinking')
         }
         reason = stopReason(data.stop_reason)
-        usage = data.usage ? usageFor(data.usage, profile.protocol) : undefined
+        usage = data.usage ? normalizeProviderUsage(data.usage, profile.protocol) : undefined
         completed = true
       }
     }
@@ -759,21 +834,14 @@ async function* streamProviderRound(
     if (!completed) {
       throw new ApiError('interrupted', { key: 'providerInterrupted' })
     }
-    const turn =
-      reason === 'end_turn' && (profile.protocol === 'responses' || profile.protocol === 'gemini')
-        ? collector?.finish()
-        : (reason as StopReason) === 'tool_use'
-          ? collector?.finish()
-          : undefined
+    const turn = (reason as StopReason) === 'max_tokens' ? undefined : collector?.finish()
     if ((reason as StopReason) === 'tool_use' && !turn) {
       throw new ApiError('protocol', { key: 'providerToolUnsupported' })
     }
     if (!emitted && !turn) {
       throw new ApiError('protocol', { key: 'providerInvalidResponse' })
     }
-    for (const index of opened) {
-      yield { type: 'content_block_stop', index }
-    }
+    yield* closeBlock()
     yield {
       type: 'message_delta',
       delta: { stop_reason: turn ? 'tool_use' : reason, stop_sequence: null },
@@ -814,16 +882,20 @@ export const testProviderModel = async (
     protocol: profile.protocol,
   })
   try {
-    const capability = customReasoning(validateProfile(profile), profile.model)
+    const configuration = validateProfile(profile)
+    const capability = customReasoning(configuration, configuration.model)
     let result = ''
     for await (const event of streamProviderMessage(
-      { ...profile, maxOutputTokens: Math.min(providerOutputBudget(profile, profile.model), 1024) },
-      profile.model,
+      configuration,
+      configuration.model,
       [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
       'This is a connection test. Reply briefly.',
       signal,
       capability && { adapter: capability.adapter, level: capability.defaultLevel },
-      { requestId }
+      {
+        requestId,
+        maxOutputTokens: Math.min(providerOutputBudget(configuration, configuration.model), 1024),
+      }
     )) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
         result += event.delta.text
@@ -838,4 +910,27 @@ export const testProviderModel = async (
     finish(signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
     throw error
   }
+}
+
+/** Verify the configured model without exposing conversation data. */
+export const testProviderTools = async (profile: ProviderProfile, signal: AbortSignal) => {
+  const configuration = validateProfile(profile)
+  const capability = customReasoning(configuration, configuration.model)
+  return verifyAgentTools(
+    configuration,
+    (task) =>
+      streamProviderMessage(
+        configuration,
+        configuration.model,
+        [{ role: 'user', content: [{ type: 'text', text: agentProbePrompt }] }],
+        agentProbeSystem,
+        signal,
+        capability && { adapter: capability.adapter, level: capability.defaultLevel },
+        {
+          task,
+          maxOutputTokens: Math.min(providerOutputBudget(configuration, configuration.model), 1024),
+        }
+      ),
+    signal
+  )
 }

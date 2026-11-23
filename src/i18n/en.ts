@@ -1,6 +1,17 @@
+import { agentWorkflowEn } from './agentWorkflow.js'
+import { workspacesEn } from './workspaces.js'
+import { assistantEn } from './assistants.js'
 import type { zh } from './zh.js'
 
 export const en = {
+  ...assistantEn,
+  ...agentWorkflowEn,
+  ...workspacesEn,
+  agentBackgroundNeedsNotification:
+    'Notifications are disabled. This goal will run in the foreground.',
+  agentToolProbeOfficialPassed: 'Tool call and result verified.',
+  agentToolProbe: 'Verify Agent tools',
+  agentToolProbePassed: 'Tool call and result verified · {ms} ms',
   replyOutputLimitInvalid:
     'The service rejected the requested output token limit. Adjust the output limit and retry; existing messages are retained.',
   providerStreamUsage: 'Request streaming token usage (OpenAI compatible; disable if unsupported)',
@@ -29,10 +40,12 @@ export const en = {
     'Cannot read this attachment locally. Use text or DOCX, or enable image/PDF input for a capable model.',
   providerOriginalMissing:
     'An original attachment is missing locally. Reattach it or start a new chat.',
+  providerCurrentOriginalMissing:
+    'An attachment in this message is missing on this device. Select it again before sending.',
   providerVisionDisabled:
-    'Image input is disabled. Enable it for a capable model in advanced settings, or switch models.',
+    'Image input is off for this model. Open Attachment support for this model, or switch to one that accepts images.',
   providerPdfDisabled:
-    'PDF input is disabled. Enable it in advanced settings if the service supports it.',
+    'PDF input is off for this model. Open Attachment support for this model, or switch to one that accepts PDFs.',
   providerProNoImages:
     'DeepSeek V4 Pro does not support images. Use Flash for this chat, or start a text-only chat.',
   replyProExtensionsUnavailable:
@@ -75,6 +88,8 @@ export const en = {
     'This request referenced {count} documents. The limit is {limit} per request.',
   contextUsageRequestFiles:
     'This message had {count} attachments. The server counts tokens after parsing them.',
+  contextUsageDraftOverHint:
+    "This send would use about {count} tokens for the text, attachments and reserved reply, above this model's {limit}-token limit. Compressing history cannot make room, so split the attachment or send in several messages.",
   replyDocumentCountLimit:
     'The request references too many documents. Compress earlier turns and retry, or reduce the number of documents in this message.',
   replyDocumentTextLimit:
@@ -91,7 +106,7 @@ export const en = {
   providerDefaultNamed: 'Default {model}',
   providerSearchConfigured: 'DeepSeek Search for Pro and third-party models',
   providerConnectionAdvanced: 'Advanced connection options',
-  providerConnectionAdvancedHint: 'Model list URL, request headers and input capabilities',
+  providerConnectionAdvancedHint: 'Model list URL, headers and shared request fields',
   providerMore: 'More',
   providerPlanKey: 'Subscription key',
   providerPastePlanKey: 'Paste your Token Plan API key',
@@ -105,7 +120,8 @@ export const en = {
   providerModelAdvanced: 'Advanced model options',
   providerModelContextLabel: 'Context limit',
   providerModelOutputLabel: 'Maximum reply length',
-  providerInheritedOutput: 'Connection default',
+  providerDefaultOutput: 'Default {tokens}',
+  providerModelInputs: 'Attachment support',
   providerNotSet: 'Not set',
   providerMoreSaveActions: 'More save options',
   providerSaveShort: 'Save',
@@ -236,18 +252,18 @@ export const en = {
     'Chat history is retained. Select another configuration to regenerate replies using this service.',
   providerParameters: 'More parameters and input capabilities',
   providerMaxOutput: 'Maximum output tokens',
-  providerTemperature: 'Temperature (blank uses service default)',
+  providerTemperature: 'Temperature (blank uses the default)',
   providerTokenParameter: 'Output limit parameter',
   providerStreaming: 'Stream responses',
-  providerVision: 'Model supports images',
-  providerPdf: 'Model supports PDF files',
+  providerVision: 'Supports image input',
+  providerPdf: 'Supports PDF input',
   providerCapabilitiesHint:
-    'Enable capabilities supported by the model. Text and DOCX are read locally; images and PDFs are sent to the selected service.',
+    'Enable the inputs this model supports. Images and PDFs go to the selected service. Text and DOCX are read locally first.',
   providerModelsUrl: 'Model list URL (optional)',
   providerHeaders: 'Additional headers (JSON; can override authentication)',
-  providerExtraBody: 'Additional request parameters (JSON)',
+  providerExtraBody: 'Shared request fields (JSON)',
   providerExtraHint:
-    'Model, messages, streaming and output limits use the fields above. Follow the service documentation for other parameters.',
+    'These fields apply to every model on this connection. Set individual model parameters on the model page.',
   providerHttpHint:
     'This HTTP endpoint does not encrypt messages or keys. Use HTTPS for public services.',
   providerPrivacy:
@@ -290,12 +306,38 @@ export const en = {
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
   newChat: 'New chat',
+  siderNewChat: 'New chat',
+  siderSearchShort: 'Search',
+  siderSortLabel: 'Sort chats',
+  siderSortRecent: 'By time',
+  siderSortType: 'By conversation type',
+  siderSortTypeShort: 'By type',
+  siderChatType: 'Chats',
+  siderAgentType: 'Agent chats',
+  agentMemoryResumeForeground:
+    'Memory changed. This task will continue in the app with your current settings.',
   untitledChat: 'New chat',
   sessionLoading: 'Loading chats...',
   sessionListLoadFailed: 'Unable to load the chat list. Please try again.',
+  historyPreviouslySaved:
+    'Previously saved chats are unavailable. Retry or restore them from an existing backup.',
+  historyOpenBackup: 'Open backup settings',
+  historyStartWithoutRestore: 'Continue without restoring',
   sessionLoadFailed: 'Unable to load this chat. Please try again.',
-  sessionSaveFailed:
-    'Chats or attachments have not been saved locally. Retry before closing this page.',
+  sessionSaveFailed: 'Chats or attachments haven’t been saved',
+  sessionSaveNoSpace: 'Device storage is full. Free up some space and try saving again.',
+  sessionSaveConnection: 'Local storage is temporarily unavailable. Retry or save a backup.',
+  sessionSaveHelp: 'Retry saving to this device or save a backup before leaving.',
+  sessionSaveRetry: 'Retry save',
+  sessionSaveRetrying: 'Saving…',
+  sessionSaveWaiting: 'The system is still saving. You can save a backup now.',
+  sessionSaveStillFailed: 'Saving still failed. You can save a backup.',
+  sessionSaveRetried: 'Pending changes saved to this device',
+  sessionRecoverySave: 'Back up unsaved chats',
+  sessionRecoveryPreparing: 'Preparing backup…',
+  sessionRecoverySaved: 'The unsaved chat backup was saved.',
+  sessionRecoveryPartial: 'Chats backed up. {count} attachments could not be read.',
+  sessionRecoveryFailed: 'Could not save the backup. Try a location with more space.',
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
   appName: 'FreeSeek',
@@ -308,6 +350,7 @@ export const en = {
   sessionItemMenuContinueOption: 'Continue from here',
   inheritContextChip: 'New chat inherits context from "{title}" ({rounds} rounds)',
   inheritContextRemove: 'Remove inherited context',
+  inheritedChatTitle: 'Continued chat',
   optionMore: 'Show more options',
   optionFilter: 'Filter options',
   optionNoResults: 'No matching options',
@@ -357,20 +400,25 @@ export const en = {
   siderEmptyHistory: 'No chats yet',
   usageLoadError: 'Usage records could not be loaded.',
   settingsChatDisplay: 'Chat controls',
+  settingsChatInput: 'Chat input',
+  settingsComposerEnter: 'Enter key',
+  settingsComposerSend: 'Send',
+  settingsComposerNewline: 'New line',
+  settingsComposerSaveFailed: 'Could not save the Enter key setting. Try again.',
   settingsAppearanceLanguage: 'Appearance & language',
   settingsPrivacyLicenses: 'Privacy & open-source licenses',
+  settingsReturnToChat: 'Back to chat',
   settingsFontCredits: 'Font license',
   settingsAdvancedGroup: 'Advanced',
   settingsAdvancedHint: 'Service connections, models and chat web search',
-  officialReadyTitle: 'Your DeepSeek API is ready',
-  officialReadyMessage:
-    'Your official API key has been verified and saved. You can start chatting now.',
+  officialReadyTitle: 'DeepSeek is ready',
+  officialReadyMessage: 'Your key was verified and saved.',
   officialReadyCustomMessage:
-    'Your official API key has been verified and saved. You are using {service}. Switch to {model} to chat with DeepSeek.',
+    'Your key was verified and saved. You are using {service}. You can switch to {model} to chat.',
   officialReadyAdvancedHint:
-    'Advanced API configuration is only needed for another model provider or a self-hosted gateway.',
-  officialStayInSettings: 'Stay in settings',
+    'Use Advanced API configuration to connect another provider or a self-hosted gateway.',
   officialStartChat: 'Start chatting',
+  officialBackToSettings: 'Back to settings',
   officialSwitchAndChat: 'Chat with DeepSeek',
   officialKeySaveFailed:
     'Your key was verified, but could not be saved on this device. Check your storage and try again.',
@@ -390,8 +438,9 @@ export const en = {
   apiBalance: 'Balance',
   providerConnectionGroup: 'Connection',
   providerModelGroup: 'Model & testing',
-  providerFlashCapability: 'Text and images',
-  providerProCapability: 'Text only',
+  providerInputText: 'Text',
+  providerInputImages: 'Images',
+  providerTextOnlyCapability: 'Text only',
   settingsBackupGroup: 'Chat backups',
   settingsRemoveGroup: 'Clear history',
   settingsApiKeyConfigured: 'Configured',
@@ -432,6 +481,14 @@ export const en = {
   updateNoNotes: '(No release notes for this version)',
   updateDownloadNow: 'Download update',
   updateInstallNow: 'Install update',
+  updateWebReady: 'Ready to reload',
+  updateWebPrepared: 'New version ready',
+  updateWebReload: 'Reload to update',
+  updateWebActiveChat:
+    'Wait for replies to finish and send or remove draft attachments before reloading.',
+  updateWindowsActiveChat:
+    'Wait for replies to finish and send or remove draft attachments before installing the update.',
+  updateWebOffline: 'Connect to the internet before reloading to update.',
   updateOpenPage: 'Open release page',
   updateInstallPermission: 'Allow "install unknown apps" for FreeSeek, then tap install again',
   settingsApiTutorialHint: 'These links open the official DeepSeek platform.',
@@ -453,6 +510,9 @@ export const en = {
   donateStepOpened: 'Requested opening the payment app',
   donateStepOpenFailed: 'Couldn’t open {app} automatically',
   donateStepNext: 'Open {app}, tap Scan, then pick the QR code from your gallery.',
+  donateDesktopScan: 'Open {app} on your phone and scan the QR code on this screen.',
+  donateDownloadQr: 'Download QR code',
+  donateDownloadStarted: 'The QR code was sent to your browser for download.',
   donateThanksTitle: 'Thank you for thinking of me',
   donateThanksBody: 'I’m glad FreeSeek could help.',
   donateThanksBack: 'Back to FreeSeek',
@@ -463,9 +523,15 @@ export const en = {
   settingsDataManage: 'Data management',
   settingsShowUsage: 'Show tokens and cost in chats',
   settingsAboutApp: 'About FreeSeek',
-  settingsPrivacyTitle: 'Data & privacy',
+  settingsPrivacyTitle: 'Data on this device',
   settingsPrivacyText:
-    'Chats and attachments stay in local IndexedDB; API configurations and keys stay in localStorage. Messages go directly to the selected API service. Diagnostics and chat backups exclude configuration keys. Export backups regularly from Data management.',
+    'Chats, attachments and usage time are stored on this device. Keys and model settings are saved in local settings. Back up or delete chats in Data management. Enter your keys again when moving to a new device.',
+  settingsPrivacyServicesTitle: 'Data sent to external services',
+  settingsPrivacyServices:
+    'Chats, model tests and attachment processing send the necessary data to your selected API service. Its key authenticates the request. Data sent to the model can include relevant chat history and persona settings. Search uses queries or web addresses. Speech services process recordings or text to read aloud. Update checks contact release sites or mirrors.',
+  settingsPrivacyReportsTitle: 'Diagnostic logs',
+  settingsPrivacyReports:
+    'Diagnostic logs are stored on this device. The diagnostic bundle contains device information and redacted activity logs. Save a copy or choose an app to share it with.',
   settingsUpstreamTitle: 'Upstream',
   settingsUpstreamText:
     "Built on DeepSeek's open-source chat-demo (MIT License). Its copyright and license notice are retained.",
@@ -475,6 +541,11 @@ export const en = {
   back: 'Back',
   pressBackAgainToExit: 'Press back again to exit',
   settingsFontSize: 'Font size',
+  settingsFont: 'Font',
+  settingsFontFamily: 'Font family',
+  settingsFontMiSans: 'Default MiSans',
+  settingsFontSystem: 'System font',
+  settingsFontSaveFailed: 'Could not save the font setting. Try again.',
   settingsFontSizeHint: 'Adjust text and control sizing across the app. Applies immediately.',
   fontSmall: 'Small',
   fontDefault: 'Default',
@@ -560,6 +631,8 @@ export const en = {
   usageRequests: 'Requests',
   usageInputTokens: 'Input tokens',
   usageCacheHit: 'Cache hits',
+  usageCacheHitRate: 'Cache hit rate',
+  usageCacheRateHelp: 'Cached input tokens as a share of input with reported cache data.',
   usageCacheMiss: 'misses',
   usageOutputTokens: 'Output tokens',
   usageWebSearches: 'Web tool calls',
@@ -567,7 +640,15 @@ export const en = {
   usageLast14Days: 'Daily cost, last 14 days',
   usageEmpty: 'No usage yet. Stats appear after your first message.',
   usagePricingTitle: 'Pricing',
-  usagePricingUnit: 'CNY / 1M',
+  usagePricingModel: 'Pricing model',
+  usageModelTokenPricing: 'Token rates',
+  usageSavePrice: 'Save rates',
+  usageClearPrice: 'Clear rates',
+  usagePriceSaveFailed: 'Could not save these rates. Try again.',
+  usagePriceCleared: 'Custom rates cleared for this model.',
+  usageCustomPriceHint:
+    'Enter the rates in CNY per million tokens for this service connection. Billing is determined by your provider.',
+  usagePricingUnit: 'CNY / 1M tokens',
   usagePricingSearchSection: 'Web tools in chat',
   usagePricingSearchPolicy:
     'From Nov 18, 2026 at 12:00 Beijing time, search and page fetches in chat only incur model token charges. The rate below applies to historical calls from Nov 1 until that time.',
@@ -586,7 +667,7 @@ export const en = {
   usageSave: 'Save pricing',
   usageSaved: 'Saved',
   usagePricingHint:
-    'These prices apply to Flash. V4 Pro uses its built-in official rates; custom services count tokens only. Estimates exclude public holidays, document parsing and speech. Refer to the service bill for actual charges.',
+    'These rates estimate costs for the selected model. Peak hours are estimated on regular weekdays. Document parsing and speech are billed separately. Refer to the provider bill for actual charges.',
   more: 'More',
   close: 'Close',
   sessionHistoryTimelineLabelToday: 'Today',
@@ -789,6 +870,17 @@ export const en = {
   historyImportNoClose: 'Keep the app in the foreground until it finishes',
   historyImportBusyButton: 'Importing…',
   historyImportBusyTitle: 'Importing',
+  siderReplyRunning: 'Replying',
+  siderAgentRunning: 'Running',
+  siderCompressRunning: 'Compressing',
+  settingsBackgroundSection: 'Background and notifications',
+  settingsBackgroundNotifications: 'Reply and task notifications',
+  settingsBackgroundNotificationsHelp:
+    'When you switch chats or leave the app, tap the notification to return to the conversation.',
+  settingsBackgroundAllowed: 'Allowed',
+  settingsBackgroundDenied: 'Not allowed',
+  settingsBackgroundOpenError:
+    'Could not open notifications. You can change them in system settings.',
   sessionPinned: 'Pinned',
   sessionShowMore: 'Show more chats',
   sessionPin: 'Pin chat',
@@ -847,6 +939,7 @@ export const en = {
   diagnosticsExport: 'Export diagnostic package',
   diagnosticsPreparing: 'Preparing…',
   diagnosticsExported: 'Diagnostic package exported',
+  diagnosticsDownloadStarted: 'The diagnostic package was sent to your browser for download.',
   diagnosticsExportFailed: 'Could not export diagnostics. Please retry.',
   diagnosticsFallback: 'Full diagnostics are unavailable. Preparing basic diagnostics.',
   diagnosticsPrivacy:
@@ -869,6 +962,15 @@ export const en = {
   uploadFile: 'Upload files',
   attachPanelLabel: 'Add attachment',
   attachCamera: 'Camera',
+  attachCameraUnavailable: 'No camera app is available. You can choose a photo from your library.',
+  attachCameraFailed: 'Could not take a photo. Try again.',
+  attachTakePhoto: 'Take photo',
+  attachWebCameraStarting: 'Opening the camera…',
+  attachWebCameraPreview: 'Camera preview',
+  attachWebCameraUnavailable:
+    'Could not open the camera. Check that one is connected, or choose an existing image.',
+  attachWebCameraPermission:
+    'Allow camera access in your browser’s site settings, or choose an existing image.',
   attachGallery: 'Photos',
   attachFiles: 'Files',
   chatInputStopButtonTooltip: 'Stop',
@@ -883,9 +985,11 @@ export const en = {
     'A conversation or index is too large to read. Export it in smaller parts and try again. Existing chats are preserved.',
   backupStorageFull:
     'There is not enough storage to import this backup. Free up some space and try again. Existing chats are preserved.',
+  backupOtherTabBusy:
+    'Another tab is importing or cleaning up chats. Wait for it to finish before trying again.',
   backupEmptyHistory: 'This backup has no conversations. The chats on this device are preserved.',
   updateHistoryUnsaved:
-    'Chat data is still being saved. Finish saving or importing before installing the update.',
+    'Chat data is still being saved. Finish saving or importing before updating.',
   uploadParseFailed: 'Parsing failed',
   uploadFileCountLimit: 'Uploaded file limit reached ({limit} files). ',
   uploadStorageLimit: 'Uploaded file storage limit reached ({limit} GB). ',
@@ -897,6 +1001,8 @@ export const en = {
   voiceInputStop: 'Stop recording and transcribe',
   voiceInputCancel: 'Transcribing. Click to cancel',
   voiceInputPermissionDenied: 'Cannot use the microphone. Please check system permissions.',
+  voiceInputBrowserPermission:
+    'Allow microphone access in your browser’s site settings, then try again.',
   voiceInputNoDevice: 'No microphone detected',
   voiceInputFailed: 'Speech recognition failed. Please try again later.',
   voiceInputEmpty: 'No speech detected',

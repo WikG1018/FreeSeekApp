@@ -6,6 +6,7 @@ declare const styles: {
   readonly readyTitle: string
   readonly readyMessage: string
   readonly readyHint: string
+  readonly readyActions: string
   readonly accountBlock: string
   readonly accountStatus: string
   readonly accountStatusLabel: string

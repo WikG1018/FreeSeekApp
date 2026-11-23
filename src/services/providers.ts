@@ -14,9 +14,17 @@ import {
 } from './reasoning.js'
 
 export type ProviderProtocol = 'openai' | 'responses' | 'anthropic' | 'gemini'
-export type ProviderModelSettings = {
+export type ProviderModelParameters = {
+  maxOutputTokens: number
+  temperature: number | null
+  tokenParameter: 'max_tokens' | 'max_completion_tokens'
+  stream: boolean
+  streamUsage: boolean
+  vision: boolean
+  pdf: boolean
+}
+export type ProviderModelSettings = Partial<ProviderModelParameters> & {
   name?: string
-  maxOutputTokens?: number
   reasoningAdapter?: ReasoningAdapter | 'none'
   reasoningLevels?: ReasoningLevel[]
   defaultReasoning?: ReasoningLevel
@@ -34,16 +42,10 @@ export type ProviderProfile = {
   contextWindows?: Record<string, number>
   modelSettings?: Record<string, ProviderModelSettings>
   preset?: { id: string; access: string }
-  maxOutputTokens: number
-  temperature: number | null
-  tokenParameter: 'max_tokens' | 'max_completion_tokens'
-  stream: boolean
-  streamUsage: boolean
-  vision: boolean
-  pdf: boolean
   headers: Record<string, string>
   extraBody: Record<string, unknown>
 }
+type ProviderProfileInput = ProviderProfile & Partial<ProviderModelParameters>
 export type ModelSelection = { providerId: string; model: string }
 export type ConnectionRef = { providerId: string; revision?: string }
 type ProviderState = {
@@ -52,7 +54,11 @@ type ProviderState = {
   officialDefaults: Partial<Record<string, ReasoningLevel>>
 }
 type RuntimeState = ProviderState & {
-  reasoningOverride: { sessionId: string | null; level: ReasoningLevel } | null
+  reasoningOverride: {
+    sessionId: string | null
+    level: ReasoningLevel
+    selection: ModelSelection
+  } | null
 }
 export type Connection =
   | { kind: 'deepseek'; model: string; apiKey: string }
@@ -62,8 +68,15 @@ const KEY = 'freeseek:providers'
 export const OFFICIAL_MODELS = ['deepseek-flash', 'deepseek-v4-pro'] as const
 const fallback: ModelSelection = { providerId: 'deepseek', model: 'deepseek-flash' }
 const protocols: ProviderProtocol[] = ['openai', 'responses', 'anthropic', 'gemini']
+const MODEL_LIMIT = 5000
+// A legacy connection can have both a full catalog and settings for other saved model IDs.
+const MODEL_SETTINGS_LIMIT = MODEL_LIMIT * 2 + 1
+const tokenParameters = ['max_tokens', 'max_completion_tokens'] as const
+const booleanParameters = ['vision', 'pdf', 'stream', 'streamUsage'] as const
 const validOutputBudget = (value: number) =>
   Number.isSafeInteger(value) && value >= 16 && value <= 1048576
+const validTemperature = (value: number | null) =>
+  value === null || (Number.isFinite(value) && value >= 0 && value <= 2)
 export class ProviderConfigError extends Error {
   constructor(readonly reason: 'url' | 'model' | 'parameters' | 'storage' | 'missing' | 'changed') {
     super(`Provider configuration: ${reason}`)
@@ -109,17 +122,86 @@ export const emptyProfile = (): ProviderProfile => ({
   model: '',
   models: [],
   modelListUrl: '',
-  maxOutputTokens: 4096,
-  temperature: null,
-  vision: false,
-  pdf: false,
-  tokenParameter: 'max_tokens',
-  stream: true,
-  streamUsage: true,
   headers: {},
   extraBody: {},
 })
-export const validateProfile = (input: ProviderProfile, requireModel = true): ProviderProfile => {
+export const modelsInProfile = (profile: ProviderProfile) => [
+  ...new Set([profile.model, ...profile.models].filter(validModel)),
+]
+
+export const modelSettingsFor = (profile: ProviderProfile | undefined, model: string) =>
+  profile && Object.hasOwn(profile.modelSettings ?? {}, model)
+    ? profile.modelSettings?.[model]
+    : undefined
+
+const defaultModelParameters = (profile: ProviderProfile): ProviderModelParameters => {
+  const access = providerAccess(profile.preset?.id, profile.preset?.access)
+  return {
+    maxOutputTokens: 4096,
+    temperature: null,
+    tokenParameter: access?.completionTokens ? 'max_completion_tokens' : 'max_tokens',
+    stream: true,
+    streamUsage: access ? (access.streamUsage ?? false) : true,
+    vision: false,
+    pdf: false,
+  }
+}
+
+export const providerModelParameters = (
+  profile: ProviderProfile,
+  model: string
+): ProviderModelParameters => {
+  const defaults = defaultModelParameters(profile)
+  const options = modelSettingsFor(profile, model)
+  return {
+    maxOutputTokens: options?.maxOutputTokens ?? defaults.maxOutputTokens,
+    temperature: options?.temperature ?? defaults.temperature,
+    tokenParameter: options?.tokenParameter ?? defaults.tokenParameter,
+    stream: options?.stream ?? defaults.stream,
+    streamUsage: options?.streamUsage ?? defaults.streamUsage,
+    vision: options?.vision ?? defaults.vision,
+    pdf: options?.pdf ?? defaults.pdf,
+  }
+}
+
+const migrateModelParameters = (
+  profile: ProviderProfile,
+  legacy: Partial<ProviderModelParameters>
+): ProviderProfile => {
+  const defaults = defaultModelParameters(profile)
+  const overridden = Object.entries(legacy).filter(
+    ([key, value]) =>
+      value !== undefined && value !== defaults[key as keyof ProviderModelParameters]
+  )
+  if (!overridden.length) {
+    return profile
+  }
+  const inherited = Object.fromEntries(overridden)
+  const models = [
+    ...new Set([...modelsInProfile(profile), ...Object.keys(profile.modelSettings ?? {})]),
+  ]
+  return {
+    ...profile,
+    modelSettings: Object.fromEntries(
+      models.slice(0, MODEL_SETTINGS_LIMIT).map((model) => [
+        model,
+        {
+          ...inherited,
+          ...Object.fromEntries(
+            Object.entries(modelSettingsFor(profile, model) ?? {}).filter(
+              ([, value]) => value !== undefined
+            )
+          ),
+        },
+      ])
+    ),
+  }
+}
+
+export const validateProfile = (
+  input: ProviderProfileInput,
+  requireModel = true
+): ProviderProfile => {
   if (
     !protocols.includes(input.protocol) ||
     typeof input.model !== 'string' ||
@@ -144,7 +226,7 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
     (!input.modelSettings ||
       typeof input.modelSettings !== 'object' ||
       Array.isArray(input.modelSettings) ||
-      Object.keys(input.modelSettings).length > 5000 ||
+      Object.keys(input.modelSettings).length > MODEL_SETTINGS_LIMIT ||
       Object.entries(input.modelSettings).some(
         ([model, item]) =>
           !validModel(model) ||
@@ -153,6 +235,11 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
           Array.isArray(item) ||
           (item.name !== undefined && !validModel(item.name)) ||
           (item.maxOutputTokens !== undefined && !validOutputBudget(item.maxOutputTokens)) ||
+          (item.temperature !== undefined && !validTemperature(item.temperature)) ||
+          (item.tokenParameter !== undefined && !tokenParameters.includes(item.tokenParameter)) ||
+          booleanParameters.some(
+            (key) => item[key] !== undefined && typeof item[key] !== 'boolean'
+          ) ||
           (item.reasoningAdapter !== undefined &&
             item.reasoningAdapter !== 'none' &&
             !isReasoningAdapter(item.reasoningAdapter)) ||
@@ -166,10 +253,19 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
     throw new ProviderConfigError('parameters')
   }
   const url = validateProviderUrl(input.url)
+  const {
+    maxOutputTokens,
+    temperature,
+    tokenParameter,
+    stream,
+    streamUsage,
+    vision,
+    pdf,
+    ...connection
+  } = input
   if (
-    !validOutputBudget(input.maxOutputTokens) ||
-    (input.temperature !== null &&
-      (!Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2))
+    (maxOutputTokens !== undefined && !validOutputBudget(maxOutputTokens)) ||
+    (temperature !== undefined && !validTemperature(temperature))
   ) {
     throw new ProviderConfigError('parameters')
   }
@@ -200,8 +296,8 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
   }
   const preset = providerPreset(input.preset?.id)
   const access = providerAccess(input.preset?.id, input.preset?.access)
-  return {
-    ...input,
+  const profile = {
+    ...connection,
     url,
     apiKey: input.apiKey.trim(),
     model: input.model.trim(),
@@ -210,17 +306,25 @@ export const validateProfile = (input: ProviderProfile, requireModel = true): Pr
     modelListUrl: input.modelListUrl.trim() ? validateProviderUrl(input.modelListUrl) : '',
     models: [...new Set(input.models.filter(validModel).map((model) => model.trim()))].slice(
       0,
-      5000
+      MODEL_LIMIT
     ),
     headers,
     extraBody: JSON.parse(JSON.stringify(input.extraBody)) as Record<string, unknown>,
-    vision: input.vision === true,
-    pdf: input.pdf === true,
-    stream: input.stream !== false,
-    streamUsage: input.streamUsage !== false,
-    tokenParameter:
-      input.tokenParameter === 'max_completion_tokens' ? 'max_completion_tokens' : 'max_tokens',
   }
+  return migrateModelParameters(profile, {
+    maxOutputTokens,
+    temperature,
+    vision: vision === undefined ? undefined : vision === true,
+    pdf: pdf === undefined ? undefined : pdf === true,
+    stream: stream === undefined ? undefined : stream !== false,
+    streamUsage: streamUsage === undefined ? undefined : streamUsage !== false,
+    tokenParameter:
+      tokenParameter === undefined
+        ? undefined
+        : tokenParameter === 'max_completion_tokens'
+          ? 'max_completion_tokens'
+          : 'max_tokens',
+  })
 }
 const registerSecrets = (profiles: ProviderProfile[]) => {
   for (const profile of profiles) {
@@ -292,36 +396,16 @@ const commit = ({ profiles, selection, officialDefaults }: ProviderState) => {
       : {}),
   })
 }
-const requestConfig = ({
-  url,
-  apiKey,
-  protocol,
-  maxOutputTokens,
-  temperature,
-  vision,
-  pdf,
-  headers,
-  extraBody,
-  tokenParameter,
-  stream,
-  streamUsage,
-}: ProviderProfile) =>
+const requestConfig = ({ url, apiKey, protocol, headers, extraBody }: ProviderProfile) =>
   JSON.stringify({
     url,
     apiKey,
     protocol,
-    maxOutputTokens,
-    temperature,
-    vision,
-    pdf,
     headers,
     extraBody,
-    tokenParameter,
-    stream,
-    streamUsage,
   })
 export const saveProvider = (
-  input: ProviderProfile,
+  input: ProviderProfileInput,
   activate: boolean | string = false
 ): ProviderProfile => {
   const value = validateProfile(input, Boolean(activate))
@@ -359,15 +443,16 @@ export const saveProvider = (
           : fallback
         : current,
   })
+  const parameters = providerModelParameters(saved, activatedModel)
   logEvent('settings', 'provider.saved', {
     protocol: saved.protocol,
     connectionCount: profiles.length,
     modelCount: modelsInProfile(saved).length,
     created: !previous,
     activated: Boolean(activate),
-    streaming: saved.stream,
-    streamUsage: saved.streamUsage,
-    outputTokens: saved.maxOutputTokens,
+    streaming: parameters.stream,
+    streamUsage: parameters.streamUsage,
+    outputTokens: parameters.maxOutputTokens,
   })
   return saved
 }
@@ -397,8 +482,10 @@ export const selectModel = (selection: ModelSelection) => {
     protocol: state.profiles.find((profile) => profile.id === selection.providerId)?.protocol,
   })
 }
-export const activeConnectionRef = (): ConnectionRef => {
-  const { selection, profiles } = useProviders.getState()
+export const activeConnectionRef = (
+  selection = useProviders.getState().selection
+): ConnectionRef => {
+  const { profiles } = useProviders.getState()
   return {
     providerId: selection.providerId,
     ...(selection.providerId === 'deepseek'
@@ -429,7 +516,6 @@ export const resolveConnection = (
     model: model ?? profile.model,
     profile: {
       ...profile,
-      maxOutputTokens: providerOutputBudget(profile, model ?? profile.model),
       headers: { ...profile.headers },
       extraBody: { ...profile.extraBody },
     },
@@ -450,20 +536,20 @@ export const modelLabel = (model: string) =>
       ? 'DeepSeek V4 Pro'
       : model
 
-export const modelsInProfile = (profile: ProviderProfile) => [
-  ...new Set([profile.model, ...profile.models].filter(validModel)),
-]
-
-export const modelSettingsFor = (profile: ProviderProfile | undefined, model: string) =>
-  profile && Object.hasOwn(profile.modelSettings ?? {}, model)
-    ? profile.modelSettings?.[model]
-    : undefined
-
 export const providerModelLabel = (model: string, profile?: ProviderProfile) =>
   modelSettingsFor(profile, model)?.name ?? (profile ? model : modelLabel(model))
 
+export const modelInputCapabilities = (model: string, profile?: ProviderProfile) => {
+  if (profile) {
+    const { vision, pdf } = providerModelParameters(profile, model)
+    return { vision, pdf }
+  }
+  const acceptsRichInputs = model === 'deepseek-flash'
+  return { vision: acceptsRichInputs, pdf: acceptsRichInputs }
+}
+
 export const providerOutputBudget = (profile: ProviderProfile, model: string) =>
-  modelSettingsFor(profile, model)?.maxOutputTokens ?? profile.maxOutputTokens
+  providerModelParameters(profile, model).maxOutputTokens
 
 export const setOfficialReasoningDefault = (model: string, level: ReasoningLevel) => {
   if (
@@ -494,9 +580,12 @@ export const activeReasoning = (
         return profile && customReasoning(profile, state.selection.model)
       })()
 
-export const selectedReasoning = (sessionId: string | null): ReasoningChoice | undefined => {
+export const selectedReasoning = (
+  sessionId: string | null,
+  selection = useProviders.getState().selection
+): ReasoningChoice | undefined => {
   const state = useProviders.getState()
-  const capability = activeReasoning(state, useSettings.getState())
+  const capability = activeReasoning({ ...state, selection }, useSettings.getState())
   if (!capability) {
     return undefined
   }
@@ -504,13 +593,20 @@ export const selectedReasoning = (sessionId: string | null): ReasoningChoice | u
   return {
     adapter: capability.adapter,
     level:
-      override?.sessionId === sessionId && capability.levels.includes(override.level)
+      override?.selection.providerId === selection.providerId &&
+      override.selection.model === selection.model &&
+      override.sessionId === sessionId &&
+      capability.levels.includes(override.level)
         ? override.level
         : capability.defaultLevel,
   }
 }
 
-export const setReasoningOverride = (sessionId: string | null, level: ReasoningLevel) => {
-  useProviders.setState({ reasoningOverride: { sessionId, level } })
+export const setReasoningOverride = (
+  sessionId: string | null,
+  level: ReasoningLevel,
+  selection = useProviders.getState().selection
+) => {
+  useProviders.setState({ reasoningOverride: { sessionId, level, selection } })
   logEvent('settings', 'reasoning.session-changed', { sessionId, level })
 }

@@ -29,14 +29,16 @@ const BUFFER_AHEAD_SECONDS = 5
 
 let current: { controller: AbortController; context: AudioContext } | null = null
 
-const finish = (controller: AbortController) => {
+const finish = (controller: AbortController, failed = false) => {
   if (current?.controller !== controller) {
     return
   }
   void current.context.close().catch(() => {})
   current = null
   useReadAloud.setState({ messageId: null, status: 'idle' })
-  logEvent('speech', 'playback.finished', { cancelled: controller.signal.aborted })
+  if (!failed) {
+    logEvent('speech', 'playback.finished', { cancelled: controller.signal.aborted })
+  }
 }
 
 /** 停止当前朗读（发送、停止生成、切换会话等场景调用） */
@@ -132,7 +134,7 @@ export const toggleReadAloud = (
         watchdog = setTimeout(() => {
           logEvent('speech', 'playback.timeout', {}, 'error')
           controller.abort()
-          finish(controller)
+          finish(controller, true)
           onError(new ApiError('network', 'TTS idle timeout'))
         }, 120_000)
       }
@@ -209,7 +211,7 @@ export const toggleReadAloud = (
         controller.signal.aborted ? 'info' : 'error'
       )
       if (!controller.signal.aborted) {
-        finish(controller)
+        finish(controller, true)
         onError(error)
       }
     }

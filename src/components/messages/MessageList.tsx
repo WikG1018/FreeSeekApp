@@ -49,13 +49,17 @@ type HistoryWindow = {
 
 export const MessageList = ({
   session,
+  rounds,
   streaming,
   footer,
   onScrolledChange,
+  onPlanReply,
 }: {
   session: Session
+  rounds?: ReadonlyMap<string, number>
   streaming: boolean
   footer?: React.ReactNode
+  onPlanReply: () => void
   /** 滚动超过阈值时上报，供悬浮顶栏决定是否浮现渐隐 */
   onScrolledChange?: (scrolled: boolean) => void
 }) => {
@@ -257,7 +261,12 @@ export const MessageList = ({
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
       <div className={styles.container}>
-        <div ref={scrollRef} className={styles.scroll} data-testid="message-scroll">
+        <div
+          ref={scrollRef}
+          className={styles.scroll}
+          data-testid="message-scroll"
+        >
+          {/* 会话正文不做回弹：跟随式阅读时内容回弹会干扰输入框附近的视线 */}
           <div ref={contentRef} className={styles.column}>
             {visibleStart > 0 ? (
               <button
@@ -301,11 +310,13 @@ export const MessageList = ({
                   key={message.id}
                   sessionId={session.id}
                   message={message}
+                  round={rounds?.get(message.id)}
                   isLast={visibleStart + index === latestIndex}
                   streaming={streaming && visibleStart + index === latestIndex}
                   busy={streaming}
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}
+                  onPlanReply={onPlanReply}
                 />
               )
             )}

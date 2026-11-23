@@ -1,0 +1,40 @@
+diff --git a/src/index.js b/src/index.js
+index eddc206af12a1fbf1204a3509199bf0d8b12dc73..0ff591147f144e4ab38025aac12c08cc0ac2a6af 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -75,21 +75,24 @@ export default class PptxRenderer {
+    * @param {File|Blob|ArrayBuffer|Uint8Array} source
+    * @param {(progress: number, message: string) => void} [onProgress]
+    */
+-  async load(source, onProgress = () => {}) {
++  async load(source, onProgress = () => {}, options = {}) {
+     // Normalise input to ArrayBuffer
+     let buf;
+     if (source instanceof Uint8Array) {
+       buf = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
+     } else if (source instanceof ArrayBuffer) {
+       buf = source;
++    } else if (options.files) {
++      buf = null;
+     } else if (typeof source.arrayBuffer === 'function') {
+       buf = await source.arrayBuffer(); // File / Blob
+     } else {
+       throw new TypeError('PptxRenderer.load(): expected File, Blob, ArrayBuffer, or Uint8Array');
+     }
+ 
++    this._remoteFonts = options.remoteFonts;
+     onProgress(0.05, 'Decompressing…');
+-    this._files = await readZip(buf);
++    this._files = options.files ?? await readZip(buf);
+ 
+     // ── presentation.xml ─────────────────────────────────────────────────
+     onProgress(0.1, 'Parsing presentation…');
+@@ -203,7 +206,7 @@ export default class PptxRenderer {
+ 
+     // Load Google Font substitutes for MS fonts used in this slide
+     const usedFonts = collectUsedFonts([slideDoc, layoutDoc, this.masterDoc]);
+-    await loadGoogleFontsFor(usedFonts, this.themeData);
++    if (this._remoteFonts !== false) await loadGoogleFontsFor(usedFonts, this.themeData);
+ 
+     // Canvas setup
+     const scale  = width / this.slideSize.cx;

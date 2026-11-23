@@ -1,0 +1,644 @@
+.run {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.runScroll {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 0;
+  max-height: 194px;
+  padding: 6px 9px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.runScroll > * {
+  flex-shrink: 0;
+}
+.scrollContent {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.progressButton,
+.locate {
+  border: 0;
+  background: none;
+  color: var(--fs-brand-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.progressButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.progressButton[data-current='true'] {
+  align-self: center;
+  max-width: min(100%, 360px);
+  min-height: 32px;
+  padding-inline: 10px;
+  border: 1px solid var(--fs-accent-line);
+  border-radius: 999px;
+  background: var(--fs-floating-surface);
+}
+.progressDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fs-brand-ink);
+}
+.progressDot[data-status='failed'],
+.progressDot[data-status='blocked'] {
+  background: var(--dsw-alias-state-error-primary);
+}
+.progressText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.progressButton svg {
+  flex: none;
+  transition: transform var(--fs-duration-fast) var(--fs-ease-out);
+}
+:global([data-legacy-spacing]) .progressButton > * + * {
+  margin-left: 5px;
+}
+.progressButton[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.progressButton[aria-expanded='true'],
+.progressButton[data-current='true'][aria-expanded='true'],
+.progressButton:hover,
+.locate:hover {
+  background: var(--fs-accent-wash);
+}
+.progressButton:focus-visible,
+.locate:focus-visible,
+.toolHistory > summary:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+.locate {
+  min-height: 30px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.runHeading,
+.runStatus,
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.runHeading {
+  justify-content: space-between;
+}
+.runHeading {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 5px 2px 9px;
+  border-bottom: 1px solid var(--fs-line);
+}
+:global([data-legacy-spacing]) .runStatus > span {
+  margin-left: 8px;
+}
+.inlineSteps {
+  max-width: 100%;
+  padding: 2px 0;
+}
+
+.liveStep {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px;
+  border-bottom: 1px solid var(--fs-line);
+  color: var(--fs-brand-ink);
+  font-size: 12px;
+}
+.liveStep > span {
+  margin-top: 6px;
+}
+.liveStep > div {
+  min-width: 0;
+}
+.liveStep small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fs-secondary-text);
+}
+
+.runStatus > span,
+.budget,
+.runNote,
+.checks small {
+  color: var(--fs-secondary-text);
+}
+.runNote,
+.stepFailure,
+.stepDetail {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.run[data-status='failed'] .runNote,
+.run[data-status='blocked'] .runNote,
+.run[data-status='partial'] .runNote {
+  color: var(--dsw-alias-state-error-primary);
+}
+.planVersion {
+  margin: 0 0 4px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+.recovery,
+.syncNote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding-block: 8px;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.recovery > svg {
+  flex-shrink: 0;
+  color: var(--fs-accent-text);
+}
+.recovery > span {
+  flex: 1 1 170px;
+}
+.recovery button,
+.syncNote button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+.planPrompt {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  max-width: min(100%, 420px);
+  min-width: 0;
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--fs-line);
+  border-radius: 14px;
+  background: var(--fs-settings-surface);
+}
+.planPromptHeading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 14px;
+}
+.planPromptHeading svg {
+  flex: none;
+  margin-right: 6px;
+  color: var(--fs-brand-ink);
+}
+.planPromptHeading > span {
+  margin-left: 8px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+.planPromptText {
+  margin: 5px 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.planPromptActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: -4px -4px 0;
+}
+.planPrompt button {
+  min-width: 0;
+  min-height: 40px;
+  padding-inline: 12px;
+}
+.planPromptActions button {
+  margin: 4px;
+}
+.run .planPromptActions {
+  margin: 0;
+}
+.run .planPromptActions button {
+  margin: 2px;
+  min-height: 40px;
+}
+.checks,
+.stepList,
+.evidenceList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.checks {
+  display: grid;
+  gap: 1px;
+}
+.checks > li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 6px;
+  padding: 4px 3px;
+  border-radius: 6px;
+}
+.checks [data-status='working'] {
+  background: var(--fs-accent-wash);
+}
+.checks [data-status='working'] .checkIcon,
+.checks [data-status='working'] small {
+  color: var(--fs-brand-ink);
+}
+.checks small {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.checks > li > span:nth-child(2) {
+  overflow-wrap: anywhere;
+}
+.checkIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fs-secondary-text);
+}
+.checks [data-status='done'] .checkIcon {
+  color: var(--fs-brand-ink);
+}
+.budget {
+  display: flex;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.actions button {
+  min-width: 0;
+  min-height: 32px;
+  height: auto;
+  padding: 3px 9px;
+  font-size: 12px;
+}
+.actions {
+  flex-shrink: 0;
+  padding: 5px 7px 2px;
+  border-top: 1px solid var(--fs-line);
+}
+.endConfirmation {
+  display: grid;
+  flex-shrink: 0;
+  gap: 3px;
+  padding: 6px 8px 0;
+  border-top: 1px solid var(--fs-line);
+}
+.endConfirmation .actions {
+  padding: 0;
+  border-top: 0;
+}
+.toolHistory > summary {
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 5px 0;
+  color: var(--fs-brand-ink);
+  cursor: pointer;
+}
+.timeline {
+  width: min(100%, 620px);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+.stepList {
+  display: grid;
+}
+.step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 1px;
+}
+.step + .step {
+  border-top: 1px solid var(--fs-line);
+}
+.stepIcon {
+  display: grid;
+  place-items: center;
+  align-self: start;
+  min-height: 20px;
+  color: var(--fs-secondary-text);
+}
+.step[data-status='working'] .stepIcon,
+.step[data-status='done'] .stepIcon {
+  color: var(--fs-brand-ink);
+}
+.step[data-status='failed'] .stepIcon,
+.stepFailure {
+  color: var(--dsw-alias-state-error-primary);
+}
+.stepDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.step[data-status='working'] .stepDot {
+  background: currentColor;
+}
+.stepMain {
+  min-width: 0;
+}
+.stepTop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 9px;
+  align-items: baseline;
+}
+.stepText {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.stepSubject {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stepText strong {
+  font-weight: 610;
+}
+.stepSubject,
+.stepStatus,
+.stepDetail {
+  color: var(--fs-secondary-text);
+}
+.stepStatus {
+  font-size: 12px;
+  text-align: end;
+}
+.step[data-status='failed'] .stepStatus {
+  color: var(--dsw-alias-state-error-primary);
+}
+.more,
+.browserLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fs-brand-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.more {
+  color: var(--fs-secondary-text);
+}
+.more svg,
+.browserLink svg {
+  flex: none;
+  transition: transform var(--fs-duration-fast) var(--fs-ease-out);
+}
+.more[aria-expanded='true'] svg,
+.browserLink[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.more:focus-visible,
+.browserLink:focus-visible,
+.outputRow button:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 1px;
+}
+.evidenceList {
+  display: grid;
+  gap: 9px;
+}
+.evidenceReveal {
+  animation: evidenceIn var(--fs-duration-fast) var(--fs-ease-out) both;
+}
+@keyframes evidenceIn {
+  from {
+    opacity: 0.65;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .more svg,
+  .browserLink svg {
+    transition: none;
+  }
+  .evidenceReveal {
+    animation: none;
+  }
+}
+.evidenceItem {
+  min-width: 0;
+  border-radius: 9px;
+  border: 1px solid var(--fs-line);
+  padding: 8px 10px;
+  background: var(--fs-settings-surface);
+  overflow-wrap: anywhere;
+}
+.evidenceItem > span {
+  display: block;
+}
+.evidenceLocation {
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  margin: 2px 0;
+}
+.evidenceExcerpt {
+  max-height: 15em;
+  overflow: auto;
+  padding-block: 5px;
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 12px;
+  overscroll-behavior: contain;
+  user-select: text;
+}
+.evidenceItem > a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--fs-brand-ink);
+}
+.outputs {
+  display: grid;
+  gap: 7px;
+  width: min(100%, 620px);
+}
+.output {
+  min-width: 0;
+}
+.outputRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  border: 1px solid var(--fs-line);
+  border-radius: 12px;
+  background: var(--fs-settings-surface);
+  align-items: stretch;
+}
+.file,
+.outputSave {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.file {
+  min-width: 0;
+  padding: 7px 11px;
+  border-radius: 11px 0 0 11px;
+}
+.outputSave {
+  justify-content: center;
+  width: 48px;
+  padding: 0;
+  color: var(--fs-brand-ink);
+  border-radius: 0 11px 11px 0;
+}
+.file:hover,
+.outputSave:hover:not(:disabled) {
+  background: var(--dsw-alias-button-secondary-fill);
+}
+.outputSave:disabled {
+  color: var(--fs-secondary-text);
+  cursor: default;
+}
+.fileIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--fs-accent-wash);
+  color: var(--fs-brand-ink);
+}
+.fileDetails {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fileDetails strong {
+  font-size: 14px;
+}
+.fileDetails > span,
+.fileStatus {
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+.fileStatus {
+  margin: 3px 2px 0;
+}
+.fileStatus[data-status='failed'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+.browserPanel {
+  width: min(720px, 100%);
+  --modal-header-gap: 6px;
+}
+.browserTitle {
+  display: block;
+  max-width: min(78vw, 620px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browserAddress {
+  overflow: hidden;
+  margin-bottom: 10px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browserFrame {
+  display: block;
+  width: 100%;
+  height: min(48vh, 520px);
+  border: 1px solid var(--fs-line);
+  border-radius: 12px;
+}
+.readerFind {
+  display: flex;
+  gap: 7px;
+  padding-block-end: 7px;
+  align-items: center;
+}
+.readerFind input {
+  min-width: 0;
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--fs-line);
+  border-radius: 10px;
+  padding: 4px 8px;
+  background: var(--fs-settings-canvas);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+}
+.browserState {
+  padding-block: 20px;
+  color: var(--fs-secondary-text);
+}
+.browserActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.stepDuration {
+  display: block;
+  font: inherit;
+  color: var(--fs-secondary-text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressButton svg {
+    transition: none;
+  }
+}

@@ -109,12 +109,8 @@
   transform: scale(0.94);
   background: var(--dsw-alias-interactive-bg-active);
 }
-.header[data-api-settings] .back {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-.header[data-api-settings] .back:active {
-  background: var(--dsw-alias-interactive-bg-active);
-}
+/* API 页返回键与其他页面保持一致：只有按下时才出现底色，不常驻圆圈。
+   基础 .back 是透明底 + 44px 圆形热区，各页统一。 */
 .backPlaceholder {
   flex: 0 0 44px;
 }
@@ -706,18 +702,35 @@ button.row:active:not(:disabled),
   gap: 8px;
 }
 .rail {
+  display: flex;
   flex: 0 0 205px;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 20px 10px;
-  overflow-y: auto;
+  padding: 20px 10px 12px;
   background: var(--fs-settings-canvas);
   border-right: 1px solid var(--fs-line);
 }
 .railTitle {
+  flex: none;
   font-size: 23px;
   font-weight: 650;
   margin: 0 10px 22px;
+}
+.rail nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.railExit {
+  flex: none;
+  padding-top: 10px;
+  border-top: 1px solid var(--fs-line);
+}
+.railExit button {
+  width: 100%;
+  min-height: 42px;
 }
 .rail .sectionTitle {
   margin-left: 10px;
@@ -886,8 +899,8 @@ button.row:active:not(:disabled),
 .importSpinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(37, 99, 235, 0.25);
-  border-top-color: var(--fs-brand);
+  border: 2px solid var(--fs-accent-line);
+  border-top-color: var(--fs-accent-fill);
   border-radius: 50%;
   animation: fs-import-spin 0.9s linear infinite;
 }
@@ -912,14 +925,14 @@ button.row:active:not(:disabled),
   position: relative;
   height: 6px;
   border-radius: 3px;
-  background: rgba(37, 99, 235, 0.14);
+  background: var(--fs-accent-wash);
   overflow: hidden;
 }
 
 .importProgressFill {
   display: block;
   height: 100%;
-  background: var(--fs-brand);
+  background: var(--fs-accent-fill);
   transition: width 0.2s linear;
 }
 
@@ -927,7 +940,7 @@ button.row:active:not(:disabled),
   display: block;
   width: 40%;
   height: 100%;
-  background: var(--fs-brand);
+  background: var(--fs-accent-fill);
   animation: fs-import-slide 1.1s ease-in-out infinite;
 }
 
@@ -980,10 +993,6 @@ button.row:active:not(:disabled),
   font-size: 11px;
   line-height: 17px;
   color: var(--dsw-alias-label-tertiary);
-}
-
-[data-ds-dark-theme] .brandLogo {
-  filter: brightness(0) invert(0.89);
 }
 
 .importFile {
@@ -1049,4 +1058,17 @@ button.row:active:not(:disabled),
 .readyHint {
   margin-top: 7px;
   color: var(--fs-secondary-text);
+}
+.readyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.readyActions > button {
+  min-width: 0;
+  min-height: 48px;
+  height: auto;
+  padding-block: 8px;
+  white-space: normal;
 }

@@ -102,7 +102,7 @@ export const importArchive = async (
   let currentSessionId: string | undefined
   let processed = 0
   const { total, expandedBytes } = await archiveSize(file)
-  const useDisk = useDiskForArchive(expandedBytes)
+  const useDisk = await useDiskForArchive(expandedBytes)
   logEvent('backup', 'import.directory-read', {
     entryCount: total,
     expandedBytes,

@@ -15,20 +15,13 @@
     color var(--fs-duration-fast) var(--fs-ease-out);
 
   &.active {
-    background-color: var(--dsw-specific-sidebar-nav-item-active-accent);
-    color: var(--dsw-alias-brand-primary-invert);
+    background-color: var(--fs-accent-wash);
+    color: var(--fs-brand-ink);
   }
 
   @media (hover: hover) {
     &:not(.active):hover {
       background-color: var(--dsw-specific-sidebar-nav-item-hover);
-    }
-
-    &:hover,
-    &.active {
-      .action {
-        display: flex;
-      }
     }
   }
 }
@@ -37,10 +30,11 @@
   flex: 1;
   display: flex;
   align-items: center;
+  gap: 8px;
   align-self: stretch;
   min-width: 0;
   min-height: 44px;
-  padding: 8px 0 8px 12px;
+  padding: 5px 3px 5px 9px;
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -53,8 +47,37 @@
   outline: 2px solid var(--fs-focus);
   outline-offset: -2px;
 }
-.item:focus-within .action {
-  display: flex;
+.kind {
+  display: grid;
+  flex: none;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border-radius: 7px;
+  /* 普通对话：青色系，与 Agent 的主题蓝形成冷暖区分 */
+  color: var(--fs-chat-ink);
+  background: var(--fs-chat-wash);
+}
+.item[data-session-mode='agent'] .kind {
+  color: var(--fs-brand-ink);
+  background: var(--fs-accent-wash);
+}
+/* 选中项图标跟随高亮色，避免浅底叠浅底看不清 */
+.item.active .kind {
+  color: var(--fs-brand-ink);
+  background: var(--fs-accent-wash);
+}
+.item.active[data-session-mode='agent'] .kind {
+  color: var(--fs-brand-ink);
+  background: var(--fs-accent-wash);
+}
+.accessibleKind {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .copy {
   flex: 1;
@@ -81,22 +104,85 @@
   color: var(--fs-secondary-text);
 }
 .excerpt mark {
-  color: var(--fs-accent-text);
+  color: var(--fs-brand-ink);
   background: var(--fs-accent-wash);
   font-weight: 600;
+}
+
+.activity {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--fs-accent-wash);
+  color: var(--fs-brand-ink);
+  font-size: 11px;
+  line-height: 19px;
+  white-space: nowrap;
+}
+
+.activityDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: activityPulse 1.9s ease-in-out infinite;
+}
+
+@keyframes activityPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activityDot {
+    animation: none;
+  }
 }
 
 .pin {
   display: flex;
   flex-shrink: 0;
-  margin-right: 6px;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--fs-secondary-text);
+}
+.pin svg {
+  width: 13px;
+  height: 13px;
 }
 
 .action {
-  display: none;
+  display: flex;
   flex-shrink: 0;
-  margin-left: 4px;
+}
+
+:global([data-legacy-spacing]) .kind {
+  margin-right: 8px;
+}
+:global([data-legacy-spacing]) .pin {
+  margin-left: 8px;
+}
+
+@media (hover: hover) and (min-width: 768px) {
+  .action button {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--fs-duration-fast) var(--fs-ease-out);
+  }
+
+  .item:hover .action button,
+  .item:focus-within .action button,
+  .item.active .action button,
+  .action button[aria-expanded='true'] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .renameInput {
@@ -113,27 +199,17 @@
   outline: none;
 }
 
-@media (hover: none) {
-  .action {
-    display: flex;
-  }
-}
-
 @media not all and (min-width: 768px) {
   .item {
-    min-height: 46px;
+    min-height: 44px;
     height: auto;
     padding: 0 4px 0 0;
-    border-radius: 16px;
-    font-size: 16px;
+    border-radius: 12px;
+    font-size: 15px;
   }
 
   .title {
     line-height: 22px;
-  }
-
-  .action {
-    display: flex;
   }
 
   .action button {
@@ -146,5 +222,12 @@
     padding: 0 12px;
     border-radius: 16px;
     font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item,
+  .action button {
+    transition: none;
   }
 }

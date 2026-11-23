@@ -1,147 +1,205 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { useTranslate } from '../../i18n/index.js'
-import { DEFAULT_PRICING, setPricing, usePricing, type FlashPricing } from '../../services/usage.js'
-import { showToast } from '../base/toastState.js'
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { providerModelLabel, useProviders } from '../../services/providers.js'
+import {
+  DEFAULT_PRICING,
+  PRO_PRICING,
+  modelPriceKey,
+  proPriceKey,
+  savePrice,
+  usePricing,
+  type FlashPricing,
+} from '../../services/usage.js'
+import { Button } from '../base/Button.js'
+import { Select } from '../base/Select.js'
 import styles from './PricingForm.module.css'
 
 type PriceKey = keyof FlashPricing
-
-/** 单价行：左侧名称，右侧输入框 + 单位，失焦或回车即生效 */
-const PriceRow = ({
-  label,
-  value,
-  unit,
-  onCommit,
-}: {
+type PricingModel = {
+  value: string
   label: string
-  value: number
-  unit: string
-  onCommit: (value: number) => void
-}) => {
-  const [draft, setDraft] = useState(String(value))
-  // 外部改变价格（恢复默认、其他页面编辑）时同步输入框
-  useEffect(() => setDraft(String(value)), [value])
+  model: string
+  provider?: string
+  defaults?: FlashPricing
+}
+const official: PricingModel[] = [
+  { value: 'flash', label: 'DeepSeek Flash', model: 'deepseek-flash', defaults: DEFAULT_PRICING },
+  { value: proPriceKey, label: 'DeepSeek V4 Pro', model: 'deepseek-v4-pro', defaults: PRO_PRICING },
+]
+const offPeakFields: [PriceKey, TranslationKey][] = [
+  ['offPeakHit', 'usagePricingHit'],
+  ['offPeakMiss', 'usagePricingMiss'],
+  ['offPeakOut', 'usagePricingOut'],
+]
+const peakFields: [PriceKey, TranslationKey][] = [
+  ['peakHit', 'usagePricingHit'],
+  ['peakMiss', 'usagePricingMiss'],
+  ['peakOut', 'usagePricingOut'],
+]
 
-  const commit = () => {
-    const next = Number(draft)
-    if (!draft.trim() || !Number.isFinite(next) || next < 0) {
-      setDraft(String(value))
+const Group = ({ title, children }: { title: string; children: ReactNode }) => (
+  <section className={styles.group}>
+    <h3 className={styles.groupTitle}>{title}</h3>
+    <div className={styles.card}>{children}</div>
+  </section>
+)
+
+const ModelPrices = ({ model, current }: { model: PricingModel; current?: FlashPricing }) => {
+  const t = useTranslate()
+  const [draft, setDraft] = useState<Partial<Record<PriceKey, string>>>({})
+  const [notice, setNotice] = useState<'saved' | 'reset' | 'failed'>()
+  const fields = [
+    ...offPeakFields,
+    ...(model.defaults ? peakFields : []),
+    ...(model.value === 'flash' ? [['searchPer1k', 'usagePricingSearch'] as const] : []),
+  ]
+  const values = Object.fromEntries(
+    fields.map(([key]) => [key, draft[key] ?? String(current?.[key] ?? '')])
+  )
+  const valid = fields.every(
+    ([key]) =>
+      values[key].trim() && Number.isFinite(Number(values[key])) && Number(values[key]) >= 0
+  )
+  const changed = fields.some(([key]) => values[key] !== String(current?.[key] ?? ''))
+  const apply = (event: FormEvent) => {
+    event.preventDefault()
+    if (!valid || !changed) {
       return
     }
-    if (next !== value) {
-      onCommit(next)
+    const converted = Object.fromEntries(
+      fields.map(([key]) => [key, Number(values[key])])
+    ) as FlashPricing
+    const rate = model.defaults
+      ? { ...model.defaults, ...converted }
+      : {
+          ...converted,
+          peakHit: converted.offPeakHit,
+          peakMiss: converted.offPeakMiss,
+          peakOut: converted.offPeakOut,
+          searchPer1k: 0,
+        }
+    if (savePrice(model.value, rate)) {
+      setDraft({})
+      setNotice('saved')
+    } else {
+      setNotice('failed')
     }
-    setDraft(String(next))
   }
-
-  return (
-    <label className={styles.row}>
-      <span className={styles.label}>{label}</span>
+  const reset = () => {
+    const value = model.value === 'flash' ? DEFAULT_PRICING : undefined
+    if (savePrice(model.value, value)) {
+      setDraft({})
+      setNotice('reset')
+    } else {
+      setNotice('failed')
+    }
+  }
+  const input = (key: PriceKey, label: TranslationKey, unit = t('usagePricingUnit')) => (
+    <label className={styles.row} key={key}>
+      <span className={styles.label}>{t(label)}</span>
       <span className={styles.control}>
         <input
           className={styles.input}
           type="number"
           inputMode="decimal"
-          min={0}
-          step={0.01}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.currentTarget.blur()
-            }
+          min="0"
+          step="any"
+          value={values[key]}
+          onChange={(event) => {
+            setDraft((value) => ({ ...value, [key]: event.target.value }))
+            setNotice(undefined)
           }}
         />
         <span className={styles.unit}>{unit}</span>
       </span>
     </label>
   )
+  return (
+    <form className={styles.form} onSubmit={apply}>
+      <Group title={t(model.defaults ? 'usagePricingOffPeak' : 'usageModelTokenPricing')}>
+        {offPeakFields.map(([key, label]) => input(key, label))}
+      </Group>
+      {model.defaults && (
+        <Group title={t('usagePricingPeak')}>
+          {peakFields.map(([key, label]) => input(key, label))}
+        </Group>
+      )}
+      {model.value === 'flash' && (
+        <Group title={t('usagePricingSearchSection')}>
+          {input('searchPer1k', 'usagePricingSearch', t('usagePricingSearchUnit'))}
+          <p className={styles.policy}>{t('usagePricingSearchPolicy')}</p>
+        </Group>
+      )}
+      <div className={styles.formActions}>
+        <Button type="submit" disabled={!valid || !changed}>
+          {t('usageSavePrice')}
+        </Button>
+        {(model.defaults || current) && (
+          <Button variant="outlined" type="button" onClick={reset}>
+            {t(model.defaults ? 'usagePricingReset' : 'usageClearPrice')}
+          </Button>
+        )}
+      </div>
+      {notice && (
+        <p
+          className={styles.notice}
+          role={notice === 'failed' ? 'alert' : 'status'}
+          data-error={notice === 'failed'}
+        >
+          {t(
+            notice === 'failed'
+              ? 'usagePriceSaveFailed'
+              : notice === 'saved'
+                ? 'usageSaved'
+                : model.defaults
+                  ? 'usagePricingResetDone'
+                  : 'usagePriceCleared'
+          )}
+        </p>
+      )}
+      <p className={styles.hint}>
+        {t(model.defaults ? 'usagePricingHint' : 'usageCustomPriceHint')}
+      </p>
+    </form>
+  )
 }
 
-const Group = ({ title, children }: { title: string; children: ReactNode }) => (
-  <section className={styles.group}>
-    <div className={styles.groupTitle}>{title}</div>
-    <div className={styles.card}>{children}</div>
-  </section>
-)
-
-/**
- * 价格设置：独立页面（设置 → 用量 → 价格设置）。
- * 改一项即保存，不再堆一排「保存价格 / 恢复默认」按钮。
- */
 export const PricingForm = () => {
   const t = useTranslate()
-  const pricing = usePricing((state) => state.pricing)
-
-  const update = (key: PriceKey, value: number) => {
-    setPricing({ ...usePricing.getState().pricing, [key]: value })
-    showToast({ key: 'usageSaved' })
-  }
-
-  const unit = t('usagePricingUnit')
+  const pricing = usePricing()
+  const profiles = useProviders((state) => state.profiles)
+  const [selection, setSelection] = useState('flash')
+  const options = [
+    ...official,
+    ...profiles.flatMap((profile) =>
+      [...new Set([profile.model, ...profile.models])].filter(Boolean).map((model) => ({
+        value: modelPriceKey(profile.id, model),
+        label: providerModelLabel(model, profile),
+        model,
+        provider: profile.name,
+      }))
+    ),
+  ] satisfies PricingModel[]
+  const model: PricingModel = options.find(({ value }) => value === selection) ?? official[0]
+  const current =
+    model.value === 'flash' ? pricing.pricing : (pricing.modelPrices[model.value] ?? model.defaults)
   return (
     <>
-      <Group title={t('usagePricingOffPeak')}>
-        <PriceRow
-          label={t('usagePricingHit')}
-          unit={unit}
-          value={pricing.offPeakHit}
-          onCommit={(value) => update('offPeakHit', value)}
+      <div className={styles.modelRow}>
+        <Select
+          ariaLabel={t('usagePricingModel')}
+          settingRow="value"
+          value={model.value}
+          options={options.map(({ value, label, provider }) => ({
+            value,
+            label,
+            detail: provider,
+          }))}
+          onChange={setSelection}
         />
-        <PriceRow
-          label={t('usagePricingMiss')}
-          unit={unit}
-          value={pricing.offPeakMiss}
-          onCommit={(value) => update('offPeakMiss', value)}
-        />
-        <PriceRow
-          label={t('usagePricingOut')}
-          unit={unit}
-          value={pricing.offPeakOut}
-          onCommit={(value) => update('offPeakOut', value)}
-        />
-      </Group>
-      <Group title={t('usagePricingPeak')}>
-        <PriceRow
-          label={t('usagePricingHit')}
-          unit={unit}
-          value={pricing.peakHit}
-          onCommit={(value) => update('peakHit', value)}
-        />
-        <PriceRow
-          label={t('usagePricingMiss')}
-          unit={unit}
-          value={pricing.peakMiss}
-          onCommit={(value) => update('peakMiss', value)}
-        />
-        <PriceRow
-          label={t('usagePricingOut')}
-          unit={unit}
-          value={pricing.peakOut}
-          onCommit={(value) => update('peakOut', value)}
-        />
-      </Group>
-      <Group title={t('usagePricingSearchSection')}>
-        <p className={styles.policy}>{t('usagePricingSearchPolicy')}</p>
-        <PriceRow
-          label={t('usagePricingSearch')}
-          unit={t('usagePricingSearchUnit')}
-          value={pricing.searchPer1k}
-          onCommit={(value) => update('searchPer1k', value)}
-        />
-      </Group>
-      <button
-        type="button"
-        className={styles.reset}
-        onClick={() => {
-          setPricing(DEFAULT_PRICING)
-          showToast({ key: 'usagePricingResetDone' })
-        }}
-      >
-        {t('usagePricingReset')}
-      </button>
-      <div className={styles.hint}>{t('usagePricingHint')}</div>
+        <p className={styles.modelCode}>{model.model}</p>
+      </div>
+      <ModelPrices key={model.value} model={model} current={current} />
     </>
   )
 }

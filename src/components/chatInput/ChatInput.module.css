@@ -9,6 +9,51 @@
   font-size: 16px;
   line-height: var(--line-height);
 }
+.progressRow {
+  display: flex;
+  min-width: 0;
+  justify-content: center;
+}
+.agentDockRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  column-gap: 7px;
+}
+.toolApproval {
+  display: grid;
+  max-width: 100%;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--fs-line);
+  border-radius: 12px;
+  background: var(--fs-settings-surface);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.toolApproval small {
+  color: var(--fs-secondary-text);
+}
+.toolApproval pre {
+  max-height: 95px;
+  overflow: auto;
+  margin: 3px 0;
+  white-space: pre-wrap;
+  color: var(--fs-secondary-text);
+}
+.toolApproval > div {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agentDockRow .progressRow {
+  max-width: min(54%, 325px);
+}
+:global([data-legacy-spacing]) .agentDockRow > * + * {
+  margin-inline-start: 7px;
+}
 .toolbar {
   display: flex;
   align-items: center;
@@ -76,12 +121,14 @@
 .toolbar:not([data-compact='full']) .effortPrefix,
 .toolbar:not([data-compact='full']) .effortFull,
 .toolbar[data-compact='both'] .searchFull,
-.toolbar[data-compact='tight'] .searchFull {
+.toolbar[data-compact='tight'] .searchFull,
+.toolbar[data-compact='stack'] .searchFull {
   display: none;
 }
 .toolbar:not([data-compact='full']) .effortShort,
 .toolbar[data-compact='both'] .searchShort,
-.toolbar[data-compact='tight'] .searchShort {
+.toolbar[data-compact='tight'] .searchShort,
+.toolbar[data-compact='stack'] .searchShort {
   display: inline;
 }
 .effortChevron {
@@ -98,25 +145,63 @@
 .tool[aria-expanded='true'] .effortChevron svg {
   transform: rotate(180deg);
 }
-.toolbar[data-compact='tight'],
-.toolbar[data-compact='tight'] .tools {
+.toolbar[data-dense],
+.toolbar[data-dense] .tools {
   gap: 1px;
 }
-.toolbar[data-compact='tight'] .toolFace {
+.toolbar[data-dense] .toolFace {
   padding-inline: 3px;
   font-size: 12px;
 }
-.toolbar[data-compact='tight'] .modelTrigger {
+.toolbar[data-dense] .modelTrigger {
   min-width: 40px;
   padding-inline: 4px;
 }
-.toolbar[data-compact='tight'] .toolFace svg {
+.toolbar[data-dense] .toolFace svg {
   margin-right: 3px;
 }
-.toolbar[data-compact='tight'] .effortChevron svg {
+.toolbar[data-dense] .effortChevron svg {
   margin-right: 0;
 }
-.tool[aria-pressed='true'] .toolFace {
+.toolbar[data-compact='icon-search'] .searchLabel {
+  display: none;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='search'] svg {
+  margin: 0;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='mode'] .effortChevron {
+  margin-left: 1px;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='mode'] .effortChevron svg {
+  width: 10px;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='effort'] .effortChevron {
+  display: none;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='effort'] .toolFace {
+  padding-inline: 2px;
+}
+.toolbar[data-compact='icon-search'] [data-toolbar-control='effort'] .toolFace > svg {
+  width: 12px;
+  margin-right: 2px;
+}
+.toolbar[data-compact='icon-search'] .modelTrigger svg {
+  width: 10px;
+  margin-left: 2px;
+}
+.toolbar[data-compact='stack'] {
+  flex-wrap: wrap;
+}
+.toolbar[data-mode='agent'] .modelTrigger {
+  max-width: 132px;
+}
+.tool[aria-pressed='true'] .toolFace,
+.tool[aria-expanded='true'] .toolFace {
+  color: var(--fs-accent-text);
+  border-color: var(--fs-accent-line);
+  background: var(--fs-accent-wash);
+}
+.tool[data-toolbar-control='mode']:enabled .toolFace {
   color: var(--fs-accent-text);
   border-color: var(--fs-accent-line);
   background: var(--fs-accent-wash);
@@ -137,8 +222,13 @@
 }
 @media (hover: hover) {
   .tool:hover:not([aria-disabled='true']) .toolFace,
-  .modelTrigger:hover:enabled {
+  /* 悬停高亮只作用在 30px 的胶囊上，不要把 44px 的透明外框也染上色，
+     否则上下会各多出 7px 蓝底，看起来像溢出了面板边界 */
+  .modelTrigger:hover:enabled .modelSurface {
     background: var(--fs-accent-wash);
+    border-color: var(--fs-accent-line);
+  }
+  .modelTrigger:hover:enabled {
     color: var(--fs-accent-text);
   }
 }
@@ -163,7 +253,9 @@
   z-index: -1;
   inset: 7px 0;
   border: 1px solid var(--fs-line);
-  border-radius: 16px;
+  /* 高度 30px：半径必须 ≤ 15px，否则圆角会被压成椭圆、
+     四角外凸形成多余的蓝色弧边 */
+  border-radius: 15px;
   background: var(--fs-floating-surface);
   pointer-events: none;
   transition:

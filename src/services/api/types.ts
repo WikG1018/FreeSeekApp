@@ -186,7 +186,7 @@ export type CreateMessageRequest = {
   thinking: { type: 'enabled' | 'disabled' }
   output_config?: { effort: 'low' | 'high' | 'max' }
   tools?: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
-  safety_check: { level: 'high' }
+  safety_check?: { level: 'high' }
   title?: { enabled: boolean }
 }
 
@@ -196,11 +196,15 @@ export type StopReason = 'end_turn' | 'max_tokens' | 'tool_use' | 'refusal'
 
 export type StopDetails = { type: 'refusal'; category: null; explanation: null }
 
+export type CacheCounts = { hit: number; input: number }
+
 export type MessageUsage = {
   /** 未命中缓存的输入 Token */
   input_tokens: number
   cache_creation_input_tokens: number
   cache_read_input_tokens: number
+  /** Only include prompt tokens for which the provider reported cache information. */
+  cache_counts?: CacheCounts | null
   /** message_start 中为 0，message_delta 中为全轮累计值 */
   output_tokens: number
   standalone_search_requests?: number
@@ -233,6 +237,7 @@ export type MessageStreamEvent =
   | { type: 'content_block_start'; index: number; content_block: OutputBlockStart }
   | { type: 'content_block_delta'; index: number; delta: ContentBlockDelta }
   | { type: 'content_block_stop'; index: number }
+  | { type: 'agent_tool_input' }
   | {
       type: 'message_delta'
       /** title 仅在开启标题且生成成功时出现；stop_details 仅在 refusal 时出现 */

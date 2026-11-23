@@ -218,17 +218,20 @@ export const SwitchRow = ({
   checked,
   change,
   description,
+  disabled = false,
 }: {
   label: string
   checked: boolean
   change: (enabled: boolean) => void
   description?: string
+  disabled?: boolean
 }) => {
   const descriptionId = useId()
   return (
     <button
       type="button"
       role="switch"
+      disabled={disabled}
       aria-checked={checked}
       aria-label={description ? label : undefined}
       aria-describedby={description ? descriptionId : undefined}

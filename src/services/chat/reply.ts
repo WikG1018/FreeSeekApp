@@ -12,6 +12,7 @@ import type {
   Message,
   ReplyBlock,
   ReplyStatus,
+  ThinkingPart,
   UserMessage,
 } from './types.js'
 
@@ -40,7 +41,7 @@ const toReplyBlock = (block: OutputBlockStart, now: number): ReplyBlock | null =
         type: 'thinking',
         thinking: block.thinking,
         signature: block.signature,
-        startedAt: now,
+        ...(block.thinking && { startedAt: now, lastDeltaAt: now }),
       }
     case 'server_tool_use':
     case 'web_search_tool_result':
@@ -65,6 +66,11 @@ const updateBlock = (
   return { ...reply, blocks }
 }
 
+const finishThinking = (block: ThinkingPart, now: number): ThinkingPart => {
+  const { lastDeltaAt, ...settled } = block
+  return { ...settled, endedAt: lastDeltaAt ?? now }
+}
+
 /**
  * 把一个流式事件合并进回复：只追加可识别的内容块，用本次请求的临时索引映射处理增量。
  * 跳过的块不占位；续写直接追加到已有内容之后，message_delta 更新结束原因与累计用量。
@@ -79,29 +85,40 @@ export const applyEvent = (
     reply.status === 'streaming' ? reply : { ...reply, status: 'streaming' }
   switch (event.type) {
     case 'message_start':
-      return { ...next, usage: event.message.usage ?? next.usage }
+      return { ...next, toolInputAt: undefined, usage: event.message.usage ?? next.usage }
+    case 'agent_tool_input':
+      return next.task ? { ...next, toolInputAt: now } : next
     case 'content_block_start': {
       blockIndexes.delete(event.index)
       const block = toReplyBlock(event.content_block, now)
       if (!block) {
         // 客户端工具内容不保存；未完成的工具往返也不能作为续写前缀。
-        return event.content_block.type === 'tool_use' ? { ...next, prefix: false } : next
+        return event.content_block.type === 'tool_use'
+          ? { ...next, prefix: false, ...(next.task && { toolInputAt: now }) }
+          : next
       }
       blockIndexes.set(event.index, next.blocks.length)
-      return { ...next, blocks: [...next.blocks, block] }
+      return { ...next, toolInputAt: undefined, blocks: [...next.blocks, block] }
     }
     case 'content_block_delta': {
       const index = blockIndexes.get(event.index)
       if (index === undefined) {
-        return next
+        return event.delta.type === 'input_json_delta' && next.toolInputAt !== undefined
+          ? { ...next, toolInputAt: now }
+          : next
       }
       const { delta } = event
       return updateBlock(next, index, (block) => {
         if (block.type === 'text' && delta.type === 'text_delta') {
           return { ...block, text: block.text + delta.text }
         }
-        if (block.type === 'thinking' && delta.type === 'thinking_delta') {
-          return { ...block, thinking: block.thinking + delta.thinking }
+        if (block.type === 'thinking' && delta.type === 'thinking_delta' && delta.thinking) {
+          return {
+            ...block,
+            thinking: block.thinking + delta.thinking,
+            startedAt: block.startedAt ?? now,
+            lastDeltaAt: now,
+          }
         }
         if (block.type === 'thinking' && delta.type === 'signature_delta') {
           return { ...block, signature: (block.signature ?? '') + delta.signature }
@@ -120,13 +137,14 @@ export const applyEvent = (
       blockIndexes.delete(event.index)
       return updateBlock(next, index, (block) =>
         block.type === 'thinking' && block.startedAt !== undefined && block.endedAt === undefined
-          ? { ...block, endedAt: now }
+          ? finishThinking(block, now)
           : block
       )
     }
     case 'message_delta':
       return {
         ...next,
+        toolInputAt: undefined,
         stopReason: event.delta.stop_reason,
         stopDetails: event.delta.stop_details,
         usage: event.usage ?? next.usage,
@@ -149,12 +167,23 @@ export const settleReply = (
   ...reply,
   status,
   error,
+  toolInputAt: undefined,
+  ...(reply.task && {
+    task: {
+      ...reply.task,
+      steps: reply.task.steps.map((step) =>
+        step.status === 'working'
+          ? { ...step, status: status === 'stopped' ? 'stopped' : 'failed' }
+          : step
+      ),
+    },
+  }),
   blocks: reply.blocks.flatMap((block): ReplyBlock[] => {
     if (reply.stopReason === 'refusal' && (block.type === 'thinking' || block.type === 'text')) {
       return []
     }
     return block.type === 'thinking' && block.startedAt !== undefined && block.endedAt === undefined
-      ? [{ ...block, endedAt: now }]
+      ? [finishThinking(block, now)]
       : [block]
   }),
 })

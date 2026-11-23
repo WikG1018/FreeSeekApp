@@ -299,6 +299,31 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
+    'foreground restores the composer when a transient visual viewport reports zero height',
+    async (page) => {
+      const input = page.getByTestId('chat-composer').locator('textarea')
+      await input.fill('保留输入草稿')
+      const output = await page.evaluate(async () => {
+        const viewport = window.visualViewport
+        const frame = document.querySelector('[data-fs-app-frame]')
+        Object.defineProperty(viewport, 'height', { configurable: true, value: 0 })
+        viewport.dispatchEvent(new Event('resize'))
+        await new Promise(requestAnimationFrame)
+        const minimum = frame.getBoundingClientRect().height
+        Object.defineProperty(viewport, 'height', { configurable: true, value: 575 })
+        window.dispatchEvent(new Event('freeseek:native-foreground'))
+        const recovered = frame.getBoundingClientRect().height
+        delete viewport.height
+        viewport.dispatchEvent(new Event('resize'))
+        return { minimum, recovered }
+      })
+      assert.ok(output.minimum > 300)
+      assert.equal(output.recovered, 575)
+      assert.equal(await input.inputValue(), '保留输入草稿')
+    }
+  )
+
+  await run(
     'startup shows only the local brand mark and joins the actual home position',
     async (page) => {
       const startup = page.locator('#fs-startup')
@@ -568,7 +593,7 @@ export const runCompatibilityCases = async (run) => {
         error.name = 'PRIVATE_STARTUP_ERROR_NAME'
         window.__FreeSeekStartup.fail('render', error)
       })
-      await page.getByRole('heading', { name: 'FreeSeek 未能启动', exact: true }).waitFor()
+      await page.getByRole('heading', { name: 'FreeSeek 界面显示异常', exact: true }).waitFor()
       const wait = page.waitForEvent('download')
       await page.getByRole('button', { name: '导出启动诊断', exact: true }).click()
       const download = await wait

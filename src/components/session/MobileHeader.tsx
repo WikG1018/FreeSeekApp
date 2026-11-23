@@ -1,4 +1,4 @@
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
@@ -13,14 +13,23 @@ import styles from './MobileHeader.module.css'
 export const MobileHeader = ({
   title,
   headerRef,
+  openAssistant,
+  artifactsButton,
 }: {
   title?: string
   headerRef?: Ref<HTMLDivElement>
+  openAssistant?: () => void
+  artifactsButton?: ReactNode
 }) => {
   const t = useTranslate()
   const open = useMobileSider((state) => state.open)
   return (
-    <div ref={headerRef} className={styles.header} data-testid="chat-header">
+    <div
+      ref={headerRef}
+      className={styles.header}
+      data-testid="chat-header"
+      data-artifacts={!!artifactsButton || undefined}
+    >
       <span className={styles.action}>
         <IconButton
           size="m"
@@ -30,24 +39,40 @@ export const MobileHeader = ({
           aria-label={t('expandSiderbarButton')}
           aria-controls="mobile-sider"
           aria-expanded={open}
+          data-chat-mode-fallback
           onClick={openMobileSider}
         />
       </span>
       {title === undefined ? null : (
         <>
-          <div className={styles.title}>
-            <span className={styles.titleText}>{title}</span>
+          {openAssistant ? (
+            <button
+              type="button"
+              className={styles.title}
+              aria-label={t('assistantChatOptions')}
+              onClick={openAssistant}
+            >
+              <span className={styles.titleText}>{title}</span>
+            </button>
+          ) : (
+            <div className={styles.title}>
+              <span className={styles.titleText}>{title}</span>
+            </div>
+          )}
+          <div className={styles.right}>
+            {artifactsButton}
+            <span className={styles.action}>
+              <IconButton
+                size="m"
+                tone="primary"
+                hitArea
+                icon={<IconNewChatOutline20 />}
+                aria-label={t('newChat')}
+                data-chat-mode-anchor
+                onClick={(event) => newChat(event.currentTarget)}
+              />
+            </span>
           </div>
-          <span className={styles.action}>
-            <IconButton
-              size="m"
-              tone="primary"
-              hitArea
-              icon={<IconNewChatOutline20 />}
-              aria-label={t('newChat')}
-              onClick={newChat}
-            />
-          </span>
         </>
       )}
     </div>

@@ -6,6 +6,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <!-- 语音输入（录音）需要麦克风权限；未授权时文字聊天不受影响 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -31,6 +36,9 @@
     <queries>
         <package android:name="com.eg.android.AlipayGphone" />
         <package android:name="com.tencent.mm" />
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
     </queries>
     <application
         android:networkSecurityConfig="@xml/network_security_config"
@@ -53,6 +61,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".BackgroundReplyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="true" />
+        <service
+            android:name=".AgentGoalService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+        <activity
+            android:name=".WorkspacePreviewActivity"
+            android:exported="false"
+            android:process=":project_preview"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <service
+            android:name=".AgentReminderService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

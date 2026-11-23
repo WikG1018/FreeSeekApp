@@ -89,6 +89,8 @@ public class CustomHttpPlugin extends Plugin {
                 if (transfer.cancelled) throw new InterruptedIOException();
                 JSObject result = new JSObject(); result.put("status", status);
                 result.put("contentType", connection.getContentType() == null ? "" : connection.getContentType());
+                String mcp = connection.getHeaderField("Mcp-Session-Id");
+                if (mcp != null && mcp.matches("[!-~]{1,256}")) result.put("mcpSessionId", mcp);
                 call.resolve(result); started = true;
                 JSObject meta = new JSObject().put("status", status).put("method", method).put("requestId", requestId);
                 DiagnosticsLog.record(getContext(), "api", "custom.response", meta);

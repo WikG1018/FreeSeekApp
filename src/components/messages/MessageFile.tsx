@@ -4,6 +4,9 @@ import { useTranslate } from '../../i18n/index.js'
 import { useUploads } from '../../services/attachments.js'
 import { loadFile } from '../../services/chat/db.js'
 import type { FileAttachment } from '../../services/chat/types.js'
+import { taskFileKind } from '../../services/tasks/artifacts.js'
+import type { SessionArtifact } from '../../services/tasks/sessionArtifacts.js'
+import { ArtifactPreview } from '../session/SessionArtifacts.js'
 import { diagnosticError, logEvent } from '../../services/diagnostics/log.js'
 import { IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
@@ -62,14 +65,19 @@ const useUploadState = (file: FileAttachment) =>
 export const MessageFile = ({
   file,
   onRetry,
+  sessionId,
+  createdAt,
 }: {
   file: FileAttachment
+  sessionId: string
+  createdAt: number
   /** 本条消息补传失败且可重试时提供 */
   onRetry: (() => void) | null
 }) => {
   const t = useTranslate()
   const url = useFileUrl(file.id)
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const [document, setDocument] = useState<SessionArtifact>()
   const upload = useUploadState(file)
   const uploading = upload?.status === 'uploading'
   const failed = upload?.status === 'error'
@@ -178,15 +186,35 @@ export const MessageFile = ({
   }
 
   return (
-    <FileCard
-      name={file.name}
-      size={file.size}
-      status={uploading ? 'uploading' : failed ? 'error' : 'done'}
-      error={errorText}
-      onRetry={retry ?? undefined}
-      onOpen={url && !upload ? () => window.open(url, '_blank', 'noreferrer') : undefined}
-      progress={upload?.status === 'uploading' ? upload.progress : undefined}
-      processing={upload?.status === 'uploading' && upload.processing}
-    />
+    <>
+      <FileCard
+        name={file.name}
+        size={file.size}
+        status={uploading ? 'uploading' : failed ? 'error' : 'done'}
+        error={errorText}
+        onRetry={retry ?? undefined}
+        onOpen={
+          url && !upload
+            ? () => {
+                const kind = taskFileKind(file.name)
+                if (kind && ['docx', 'xlsx', 'pptx', 'pdf'].includes(kind)) {
+                  setDocument({ ...file, createdAt })
+                } else {
+                  window.open(url, '_blank', 'noreferrer')
+                }
+              }
+            : undefined
+        }
+        progress={upload?.status === 'uploading' ? upload.progress : undefined}
+        processing={upload?.status === 'uploading' && upload.processing}
+      />
+      {document && (
+        <ArtifactPreview
+          file={document}
+          sessionId={sessionId}
+          close={() => setDocument(undefined)}
+        />
+      )}
+    </>
   )
 }

@@ -47,7 +47,7 @@ const findMessage = (session: Session, matcher: RegExp): MessageMatch | undefine
 }
 
 type Scan = {
-  sessions: SessionSummary[]
+  sourceKey: string
   query: string
   matches: Map<string, MessageMatch>
   complete: boolean
@@ -60,9 +60,22 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
   const ready = useChatStore((state) => state.ready)
   const streaming = useChatStore((state) => state.streaming)
   const matcher = useMemo(() => (query ? makeMatcher(query) : null), [query])
+  // Sorting, pinning and filling missing type metadata do not change the messages.
+  const sourceKey = useMemo(
+    () => (matcher ? JSON.stringify(sessions.map(({ id, updatedAt }) => [id, updatedAt])) : ''),
+    [sessions, matcher]
+  )
+  const searchIds = useMemo(
+    () => (sourceKey ? (JSON.parse(sourceKey) as [string, number][]).map(([id]) => id) : []),
+    [sourceKey]
+  )
 
   useEffect(() => {
-    if (!matcher || !ready || replacing || sessions.length === 0) {
+    if (replacing) {
+      setScan(null)
+      return
+    }
+    if (!matcher || !ready || searchIds.length === 0) {
       return
     }
     let cancelled = false
@@ -72,17 +85,17 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
     const report = reportStorageError('search conversation')
     const publish = (complete: boolean) => {
       if (!cancelled) {
-        setScan({ sessions, query, matches: new Map(matches), failed, complete })
+        setScan({ sourceKey, query, matches: new Map(matches), failed, complete })
         changed = false
       }
     }
     const search = async () => {
       const finish = beginDiagnosticOperation('search', 'history', {
-        sessionCount: sessions.length,
+        sessionCount: searchIds.length,
       })
       // One record at a time keeps imported history out of the open-chat cache.
-      for (let index = 0; index < sessions.length && !cancelled; index++) {
-        const { id } = sessions[index]
+      for (let index = 0; index < searchIds.length && !cancelled; index++) {
+        const id = searchIds[index]
         try {
           const cache = useChatStore.getState().sessionCache
           const session = Object.hasOwn(cache, id) ? cache[id] : await loadSession(id)
@@ -114,9 +127,9 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [matcher, ready, replacing, sessions, query, streaming])
+  }, [matcher, ready, replacing, searchIds, sourceKey, query, streaming])
 
-  const current = scan?.query === query && scan.sessions === sessions && !replacing ? scan : null
+  const current = scan?.query === query && scan.sourceKey === sourceKey && !replacing ? scan : null
   const matches = current?.matches
   const filtered = useMemo(
     () =>

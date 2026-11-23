@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { createId } from '../../utils/id.js'
 import { abortReason } from '../../utils/abort.js'
+import { fetchApiRequest } from './windowsTransport.js'
 
 type TransferEvent = { id: string; type: 'chunk' | 'end' | 'error'; data?: string }
 const Native = registerPlugin<{
@@ -11,7 +12,7 @@ const Native = registerPlugin<{
     method: string
     headers: Record<string, string>
     body?: string
-  }): Promise<{ status: number; contentType: string }>
+  }): Promise<{ status: number; contentType: string; mcpSessionId?: string }>
   ack(options: { id: string }): Promise<void>
   cancel(options: { id: string }): Promise<void>
   requestLocalNetwork(): Promise<{ granted: boolean }>
@@ -30,7 +31,7 @@ export const providerFetch = async (
 ): Promise<Response> => {
   init.signal.throwIfAborted()
   if (Capacitor.getPlatform() !== 'android') {
-    return fetch(url, { ...init, redirect: 'error', credentials: 'omit' })
+    return fetchApiRequest(url, { ...init, redirect: 'error', credentials: 'omit' })
   }
   const id = createId()
   let controller: ReadableStreamDefaultController<Uint8Array>,
@@ -99,7 +100,10 @@ export const providerFetch = async (
     init.signal.throwIfAborted()
     return new Response([101, 204, 205, 304].includes(response.status) ? null : body, {
       status: response.status,
-      headers: { 'Content-Type': response.contentType },
+      headers: {
+        'Content-Type': response.contentType,
+        ...(response.mcpSessionId && { 'Mcp-Session-Id': response.mcpSessionId }),
+      },
     })
   } catch (error) {
     ended = true

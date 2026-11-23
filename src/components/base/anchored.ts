@@ -118,9 +118,11 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
     matchAnchorWidth = false,
     pointToAnchor = false,
     measureKey,
-  }: AnchoredOptions = {}
+  }: AnchoredOptions = {},
+  sourceRef?: MutableRefObject<T | null>
 ) => {
-  const anchorRef = useRef<T | null>(null) as MutableRefObject<T | null>
+  const defaultRef = useRef<T | null>(null) as MutableRefObject<T | null>
+  const anchorRef = sourceRef ?? defaultRef
   const floatingRef = useRef<F | null>(null) as MutableRefObject<F | null>
   const [position, setPosition] = useState<AnchoredPosition | null>(null)
 

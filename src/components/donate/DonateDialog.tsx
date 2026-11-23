@@ -1,6 +1,7 @@
 import { useId, useRef, useEffect, useLayoutEffect, useState } from 'react'
 import { App as NativeApp } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
+import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import {
   openPayPage,
@@ -9,6 +10,7 @@ import {
   type PayMethod,
 } from '../../services/donate.js'
 import { closeTopModal, Modal } from '../base/Modal.js'
+import { Button } from '../base/Button.js'
 import { IconCheckOutline16 } from '../base/icons.js'
 import { SupportMark, useDocumentVisible } from './SupportMark.js'
 import styles from './DonateDialog.module.css'
@@ -48,12 +50,15 @@ export const DonateDialog = ({
   onFullscreenChange: (fullscreen: boolean) => void
 }) => {
   const t = useTranslate()
+  const mobileLayout = useIsMobile()
+  const desktop = !mobileLayout && !Capacitor.isNativePlatform()
   const group = useId()
   const scanInstructions = useId()
   const [method, setMethod] = useState<PayMethod>('wechat')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ saved: boolean; opened: boolean } | null>(null)
   const [returned, setReturned] = useState(false)
+  const [downloadingQr, setDownloadingQr] = useState(false)
   const running = useRef(false)
   const active = useRef(true)
   const handoff = useRef<{ left: boolean; expiresAt: number } | null>(null)
@@ -164,7 +169,7 @@ export const DonateDialog = ({
           </span>
         )
       }
-      closable={!thanks}
+      closable={!thanks && !desktop}
       onDismissStart={() => {
         active.current = false
         handoff.current = null
@@ -175,17 +180,34 @@ export const DonateDialog = ({
       footer={
         !thanks && (
           <div className={styles.payFooter}>
-            <button
-              type="button"
-              className={styles.pay}
-              aria-describedby={scanInstructions}
-              disabled={busy}
-              onClick={() => void pay()}
-            >
-              {busy ? t('donateWorking') : t('donateSaveAndOpen', { app: label(method) })}
-            </button>
+            {desktop ? (
+              <div className={styles.desktopActions}>
+                <Button variant="outlined" onClick={closeTopModal}>
+                  {t('close')}
+                </Button>
+                <a
+                  className={styles.pay}
+                  href={channel.qr}
+                  download={`freeseek-donate-${method}.png`}
+                  onClick={() => setDownloadingQr(true)}
+                  aria-describedby={scanInstructions}
+                >
+                  {t('donateDownloadQr')}
+                </a>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={styles.pay}
+                aria-describedby={scanInstructions}
+                disabled={busy}
+                onClick={() => void pay()}
+              >
+                {busy ? t('donateWorking') : t('donateSaveAndOpen', { app: label(method) })}
+              </button>
+            )}
             <p id={scanInstructions} className={styles.scanInstructions}>
-              {t('donateStepNext', { app: label(method) })}
+              {t(desktop ? 'donateDesktopScan' : 'donateStepNext', { app: label(method) })}
             </p>
           </div>
         )
@@ -213,6 +235,7 @@ export const DonateDialog = ({
                     setMethod(value)
                     setDone(null)
                     setReturned(false)
+                    setDownloadingQr(false)
                     handoff.current = null
                   }}
                 />
@@ -243,7 +266,12 @@ export const DonateDialog = ({
             <p>{t('donateScanHint')}</p>
             <p>{t('donateFeedback')}</p>
           </div>
-          {done && (
+          {desktop && downloadingQr && (
+            <div className={styles.status} role="status">
+              {t('donateDownloadStarted')}
+            </div>
+          )}
+          {!desktop && done && (
             <div className={styles.status} role="status">
               <span>{t(done.saved ? 'donateStepSaved' : 'donateStepSaveFailed')}</span>
               <span>

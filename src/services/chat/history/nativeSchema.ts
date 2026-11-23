@@ -6,6 +6,23 @@ import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.j
 import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
 import { validModel } from '../../providers.js'
 import { isReasoningAdapter, isReasoningLevel } from '../../reasoning.js'
+import {
+  goalBudgets,
+  isAgentBudgetMinutes,
+  isAgentRunMode,
+  type AgentTaskRun,
+} from '../../tasks/runState.js'
+import {
+  MAX_BROWSER_CHECKPOINT_BYTES,
+  MAX_WEB_CHECKPOINT_BYTES,
+  type TaskEvidence,
+  type TaskCachedBrowserPage,
+  type TaskReadCheckpoint,
+} from '../../tasks/evidence.js'
+import type { TaskProgress, TaskPlanStep, TaskStep } from '../../tasks/tools.js'
+import { taskFileKind, taskFileMime } from '../../tasks/artifacts.js'
+import { validateProject } from '../../tasks/projectFiles.js'
+import { isTaskWebError, publicWebUrl } from '../../tasks/publicWeb.js'
 
 const invalid = (): never => fail('backupIncomplete')
 export const record = (value: unknown): Record<string, unknown> =>
@@ -33,6 +50,14 @@ const usage = (value: unknown): MessageUsage => {
     input_tokens: number(item.input_tokens),
     cache_creation_input_tokens: number(item.cache_creation_input_tokens),
     cache_read_input_tokens: number(item.cache_read_input_tokens),
+    ...(item.cache_counts === null && { cache_counts: null }),
+    ...(item.cache_counts !== null &&
+      item.cache_counts !== undefined && {
+        cache_counts: {
+          hit: number(record(item.cache_counts).hit),
+          input: number(record(item.cache_counts).input),
+        },
+      }),
     output_tokens: number(item.output_tokens),
     standalone_search_requests: optional(item.standalone_search_requests, number),
     ...(tools
@@ -59,6 +84,363 @@ const attachment = (value: unknown): FileAttachment => {
     size: number(file.size),
     isImage: boolean(file.isImage),
     mimeType: string(file.mimeType),
+  }
+}
+
+const agentStatuses = [
+  'planning',
+  'awaiting-review',
+  'awaiting-input',
+  'running',
+  'paused',
+  'blocked',
+  'partial',
+  'completed',
+  'stopped',
+  'failed',
+] as const
+const agentReasons = [
+  'budget-time',
+  'budget-requests',
+  'context-limit',
+  'output-limit',
+  'tools-unavailable',
+  'provider-error',
+  'source-failed',
+  'waiting-browser',
+  'waiting-foreground',
+  'criteria-unmet',
+  'no-progress',
+  'interrupted',
+  'storage',
+  'notification-permission',
+  'host-unavailable',
+  'checkpoint-missing',
+  'host-busy',
+  'request-unconfirmed',
+  'tool-unconfirmed',
+  'provider-rate-limit',
+  'provider-timeout',
+  'connection-changed',
+  'system-timeout',
+  'user',
+] as const
+
+const readAgentRun = (value: unknown): AgentTaskRun => {
+  const raw = record(value)
+  const status = agentStatuses.find((entry) => entry === raw.status)
+  if (!status || !isAgentRunMode(raw.mode) || !isAgentBudgetMinutes(raw.budgetMinutes)) {
+    return invalid()
+  }
+  const criteria = list(raw.criteria, (entry) => {
+    const label = string(entry)
+    return label.trim() && label.length <= 240 ? label : invalid()
+  })
+  if (criteria.length > 8) {
+    return invalid()
+  }
+  const met = [...new Set(list(raw.met, number))]
+  if (met.some((entry) => !Number.isInteger(entry) || entry < 1 || entry > criteria.length)) {
+    return invalid()
+  }
+  const live = status === 'running' || status === 'planning'
+  const question = optional(raw.question, string)
+  if (
+    status === 'awaiting-input' &&
+    (raw.mode !== 'plan' || !question?.trim() || question.length > 400)
+  ) {
+    return invalid()
+  }
+  const approved = optional(raw.approvedRevision, number)
+  const revision = number(raw.revision)
+  if (approved !== undefined && approved !== revision) {
+    return invalid()
+  }
+  return {
+    id: id(raw.id),
+    status: live ? 'paused' : status,
+    reason: live ? 'interrupted' : agentReasons.find((entry) => entry === raw.reason),
+    mode: raw.mode,
+    revision,
+    approvedRevision: approved,
+    question: question?.slice(0, 400),
+    criteria,
+    met,
+    budgetMinutes: raw.budgetMinutes,
+    budgetRequests: goalBudgets[raw.budgetMinutes],
+    requestLimit: optional(raw.requestLimit, (entry) => {
+      const limit = number(entry)
+      return Number.isSafeInteger(limit) && limit > 0 ? limit : invalid()
+    }),
+    segmentRequests: number(raw.segmentRequests),
+    totalRequests: number(raw.totalRequests),
+    startedAt: number(raw.startedAt),
+    elapsedMs: number(raw.elapsedMs),
+    elapsedBeforeResume: optional(raw.elapsedBeforeResume, number),
+    retryAt: optional(raw.retryAt, number),
+    requestInFlight: optional(raw.requestInFlight, boolean),
+    background: false,
+  }
+}
+
+const readTaskEvidence = (value: unknown): TaskEvidence => {
+  const found = record(value)
+  const kind = (['web', 'github', 'browser', 'attachment'] as const).find(
+    (entry) => entry === found.kind
+  )
+  if (!kind) {
+    return invalid()
+  }
+  const range = optional(found.range, (value) => {
+    const raw = record(value)
+    const start = number(raw.start),
+      end = number(raw.end)
+    const unit: 'lines' | 'characters' | undefined =
+      raw.unit === 'lines' ? 'lines' : raw.unit === 'characters' ? 'characters' : undefined
+    return unit && start <= end ? { start, end, unit } : invalid()
+  })
+  return {
+    sourceId: string(found.sourceId).slice(0, 4_096),
+    title: string(found.title).slice(0, 300),
+    kind,
+    range,
+    url: publicWebUrl(found.url)?.href,
+    revision: optional(found.revision, string)?.slice(0, 200),
+    path: optional(found.path, string)?.slice(0, 512),
+    retrievedAt: optional(found.retrievedAt, number),
+    downloadedBytes: optional(found.downloadedBytes, number),
+    availableChars: optional(found.availableChars, number),
+    deliveredChars: optional(found.deliveredChars, number),
+    excerpt: optional(found.excerpt, string)?.slice(0, 1200),
+    characterRange: optional(found.characterRange, (value) => {
+      const span = record(value)
+      return { start: number(span.start), end: number(span.end) }
+    }),
+    nextOffset: optional(found.nextOffset, number),
+    nextCursor: optional(found.nextCursor, string)?.slice(0, 2_048),
+    partial: boolean(found.partial),
+    sourceTruncated: optional(found.sourceTruncated, boolean),
+  }
+}
+
+const readTaskCheckpoint = (value: unknown): TaskReadCheckpoint | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const raw = value as Record<string, unknown>
+  if (raw.version !== 1) {
+    return undefined
+  }
+  try {
+    const bytes = (entry: unknown) => new TextEncoder().encode(JSON.stringify(entry)).byteLength
+    const web = optional(raw.web, (entry) => {
+      if (bytes(entry) > MAX_WEB_CHECKPOINT_BYTES + 16_384) {
+        return undefined
+      }
+      const item = record(entry)
+      return {
+        pins: list(item.pins, (pair): [string, string] => {
+          if (
+            !Array.isArray(pair) ||
+            pair.length !== 2 ||
+            typeof pair[0] !== 'string' ||
+            pair[0].length > 512 ||
+            typeof pair[1] !== 'string' ||
+            !/^[a-f0-9]{40}$/i.test(pair[1])
+          ) {
+            return invalid()
+          }
+          return [pair[0], pair[1]]
+        }).slice(0, 64),
+        sources: list(item.sources, (value) => {
+          const source = record(value)
+          return {
+            key: string(source.key).slice(0, 4_096),
+            evidence: readTaskEvidence(source.evidence),
+            text: string(source.text).slice(0, MAX_WEB_CHECKPOINT_BYTES),
+            links: list(source.links, (value) => publicWebUrl(value)?.href)
+              .filter((url): url is string => Boolean(url))
+              .slice(0, 100),
+            nextCursor: optional(source.nextCursor, string)?.slice(0, 2_048),
+          }
+        }).slice(0, 100),
+        retryAt: optional(item.retryAt, number),
+      }
+    })
+    const browser = optional(raw.browser, (entry) => {
+      if (bytes(entry) > MAX_BROWSER_CHECKPOINT_BYTES + 16_384) {
+        return undefined
+      }
+      const item = record(entry)
+      return {
+        pages: list(item.pages, (value): TaskCachedBrowserPage => {
+          const page = record(value)
+          const notice = page.renderNotice
+          return {
+            url: publicWebUrl(page.url)?.href ?? invalid(),
+            requestedUrl: publicWebUrl(page.requestedUrl)?.href,
+            title: string(page.title).slice(0, 300),
+            text: string(page.text).slice(0, MAX_BROWSER_CHECKPOINT_BYTES),
+            links: list(page.links, (value) => {
+              const link = record(value)
+              return {
+                label: string(link.label).slice(0, 300),
+                url: publicWebUrl(link.url)?.href ?? invalid(),
+              }
+            }).slice(0, 100),
+            headings: list(page.headings, string)
+              .map((heading) => heading.slice(0, 300))
+              .slice(0, 60),
+            bytes: optional(page.bytes, number),
+            retrievedAt: optional(page.retrievedAt, number),
+            sourceTruncated: boolean(page.sourceTruncated),
+            mode: page.mode === 'rendered' ? ('rendered' as const) : ('static' as const),
+            renderNotice:
+              notice === 'rendering-unavailable' || notice === 'rendering-timeout'
+                ? notice
+                : undefined,
+          }
+        }).slice(0, 24),
+        currentUrl: publicWebUrl(item.currentUrl)?.href,
+        currentIndex: optional(item.currentIndex, number),
+        offset: number(item.offset),
+      }
+    })
+    return { version: 1, web, browser }
+  } catch {
+    // Imported caches are optional. A damaged cached response must not discard a conversation.
+    return undefined
+  }
+}
+
+const taskProgress = (value: unknown): TaskProgress => {
+  const raw = record(value)
+  const plan = list(raw.plan, (item): TaskPlanStep => {
+    const { label, status } = record(item)
+    if (
+      typeof label !== 'string' ||
+      !label.trim() ||
+      label.length > 120 ||
+      (status !== 'todo' && status !== 'working' && status !== 'done')
+    ) {
+      return invalid()
+    }
+    return { label, status: status === 'working' ? 'todo' : status }
+  })
+  const steps = list(raw.steps, (item): TaskStep => {
+    const step = record(item)
+    const { kind, status } = step
+    const file = optional(step.file, string)
+    if (
+      (kind !== 'read' &&
+        kind !== 'search' &&
+        kind !== 'web' &&
+        kind !== 'github' &&
+        kind !== 'browser' &&
+        kind !== 'tool' &&
+        kind !== 'plan' &&
+        kind !== 'files' &&
+        kind !== 'verification' &&
+        kind !== 'calculate' &&
+        kind !== 'table' &&
+        kind !== 'data' &&
+        kind !== 'xlsx' &&
+        kind !== 'docx' &&
+        kind !== 'md' &&
+        kind !== 'project' &&
+        kind !== 'script' &&
+        kind !== 'model3d' &&
+        kind !== 'delegate' &&
+        kind !== 'integration') ||
+      (status !== 'working' && status !== 'done' && status !== 'failed' && status !== 'stopped') ||
+      (file && file.length > 140)
+    ) {
+      return invalid()
+    }
+    return {
+      id: id(step.id),
+      kind,
+      status: status === 'working' ? 'stopped' : status,
+      file,
+      ...(isTaskWebError(step.failure) && { failure: step.failure }),
+      source: publicWebUrl(step.source)?.href,
+      blockIndex: optional(step.blockIndex, number),
+      detail: optional(step.detail, string)?.slice(0, 200),
+      output: optional(step.output, string)?.slice(0, 8_000),
+      assertions: optional(step.assertions, number),
+      elapsedMs: optional(step.elapsedMs, number),
+      retryAt: optional(step.retryAt, number),
+      evidence:
+        step.evidence === undefined ? undefined : list(step.evidence, readTaskEvidence).slice(0, 8),
+    }
+  })
+  const artifacts = list(raw.artifacts, (item) => {
+    const file = attachment(item)
+    const kind = taskFileKind(file.name)
+    if (
+      !kind ||
+      file.mimeType !== taskFileMime[kind] ||
+      file.serverId !== null ||
+      file.isImage ||
+      !file.name.trim() ||
+      file.name.length > 90 ||
+      /[\p{Cc}<>:"/\\|?*]/u.test(file.name) ||
+      !Number.isSafeInteger(file.size) ||
+      file.size >
+        (kind === 'pdf' ? 128 : kind === 'pptx' || kind === 'docx' || kind === 'xlsx' ? 32 : 2) *
+          1024 *
+          1024
+    ) {
+      return invalid()
+    }
+    const raw = record(item)
+    const sizeMm =
+      Array.isArray(raw.sizeMm) &&
+      raw.sizeMm.length === 3 &&
+      raw.sizeMm.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+        ? (raw.sizeMm as [number, number, number])
+        : undefined
+    return {
+      ...file,
+      sizeMm,
+      createdAt: optional(raw.createdAt, number),
+      sha256:
+        typeof raw.sha256 === 'string' && /^[a-f0-9]{64}$/.test(raw.sha256)
+          ? raw.sha256
+          : undefined,
+    }
+  })
+  if (
+    plan.length > 8 ||
+    steps.length > 240 ||
+    artifacts.length > 12 ||
+    (raw.warning !== undefined && raw.warning !== 'limit' && raw.warning !== 'unavailable')
+  ) {
+    return invalid()
+  }
+  return {
+    plan,
+    steps,
+    artifacts,
+    warning: raw.warning,
+    run: optional(raw.run, readAgentRun),
+    readCheckpoint: readTaskCheckpoint(raw.readCheckpoint),
+    workspaceId: optional(raw.workspaceId, id),
+    project: optional(raw.project, (value) => {
+      try {
+        if (!Array.isArray(value) || value.length > 48) {
+          return invalid()
+        }
+        return validateProject(
+          list(value, (entry) => {
+            const file = record(entry)
+            return { path: string(file.path), text: string(file.text) }
+          })
+        )
+      } catch {
+        return invalid()
+      }
+    }),
   }
 }
 
@@ -171,6 +553,39 @@ const message = (value: unknown): Message => {
       return { providerId, revision: optional(ref.revision, id) }
     }),
     systemPrompt: optional(item.systemPrompt, string),
+    agent: optional(item.agent, (value) => {
+      const agent = record(value)
+      const { memory } = agent
+      if (memory !== 'shared' && memory !== 'private' && memory !== 'off') {
+        return invalid()
+      }
+      return {
+        id: id(agent.id),
+        name: string(agent.name),
+        search: boolean(agent.search),
+        attachments: boolean(agent.attachments),
+        memory,
+      }
+    }),
+    memoryUse: optional(item.memoryUse, (value) => {
+      const use = record(value)
+      const tokens = number(use.tokens)
+      if (
+        tokens > 800 ||
+        !Array.isArray(use.references) ||
+        !use.references.length ||
+        use.references.length > 6
+      ) {
+        return invalid()
+      }
+      const references = list(use.references, (raw) => {
+        const note = record(raw)
+        return { id: id(note.id), revision: id(note.revision) }
+      })
+      return { tokens, references }
+    }),
+    memoryReadFailed: optional(item.memoryReadFailed, boolean),
+    task: optional(item.task, taskProgress),
     status: item.status as 'pending' | 'streaming' | 'done' | 'stopped' | 'error',
     prefix: boolean(item.prefix),
     blocks: list(item.blocks, block),
@@ -314,6 +729,16 @@ export const readNativeSession = (value: unknown): Session => {
   return {
     id: id(item.id),
     title: string(item.title),
+    mode: optional(item.mode, (value) =>
+      value === 'chat' || value === 'agent' ? value : invalid()
+    ),
+    agentRunMode: isAgentRunMode(item.agentRunMode) ? item.agentRunMode : undefined,
+    workspaceId: optional(item.workspaceId, id),
+    agent: optional(item.agent, (value) => {
+      const agent = record(value)
+      return { id: id(agent.id), name: string(agent.name) }
+    }),
+    memoryPaused: optional(item.memoryPaused, boolean),
     ...(item.pinned === undefined ? {} : { pinned: boolean(item.pinned) }),
     createdAt: number(item.createdAt),
     updatedAt: number(item.updatedAt),

@@ -11,6 +11,10 @@ export type Notice = {
   action?: 'apiKey' | 'topUp' | 'newChat' | 'compression'
 }
 
+// 导入的历史可能来自旧版本，计数不一定是数字；非数字原样展示，避免出现 NaN。
+const formatCount = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : String(value)
+
 const getTemplateText = (reply: AssistantMessage) =>
   reply.blocks
     .map((block) => (block.type === 'text' && block.isTemplate ? block.text : ''))
@@ -47,14 +51,15 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     ) {
       return { text: message, action: 'compression' }
     }
-    if (contextWasRejected(localMessage)) {
+    // 单条消息/附件本身超限时压缩帮不上忙，但仍要把服务端计数说清楚。
+    if (contextWasRejected(localMessage) || localMessage?.key === 'compressionInputLarge') {
       const { requestedTokens, contextLimitTokens, requestDocumentCount, documentLimit } =
         localMessage?.params ?? {}
       const detail =
         requestedTokens && contextLimitTokens
           ? translate('contextUsageReportedCounts', {
-              count: requestedTokens,
-              limit: contextLimitTokens,
+              count: formatCount(requestedTokens),
+              limit: formatCount(contextLimitTokens),
             })
           : requestDocumentCount && documentLimit
             ? translate('contextUsageDocumentCount', {
@@ -64,7 +69,10 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
             : localMessage?.key === 'replyContextTooLong'
               ? translate('contextUsageMissingRequest')
               : ''
-      return { text: detail ? message + ' ' + detail : message, action: 'newChat' }
+      return {
+        text: detail ? message + ' ' + detail : message,
+        action: localMessage?.key === 'compressionInputLarge' ? undefined : 'newChat',
+      }
     }
     switch (classifyStatus(status)) {
       case 'unauthorized':

@@ -1,5 +1,9 @@
+import type { AgentRunMode } from '../tasks/runState.js'
 import type { TranslationMessage } from '../../i18n/index.js'
 import type { ApiErrorKind } from '../api/client.js'
+import type { AgentProfile, AgentRef } from '../assistants/library.js'
+import type { MemoryUse } from '../assistants/memory.js'
+import type { TaskProgress } from '../tasks/tools.js'
 import type { ConnectionRef } from '../providers.js'
 import type { ReasoningChoice } from '../reasoning.js'
 import type {
@@ -47,10 +51,12 @@ export type ThinkingPart = {
   type: 'thinking'
   thinking: string
   signature?: string
-  /** content_block_start 的时间；没有事件时间的历史块缺省 */
+  /** 开始接收思考内容的时间。没有事件时间的历史块缺省。 */
   startedAt?: number
-  /** content_block_stop（或回复结束）的时间 */
+  /** 最后一次收到该段思考内容的时间。 */
   endedAt?: number
+  /** 流式生成时记录最后一个思考片段的时间，收尾后移除。 */
+  lastDeltaAt?: number
   /** 仅有耗时、没有事件时间时保存秒数。 */
   elapsedSeconds?: number
 }
@@ -85,6 +91,13 @@ export type AssistantMessage = MessageBranch & {
   connection?: ConnectionRef
   /** 续写沿用该轮的人设，即使后来更改了会话人设。 */
   systemPrompt?: string
+  agent?: Pick<AgentProfile, 'id' | 'name' | 'search' | 'attachments' | 'memory'>
+  memoryUse?: MemoryUse
+  memoryReadFailed?: boolean
+  task?: TaskProgress
+  /** 当前模型正在发送工具调用参数。回复结束时清除。 */
+  toolInputAt?: number
+  nativeActivity?: { phase: 'waiting' | 'thinking' | 'tool-input' | 'writing'; updatedAt: number }
   /** 请求时是否开启深度思考 */
   thinking?: boolean
   reasoning?: ReasoningChoice
@@ -117,6 +130,7 @@ export type AssistantMessage = MessageBranch & {
 }
 
 export type Message = UserMessage | AssistantMessage
+export type ChatMode = 'chat' | 'agent'
 
 /** 对话接续：新会话创建时对来源会话当前路径消息的快照 */
 export type InheritedContext = {
@@ -156,6 +170,10 @@ export type CompressionCheckpoint = {
 }
 
 export type Session = {
+  /** Missing in older sessions, which open as ordinary chats. */
+  mode?: ChatMode
+  agentRunMode?: AgentRunMode
+  workspaceId?: string
   contextSummary?: ContextSummary
   compressionPromptShown?: boolean
   compressionUsage?: CompressionCharge[]
@@ -173,10 +191,15 @@ export type Session = {
   inherited?: InheritedContext | null
   /** 创建会话时的人设快照：prompt 覆盖默认 system 提示词；null 表示默认助手身份。 */
   persona?: { name: string; prompt: string } | null
+  agent?: AgentRef | null
+  memoryPaused?: boolean
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */
-export type SessionSummary = Pick<Session, 'id' | 'title' | 'createdAt' | 'updatedAt' | 'pinned'>
+export type SessionSummary = Pick<
+  Session,
+  'id' | 'title' | 'createdAt' | 'updatedAt' | 'pinned' | 'mode'
+>
 
 /** 显式提取字段，避免将完整会话的消息带进列表。 */
 export const toSessionSummary = (session: SessionSummary): SessionSummary => ({
@@ -185,4 +208,5 @@ export const toSessionSummary = (session: SessionSummary): SessionSummary => ({
   pinned: session.pinned,
   createdAt: session.createdAt,
   updatedAt: session.updatedAt,
+  ...(session.mode && { mode: session.mode }),
 })

@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { memo, useState } from 'react'
+import { memo, useId, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   IconEditOutline16,
@@ -14,13 +14,16 @@ import {
   selectSession,
   setSessionPinned,
   startInheritSession,
+  useChatStore,
 } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
+import { useNativeGoalActivity } from '../../services/tasks/goalBridge.js'
 import { openContextSummary } from '../messages/ContextSummaryDialog.js'
 import { IconButton } from '../base/IconButton.js'
 import { Menu } from '../base/Menu.js'
 import { showToast } from '../base/toastState.js'
 import { closeMobileSider } from './mobileSiderState.js'
+import { ConversationIcon } from './ConversationIcon.js'
 import type { MessageMatch } from './useSessionSearch.js'
 import styles from './SessionItem.module.css'
 
@@ -38,6 +41,19 @@ export const SessionItem = memo(function SessionItem({
   const t = useTranslate()
   const [editing, setEditing] = useState(false)
   const displayTitle = session.title || t('untitledChat')
+  const kindId = useId()
+  const mode = session.mode ?? 'chat'
+  const kind = t(mode === 'agent' ? 'siderAgentType' : 'siderChatType')
+  const running = useChatStore((state) => Object.hasOwn(state.streaming, session.id))
+  const nativeRunning = useNativeGoalActivity((state) => state.sessionId === session.id)
+  const compressing = useChatStore((state) => Object.hasOwn(state.compressing, session.id))
+  const activity = compressing
+    ? 'siderCompressRunning'
+    : running || nativeRunning
+      ? mode === 'agent'
+        ? 'siderAgentRunning'
+        : 'siderReplyRunning'
+      : undefined
 
   if (editing) {
     const finish = (title: string) => {
@@ -68,22 +84,23 @@ export const SessionItem = memo(function SessionItem({
     <div
       className={clsx(styles.item, active && styles.active, match && styles.withExcerpt)}
       data-session-id={session.id}
+      data-session-mode={mode}
+      data-session-activity={activity}
     >
       <button
         type="button"
         className={styles.openSession}
         data-sider-swipe-row
         aria-current={active ? 'page' : undefined}
+        aria-describedby={kindId}
         onClick={() => {
           selectSession(session.id, match?.messageId)
           closeMobileSider()
         }}
       >
-        {session.pinned && (
-          <span className={styles.pin} aria-label={t('sessionPinned')}>
-            <IconPinOutline16 />
-          </span>
-        )}
+        <span className={styles.kind} title={kind} aria-hidden>
+          <ConversationIcon mode={mode} />
+        </span>
         <span className={styles.copy}>
           <span className={styles.title}>{displayTitle}</span>
           {match && (
@@ -94,7 +111,23 @@ export const SessionItem = memo(function SessionItem({
             </span>
           )}
         </span>
+        {activity && (
+          <span className={styles.activity} aria-hidden="true">
+            <span className={styles.activityDot} />
+            {t(activity)}
+          </span>
+        )}
+        {session.pinned && (
+          <span className={styles.pin} aria-hidden>
+            <IconPinOutline16 />
+          </span>
+        )}
       </button>
+      <span id={kindId} className={styles.accessibleKind}>
+        {kind}
+        {activity && ' · ' + t(activity)}
+        {session.pinned && ' · ' + t('sessionPinned')}
+      </span>
       <div className={styles.action} onClick={(event) => event.stopPropagation()}>
         <Menu
           options={[

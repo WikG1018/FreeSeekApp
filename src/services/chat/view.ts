@@ -7,6 +7,7 @@ import type {
   WebSearchToolResultBlock,
 } from '../api/types.js'
 import type { AssistantMessage, ThinkingPart } from './types.js'
+import type { TaskStep } from '../tasks/tools.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -66,7 +67,16 @@ export type ThinkingStep = { type: 'thinking'; key: string; blocks: ThinkingPart
 /** 工具调用前输出的说明文字 */
 export type PreambleStep = { type: 'text'; key: string; markdown: string }
 
-export type Step = SearchStep | OpenStep | FindStep | ReadLinkStep | ThinkingStep | PreambleStep
+export type AgentSteps = { type: 'agent-steps'; key: string; steps: TaskStep[] }
+
+export type Step =
+  | SearchStep
+  | OpenStep
+  | FindStep
+  | ReadLinkStep
+  | ThinkingStep
+  | PreambleStep
+  | AgentSteps
 
 export type ReplyView = {
   steps: Step[]
@@ -173,7 +183,11 @@ const joinTextBlocks = (
   return { markdown, text }
 }
 
-export const buildReplyView = (reply: AssistantMessage, streaming: boolean): ReplyView => {
+export const buildReplyView = (
+  reply: AssistantMessage,
+  streaming: boolean,
+  agentMode = false
+): ReplyView => {
   const results = new Map<string, WebSearchToolResultBlock | WebFetchToolResultBlock>()
   for (const block of reply.blocks) {
     if (block.type === 'web_search_tool_result' || block.type === 'web_fetch_tool_result') {
@@ -223,7 +237,33 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     pendingText = []
   }
 
+  const anchored = new Map<number, TaskStep[]>()
+  const legacy: TaskStep[] = []
+  for (const step of agentMode ? (reply.task?.steps ?? []) : []) {
+    const index = step.blockIndex
+    if (index === undefined || !Number.isSafeInteger(index) || index < 0) {
+      legacy.push(step)
+    } else {
+      const anchor = Math.min(reply.blocks.length, index)
+      const group = anchored.get(anchor)
+      if (group) {
+        group.push(step)
+      } else {
+        anchored.set(anchor, [step])
+      }
+    }
+  }
+  const insertAgentSteps = (index: number) => {
+    const group = anchored.get(index)
+    if (group?.length) {
+      flushPreamble()
+      mergedThinking = null
+      steps.push({ type: 'agent-steps', key: group[0].id, steps: group })
+    }
+  }
+
   reply.blocks.forEach((block, index) => {
+    insertAgentSteps(index)
     // 模板统一由 describeReply 展示，不能混入模型正文或工具步骤前的说明文字。
     if (block.type === 'text' && block.isTemplate) {
       return
@@ -278,11 +318,12 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
             )
           : []
       // 普通搜索按种类聚合到首次出现的位置；边想边搜只合并相邻、同种类的调用。
-      const target = isDeepSearchKind(kind)
-        ? last?.type === 'search' && last.kind === kind
-          ? last
-          : null
-        : mergedSearch.get(kind)
+      const target =
+        isDeepSearchKind(kind) || agentMode
+          ? last?.type === 'search' && last.kind === kind
+            ? last
+            : null
+          : mergedSearch.get(kind)
       if (target) {
         target.queries.push(...queries)
         target.results.push(...found.filter((source) => !target.results.includes(source)))
@@ -297,7 +338,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
           status,
         }
         steps.push(step)
-        if (!isDeepSearchKind(kind)) {
+        if (!isDeepSearchKind(kind) && !agentMode) {
           mergedSearch.set(kind, step)
         }
       }
@@ -313,7 +354,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     }
     if (input.action === 'read_link') {
       // 阅读链接仅展示进行态；成功、失败或中止后隐藏，原始结果仍保留用于后续请求。
-      if (status !== 'wip') {
+      if (!agentMode && status !== 'wip') {
         return
       }
       if (last?.type === 'read_link') {
@@ -337,6 +378,10 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     }
   })
 
+  insertAgentSteps(reply.blocks.length)
+  if (legacy.length) {
+    steps.push({ type: 'agent-steps', key: legacy[0].id, steps: legacy })
+  }
   const answer = pendingText.length > 0 ? joinTextBlocks(pendingText, registry) : null
   return {
     steps,

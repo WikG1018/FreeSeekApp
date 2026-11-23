@@ -114,7 +114,8 @@
   overflow-wrap: anywhere;
 }
 .settingCopy strong {
-  font-weight: 600;
+  /* 与其他设置行标题（开关行等）保持一致：常规字重，不单独加粗 */
+  font-weight: 400;
 }
 .settingCopy small,
 .settingValue {
@@ -128,4 +129,18 @@
 .settingValue {
   max-width: 54%;
   text-align: right;
+}
+.valueWithDetail {
+  display: grid;
+  gap: 2px;
+}
+.valueWithDetail > span {
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.valueWithDetail > small {
+  font-size: inherit;
+  line-height: 1.35;
+  white-space: normal;
 }

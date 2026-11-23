@@ -1,11 +1,19 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
-import { replaceHistory, useChatStore, loadBackupFile, flushChatUpdates } from './store.js'
+import {
+  replaceHistory,
+  useChatStore,
+  loadBackupFile,
+  flushChatUpdates,
+  unsavedChatSnapshot,
+  snapshotAgentHistory,
+} from './store.js'
 import type { Session } from './types.js'
 import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ImportProgress } from './history/readJson.js'
 import { BackupError } from './history/errors.js'
+import { discardImportedWorkspaces } from '../tasks/workspaces.js'
 
 export { BackupError } from './history/errors.js'
 
@@ -48,7 +56,10 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup('export', async () => {
     // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
     flushChatUpdates()
-    const { sessions, sessionCache } = useChatStore.getState()
+    const { ready, sessions, sessionCache } = useChatStore.getState()
+    if (!ready) {
+      throw new BackupError('sessionListLoadFailed')
+    }
     async function* readSessions(): AsyncGenerator<Session> {
       for (const summary of sessions) {
         const session = Object.hasOwn(sessionCache, summary.id)
@@ -58,7 +69,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
           throw new Error(`History session disappeared during export: ${summary.id}`)
         }
         // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
-        yield { ...session, ...summary }
+        yield await snapshotAgentHistory({ ...session, ...summary })
       }
     }
     const { exportArchive } = await import('./history/exportArchive.js')
@@ -66,6 +77,44 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     const blob = await exportArchive(readSessions(), loadBackupFile)
     logEvent('backup', 'export.archive', { sessionCount: sessions.length, bytes: blob.size })
     return { name: backupFileName(now), blob }
+  })
+
+export const exportRecoveryHistory = () =>
+  enqueueBackup('export-recovery', async () => {
+    const { sessions, originals } = unsavedChatSnapshot()
+    if (!sessions.length) {
+      return undefined
+    }
+    const { exportArchive } = await import('./history/exportArchive.js')
+    const missing = new Set<string>()
+    const blob = await exportArchive(sessions, async (id) => {
+      const cached = originals.get(id)
+      if (cached) {
+        return cached
+      }
+      if (!missing.has(id)) {
+        try {
+          const stored = await db.loadFile(id)
+          if (stored) {
+            return stored
+          }
+        } catch (error) {
+          logEvent('backup', 'export.recovery-original-unavailable', diagnosticError(error), 'warn')
+        }
+        missing.add(id)
+      }
+      return undefined
+    })
+    logEvent('backup', 'export.recovery-archive', {
+      sessionCount: sessions.length,
+      missingCount: missing.size,
+      bytes: blob.size,
+    })
+    return {
+      name: 'freeseek-recovery-' + formatDate(new Date()) + '.zip',
+      blob,
+      missing: missing.size,
+    }
   })
 
 /**
@@ -80,9 +129,13 @@ export const importHistory = (file: File, onProgress?: ImportProgress): Promise<
       await checkArchiveFormat(file)
       const previousSessionCount = useChatStore.getState().sessions.length
       let settings: NativeBackupSettings | undefined
-      const count = await replaceHistory(async () => {
-        settings = await importArchive(file, onProgress)
-      })
+      const count = await replaceHistory(
+        async () => {
+          settings = await importArchive(file, onProgress)
+        },
+        false,
+        () => discardImportedWorkspaces(settings?.importedWorkspaces ?? [])
+      )
       restoreNativeSettings(settings)
       logEvent('backup', 'import.archive', {
         previousSessionCount,

@@ -1,9 +1,11 @@
 import type { ProviderProtocol } from './providers.js'
+import type { Locale } from './settings.js'
 
 type AccessId = 'api' | 'tokenPlan' | 'codingPlan' | 'go'
 export type ProviderAccess = {
   id: AccessId
   connectionName?: string
+  connectionNameEn?: string
   url: string
   modelListUrl?: string
   protocol: ProviderProtocol
@@ -14,6 +16,7 @@ export type ProviderAccess = {
 export type ProviderPreset = {
   id: string
   name: string
+  nameEn?: string
   region: 'domestic' | 'international'
   access: ProviderAccess[]
 }
@@ -36,6 +39,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'xiaomimimo',
     name: '小米 MiMo',
+    nameEn: 'Xiaomi MiMo',
     region: 'domestic',
     access: [
       api('https://api.xiaomimimo.com/v1', mimoDocs),
@@ -45,6 +49,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'zhipu',
     name: '智谱 GLM',
+    nameEn: 'Zhipu GLM',
     region: 'domestic',
     access: [
       api(
@@ -58,6 +63,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         ),
         id: 'codingPlan',
         connectionName: '智谱 GLM · Coding Plan',
+        connectionNameEn: 'Zhipu GLM · Coding Plan',
       },
     ],
   },
@@ -70,6 +76,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'volcengine',
     name: '火山方舟',
+    nameEn: 'Volcengine Ark',
     region: 'domestic',
     access: [
       api(
@@ -81,6 +88,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'qwen',
     name: '阿里云百炼',
+    nameEn: 'Alibaba Cloud Model Studio',
     region: 'domestic',
     access: [
       api(
@@ -109,6 +117,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'siliconcloud',
     name: '硅基流动',
+    nameEn: 'SiliconFlow',
     region: 'domestic',
     access: [
       api(
@@ -190,6 +199,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     ],
   },
 ]
+
+export const presetName = (preset: ProviderPreset, locale: Locale): string =>
+  locale === 'en-US' ? (preset.nameEn ?? preset.name) : preset.name
+
+export const presetConnectionName = (
+  preset: ProviderPreset,
+  access: ProviderAccess,
+  locale: Locale
+): string =>
+  (locale === 'en-US' ? access.connectionNameEn : undefined) ??
+  access.connectionName ??
+  presetName(preset, locale) +
+    (preset.access.length > 1 && access.id === 'tokenPlan' ? ' · Token Plan' : '')
 
 export const providerPreset = (id?: string) =>
   PROVIDER_PRESETS.find((preset) => preset.id === (id === 'opencode-go' ? 'opencode' : id))

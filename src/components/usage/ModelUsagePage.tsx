@@ -5,6 +5,8 @@ import { providerModelLabel, useProviders, type ProviderProfile } from '../../se
 import { useSettings } from '../../services/settings.js'
 import {
   collectModelUsage,
+  formatCacheHitRate,
+  totalCacheCounts,
   sumUsage,
   usageTokenCount,
   usePricing,
@@ -40,7 +42,7 @@ export const initialModelUsageFilters: ModelUsageFilters = {
 type LoadState = { rows: ModelUsage[] | null; failed: boolean }
 
 export const useModelUsage = (active: boolean) => {
-  const pricing = usePricing((state) => state.pricing)
+  const pricing = usePricing()
   const [retry, setRetry] = useState(0)
   const [state, setState] = useState<LoadState>({ rows: null, failed: false })
   useEffect(() => {
@@ -376,6 +378,10 @@ export const ModelUsageDetail = ({
             ))}
           </div>
           <dl>
+            <div title={t('usageCacheRateHelp')}>
+              <dt>{t('usageCacheHitRate')}</dt>
+              <dd>{formatCacheHitRate(totalCacheCounts(total), locale)}</dd>
+            </div>
             {components.map(([key, value, color]) => (
               <div key={key}>
                 <dt>

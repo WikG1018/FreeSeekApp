@@ -363,13 +363,13 @@ async function summarizeChunk(
   const events =
     connection.kind === 'custom'
       ? streamProviderMessage(
-          { ...connection.profile, maxOutputTokens: maxTokens },
+          connection.profile,
           connection.model,
           [{ role: 'user', content: [{ type: 'text', text: input }] }],
           system,
           controller.signal,
           disabledReasoning(customReasoning(connection.profile, connection.model)),
-          { requestId, sessionId }
+          { requestId, sessionId, maxOutputTokens: maxTokens }
         )
       : streamMessage(
           connection.apiKey,

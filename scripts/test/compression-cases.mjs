@@ -244,6 +244,91 @@ export const runCompressionCases = async (run) => {
     }
   )
   await run(
+    'official document parsing caps input at 32k while the chat window still carries the local text',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        const body = '文档正文内容'.repeat(4000)
+        const docx = await a.writeArchive([
+          {
+            name: 'word/document.xml',
+            blob: new Blob([
+              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+                '<w:body><w:p><w:r><w:t>' +
+                body +
+                '</w:t></w:r></w:p></w:body></w:document>',
+            ]),
+          },
+        ])
+        const file = {
+          id: 'official-large-doc',
+          serverId: null,
+          name: '长文档.docx',
+          size: docx.size,
+          isImage: false,
+          mimeType: mime,
+        }
+        a.settings.setApiKey('fixture')
+        await a.seed(
+          [
+            f.session({
+              id: 'official-large-doc',
+              messages: [
+                f.user('official-question', '总结这份文档', { files: [file] }),
+                f.assistant('official-failed', '', { status: 'error' }),
+              ],
+            }),
+          ],
+          [{ id: file.id, blob: docx }]
+        )
+        const calls = []
+        const ordinary = window.fetch
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return ordinary(url, init)
+          const blocks = JSON.parse(init.body).messages.flatMap((message) =>
+            Array.isArray(message.content) ? message.content : []
+          )
+          const document = blocks.find((part) => part.type === 'document')
+          const inlined = blocks.find((part) => part.text?.startsWith('[Document:'))
+          calls.push(document ? 'document' : inlined ? 'text' : 'none')
+          // 官方把文档解析成正文的那一步只要 32k，聊天窗口是 1M：报错不该让整轮失败。
+          if (document) {
+            return Response.json(
+              {
+                error: {
+                  message:
+                    'user input too long, 159058 tokens exceeds max 32768 tokens (request_id: 7895ec52)',
+                },
+              },
+              { status: 400 }
+            )
+          }
+          return a.response('已根据本地文字总结完毕')
+        }
+        a.store.selectSession('official-large-doc')
+        a.store.regenerateReply('official-large-doc', 'official-failed')
+        await a.waitIdle()
+        window.fetch = ordinary
+        const session = a.store.useChatStore.getState().sessionCache['official-large-doc']
+        const reply = session.messages.at(-1)
+        return {
+          calls,
+          status: reply.status,
+          text: reply.blocks.map((block) => (block.type === 'text' ? block.text : '')).join(''),
+          serverId: session.messages[0].files[0].serverId,
+          original: (await a.db.loadFile(file.id)).size,
+        }
+      })
+      assert.deepEqual(result.calls, ['document', 'text'])
+      assert.equal(result.status, 'done')
+      assert.match(result.text, /已根据本地文字总结完毕/)
+      assert.equal(result.serverId, 'file-api-new')
+      assert.ok(result.original > 0)
+    }
+  )
+  await run(
     'compression prompts once, estimates savings, and retains the result and consent across backup restore',
     async (page) => {
       const result = await page.evaluate(async () => {
@@ -484,6 +569,82 @@ export const runCompressionCases = async (run) => {
           userCount: 1,
         },
       ])
+    }
+  )
+
+  await run(
+    'a gateway that caps input at 32k warns before sending and explains the rejection with real counts',
+    async (page) => {
+      const model = await page.evaluate(async () => {
+        const a = window.__audit
+        const model = 'relay-model'
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: 'Relay',
+            model,
+            models: [model],
+            url: 'https://relay.example/v1',
+            contextWindows: { [model]: 32768 },
+            maxOutputTokens: 4096,
+            stream: false,
+          },
+          true
+        )
+        // 337 KB 的 docx 在网关侧被转成十几万 token 的文字：单条消息本身已经超限，
+        // 压缩历史帮不上忙，所以要在面板里先说清楚，而不是等发出去被拒。
+        await a.seed([a.fixtures.session({ id: 'relay-chat', messages: [] })])
+        a.store.selectSession('relay-chat')
+        a.drafts.setDraftText('relay-chat', '文'.repeat(60000))
+        return a.providers.useProviders.getState().selection.model
+      })
+      assert.equal(model, 'relay-model')
+      const ring = page.getByTestId('context-usage')
+      await ring.click()
+      const panel = page.getByRole('dialog', { name: '上下文使用', exact: true })
+      await panel
+        .getByText(
+          /这次发送的文字、附件与预留回复合计约 [\d.]+k tokens，已超过模型上限 32\.8k tokens/
+        )
+        .waitFor()
+      await page.keyboard.press('Escape')
+      await panel.waitFor({ state: 'hidden' })
+      const reply = await page.evaluate(async () => {
+        const a = window.__audit
+        const ordinary = window.fetch
+        const hits = []
+        window.fetch = async (url, init) => {
+          const href = typeof url === 'string' ? url : (url?.url ?? String(url))
+          if (!href.includes('relay.example')) return ordinary(url, init)
+          hits.push(href)
+          return new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  'user input too long, 159058 tokens exceeds max 32768 tokens (request_id: 7895ec52)',
+              },
+            }),
+            { status: 400 }
+          )
+        }
+        a.store.sendMessage('relay-chat')
+        await a.waitIdle()
+        window.fetch = ordinary
+        const message = a.store.useChatStore.getState().sessionCache['relay-chat'].messages.at(-1)
+        return {
+          hits,
+          status: message.status,
+          key: message.error?.localMessage?.key,
+          params: message.error?.localMessage?.params,
+        }
+      })
+      assert.deepEqual(
+        { hits: reply.hits.length, status: reply.status, key: reply.key },
+        { hits: 1, status: 'error', key: 'compressionInputLarge' }
+      )
+      assert.equal(reply.params.requestedTokens, 159058)
+      assert.equal(reply.params.contextLimitTokens, 32768)
+      await page.getByText('服务端计数 159,058 / 32,768 tokens', { exact: false }).waitFor()
     }
   )
 

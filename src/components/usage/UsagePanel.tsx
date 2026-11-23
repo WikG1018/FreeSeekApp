@@ -3,7 +3,8 @@ import { useTranslate } from '../../i18n/index.js'
 import { beginDiagnosticOperation, diagnosticError } from '../../services/diagnostics/log.js'
 import {
   collectUsage,
-  isDefaultPricing,
+  formatCacheHitRate,
+  totalCacheCounts,
   recentDays,
   todayKey,
   usePricing,
@@ -13,19 +14,22 @@ import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { openSettings } from '../settings/settingsDialogState.js'
+import { useSettings } from '../../services/settings.js'
 import styles from './UsagePanel.module.css'
 
 const formatTokens = (value: number) => value.toLocaleString()
 
 const formatCost = (value: number) =>
-  value === 0 ? '—' : value >= 1 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
+  value >= 1 || value === 0 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
 
 /** 紧凑金额：面板里的大数字用 */
-const compactCost = (value: number) => formatCost(value)
-
 /** 千分位紧凑：42,319 → 42.3k */
 const compactTokens = (value: number) =>
-  value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
+  value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1000
+      ? `${(value / 1000).toFixed(1)}k`
+      : String(value)
 
 type Stats = UsageStats
 
@@ -38,7 +42,8 @@ export const UsageContent = ({
   onOpenModels?: () => void
 }) => {
   const t = useTranslate()
-  const pricing = usePricing((state) => state.pricing)
+  const locale = useSettings((state) => state.locale)
+  const pricing = usePricing()
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false),
@@ -76,7 +81,7 @@ export const UsageContent = ({
   const modelLink = onOpenModels ? (
     <button
       type="button"
-      className={styles.pricingRow}
+      className={styles.ledgerAction}
       data-settings-target="usageModels"
       onClick={onOpenModels}
     >
@@ -88,35 +93,33 @@ export const UsageContent = ({
   const pricingLink = onOpenPricing ? (
     <button
       type="button"
-      className={styles.pricingRow}
+      className={styles.ledgerAction}
       data-settings-target="usagePricing"
       onClick={onOpenPricing}
     >
       <span className={styles.pricingRowLabel}>{t('usagePricingTitle')}</span>
-      <span className={styles.pricingRowValue}>
-        {isDefaultPricing(pricing) ? t('usagePricingDefault') : t('usagePricingCustom')}
-      </span>
       <IconChevronRightOutline14 />
     </button>
   ) : null
   if (failed) {
     return (
       <div className={styles.content}>
-        {modelLink}
         <div role="alert" className={styles.empty}>
           {t('usageLoadError')}{' '}
           <Button variant="outlined" onClick={() => setRetry((v) => v + 1)}>
             {t('retry')}
           </Button>
         </div>
-        {pricingLink}
+        <div className={styles.emptyActions}>
+          {modelLink}
+          {pricingLink}
+        </div>
       </div>
     )
   }
   if (loading) {
     return (
       <div className={styles.content}>
-        {modelLink}
         <div className={styles.loading}>{t('sessionLoading')}</div>
       </div>
     )
@@ -124,32 +127,39 @@ export const UsageContent = ({
   if (!stats || stats.total.requests === 0) {
     return (
       <div className={styles.content}>
-        {modelLink}
         <p className={styles.empty}>{t('usageEmpty')}</p>
-        {pricingLink}
+        <div className={styles.emptyActions}>
+          {modelLink}
+          {pricingLink}
+        </div>
       </div>
     )
   }
 
   const inputTokens = stats.total.cacheReadTokens + stats.total.cacheMissTokens
-  const hitRate =
-    inputTokens > 0 ? Math.round((stats.total.cacheReadTokens / inputTokens) * 100) : 0
+  const hitRate = formatCacheHitRate(totalCacheCounts(stats.total), locale)
 
   return (
     <div className={styles.content}>
-      {modelLink}
-      {/* 主数字：总花费 + 今天 */}
       <div className={styles.hero}>
         <div className={styles.heroTop}>
           <span className={styles.heroLabel}>{t('usageTotalCost')}</span>
-          <span className={styles.heroToday}>
-            {t('usageToday')} {compactCost(today?.costCny ?? 0)}
-          </span>
+          {pricingLink}
         </div>
-        <div className={styles.heroValue}>
-          {stats.total.unpricedRequests === stats.total.requests
-            ? '—'
-            : compactCost(stats.total.costCny)}
+        <div className={styles.ledgerTotals}>
+          <div className={styles.heroValue}>
+            {stats.total.unpricedRequests === stats.total.requests
+              ? '—'
+              : formatCost(stats.total.costCny)}
+          </div>
+          <div className={styles.heroToday}>
+            <span>{t('usageToday')}</span>
+            <strong>
+              {today?.requests && today.requests === today.unpricedRequests
+                ? '—'
+                : formatCost(today?.costCny ?? 0)}
+            </strong>
+          </div>
         </div>
         {stats.total.unpricedRequests > 0 ? (
           <p className={styles.sectionHint}>
@@ -160,10 +170,7 @@ export const UsageContent = ({
           <span>
             {t('usageRequests')} {formatTokens(stats.total.requests)}
           </span>
-          <span className={styles.heroDot} />
-          <span>
-            {t('usageCacheHit')} {hitRate}%
-          </span>
+
           <span className={styles.heroDot} />
           <span>
             {t('usageWebSearches')} {formatTokens(stats.total.webSearches)}
@@ -176,6 +183,9 @@ export const UsageContent = ({
         <div className={styles.tile}>
           <div className={styles.tileLabel}>{t('usageInputTokens')}</div>
           <div className={styles.tileValue}>{compactTokens(inputTokens)}</div>
+          <div className={styles.tileRate} title={t('usageCacheRateHelp')}>
+            {t('usageCacheHitRate')} <strong>{hitRate}</strong>
+          </div>
           <div className={styles.tileSub}>
             {t('usageCacheHit')} {compactTokens(stats.total.cacheReadTokens)} ·{' '}
             {t('usageCacheMiss')} {compactTokens(stats.total.cacheMissTokens)}
@@ -219,6 +229,7 @@ export const UsageContent = ({
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
           <span className={styles.sectionTitle}>{t('usageBySession')}</span>
+          {modelLink}
         </div>
         <div className={styles.sessionList}>
           {stats.sessions.slice(0, 5).map((item, index) => (
@@ -235,8 +246,6 @@ export const UsageContent = ({
           ))}
         </div>
       </div>
-
-      {pricingLink}
     </div>
   )
 }
@@ -245,7 +254,7 @@ export const UsageContent = ({
 export const UsagePanel = ({ onClose }: { onClose: () => void }) => {
   const t = useTranslate()
   return (
-    <Modal title={t('usageTitle')} closable onClose={onClose} className={styles.dialog}>
+    <Modal title={t('usageTitle')} onClose={onClose} className={styles.dialog}>
       <UsageContent
         onOpenModels={() => {
           onClose()

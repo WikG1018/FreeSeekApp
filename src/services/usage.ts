@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { localDayKey as dayKey } from '../utils/localDate.js'
-import type { MessageUsage } from './api/types.js'
+import type { CacheCounts, MessageUsage } from './api/types.js'
+import { addCacheCounts, recordedCache } from './api/providerUsage.js'
 import { visitStoredSessions } from './chat/db.js'
 import type { AssistantMessage, Session } from './chat/types.js'
 import { usageEntries } from './chat/usage.js'
@@ -50,7 +51,7 @@ export const DEFAULT_PRICING: FlashPricing = {
   searchPer1k: 5,
 }
 
-/** https://api-docs.deepseek.com/zh-cn/quick_start/pricing/，2026-11-17 核对。 */
+/** https://api-docs.deepseek.com/zh-cn/quick_start/pricing/，2026-11-22 核对。 */
 export const PRO_PRICING: FlashPricing = {
   offPeakHit: 0.15,
   offPeakMiss: 4.5,
@@ -72,20 +73,33 @@ const UNPRICED: FlashPricing = {
 type PricedModel = Pick<AssistantMessage, 'model' | 'responseModel' | 'connection'>
 const flashAliases = ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']
 const pricedModels = [...flashAliases, 'deepseek-v4-pro']
-export const hasKnownPricing = (
-  message: PricedModel,
-  model = message.responseModel ?? message.model
-) =>
-  (!message.connection || message.connection.providerId === 'deepseek') &&
-  (!model || pricedModels.includes(model))
+export const modelPriceKey = (providerId: string, model: string) =>
+  JSON.stringify([providerId, model])
+export const proPriceKey = modelPriceKey('deepseek', 'deepseek-v4-pro')
+
 const messagePricing = (
   message: PricedModel,
-  flash: FlashPricing,
+  state: PricingState,
   model = message.responseModel ?? message.model
-) =>
-  !hasKnownPricing(message, model) ? UNPRICED : model === 'deepseek-v4-pro' ? PRO_PRICING : flash
+): FlashPricing | undefined => {
+  const providerId = message.connection?.providerId
+  if (providerId && providerId !== 'deepseek') {
+    return (
+      (model ? state.modelPrices[modelPriceKey(providerId, model)] : undefined) ??
+      (message.model ? state.modelPrices[modelPriceKey(providerId, message.model)] : undefined)
+    )
+  }
+  if (model === 'deepseek-v4-pro') {
+    return state.modelPrices[proPriceKey] ?? PRO_PRICING
+  }
+  return !model || flashAliases.includes(model) ? state.pricing : undefined
+}
+
+export const hasKnownPricing = (message: PricedModel, model?: string) =>
+  Boolean(messagePricing(message, usePricing.getState(), model))
 
 const PRICING_KEY = 'freeseek:pricing'
+const MODEL_PRICING_KEY = 'freeseek:model-prices'
 
 const isPricing = (value: unknown): value is FlashPricing => {
   if (typeof value !== 'object' || value === null) {
@@ -93,7 +107,7 @@ const isPricing = (value: unknown): value is FlashPricing => {
   }
   const pricing = value as Record<string, unknown>
   return (Object.keys(DEFAULT_PRICING) as (keyof FlashPricing)[]).every(
-    (key) => typeof pricing[key] === 'number' && Number.isFinite(pricing[key])
+    (key) => typeof pricing[key] === 'number' && Number.isFinite(pricing[key]) && pricing[key] >= 0
   )
 }
 
@@ -106,9 +120,57 @@ const loadPricing = (): FlashPricing => {
   }
 }
 
-type PricingState = { pricing: FlashPricing }
+export type ModelPrices = Record<string, FlashPricing>
+type PricingState = { pricing: FlashPricing; modelPrices: ModelPrices }
+export const readModelPrices = (value: unknown): ModelPrices => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, 400)
+      .filter(([key, pricing]) => key.startsWith('["') && key.length <= 1024 && isPricing(pricing))
+  )
+}
+const loadModelPrices = () => {
+  try {
+    return readModelPrices(JSON.parse(localStorage.getItem(MODEL_PRICING_KEY) ?? '{}'))
+  } catch {
+    return {}
+  }
+}
+export const usePricing = create<PricingState>(() => ({
+  pricing: loadPricing(),
+  modelPrices: loadModelPrices(),
+}))
 
-export const usePricing = create<PricingState>(() => ({ pricing: loadPricing() }))
+export const saveModelPrices = (modelPrices: ModelPrices) => {
+  try {
+    localStorage.setItem(MODEL_PRICING_KEY, JSON.stringify(modelPrices))
+    usePricing.setState({ modelPrices })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export const savePrice = (key: string, pricing?: FlashPricing): boolean => {
+  if (key === 'flash' && pricing) {
+    try {
+      localStorage.setItem(PRICING_KEY, JSON.stringify(pricing))
+      usePricing.setState({ pricing })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const modelPrices = usePricing.getState().modelPrices
+  return saveModelPrices(
+    pricing
+      ? { ...modelPrices, [key]: pricing }
+      : Object.fromEntries(Object.entries(modelPrices).filter(([id]) => id !== key))
+  )
+}
 
 export const setPricing = (pricing: FlashPricing): void => {
   try {
@@ -118,12 +180,6 @@ export const setPricing = (pricing: FlashPricing): void => {
   }
   usePricing.setState({ pricing })
 }
-
-/** 当前价格是否仍是官方默认值（用量页据此显示「官方默认 / 自定义」） */
-export const isDefaultPricing = (pricing: FlashPricing): boolean =>
-  (Object.keys(DEFAULT_PRICING) as (keyof FlashPricing)[]).every(
-    (key) => pricing[key] === DEFAULT_PRICING[key]
-  )
 
 /** 北京时间是否处于高峰时段（工作日 9-12、14-18 点）；法定节假日未计入，估算略有偏差 */
 const isPeakBeijing = (timestamp: number): boolean => {
@@ -143,6 +199,8 @@ export type UsageTotals = {
   cacheReadTokens: number
   /** 缓存未命中输入 tokens（含缓存写入） */
   cacheMissTokens: number
+  measuredCacheHits: number
+  measuredCacheInput: number
   outputTokens: number
   webSearches: number
   /** 按当前价格估算的费用（元） */
@@ -156,18 +214,27 @@ const emptyTotals = (): UsageTotals => ({
   requests: 0,
   cacheReadTokens: 0,
   cacheMissTokens: 0,
+  measuredCacheHits: 0,
+  measuredCacheInput: 0,
   outputTokens: 0,
   webSearches: 0,
   costCny: 0,
 })
 
-const addUsage = (totals: UsageTotals, detail: MessageUsageDetail, priced: boolean) => {
+const addUsage = (
+  totals: UsageTotals,
+  detail: MessageUsageDetail,
+  priced: boolean,
+  cache: CacheCounts | null
+) => {
   totals.requests += 1
   if (!priced) {
     totals.unpricedRequests += 1
   }
   totals.cacheReadTokens += detail.cacheRead
   totals.cacheMissTokens += detail.input + detail.cacheWrite
+  totals.measuredCacheHits += cache?.hit ?? 0
+  totals.measuredCacheInput += cache?.input ?? 0
   totals.outputTokens += detail.output
   totals.webSearches += detail.searches
   totals.costCny += detail.costCny
@@ -229,6 +296,32 @@ export const computeMessageUsage = (
 
 type UsageEntry = { createdAt: number; usage: MessageUsage; model?: string }
 
+const entryCache = (message: PricedModel, { usage, model }: UsageEntry) =>
+  recordedCache(
+    usage,
+    message.connection
+      ? message.connection.providerId === 'deepseek'
+      : pricedModels.includes(model ?? 'deepseek-flash')
+  )
+
+export const replyCacheCounts = (message: AssistantMessage) =>
+  usageEntries(message).reduce<CacheCounts | null>(
+    (total, entry) => addCacheCounts(total, entryCache(message, entry)),
+    null
+  )
+
+export const totalCacheCounts = (value: UsageTotals): CacheCounts => ({
+  hit: value.measuredCacheHits,
+  input: value.measuredCacheInput,
+})
+
+export const formatCacheHitRate = (counts: CacheCounts | null, locale: string) =>
+  counts && counts.input > 0
+    ? new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(
+        Math.max(0, Math.min(1, counts.hit / counts.input))
+      )
+    : '—'
+
 const visitUsageEntries = (
   session: Session,
   visit: (message: PricedModel, entry: UsageEntry) => void
@@ -248,23 +341,23 @@ const visitUsageEntries = (
 
 /** 遍历本地会话聚合用量；按消息时间所在时段计价 */
 export const collectUsage = async (signal?: AbortSignal): Promise<UsageStats> => {
-  const pricing = usePricing.getState().pricing
+  const pricing = usePricing.getState()
   const days = new Map<string, UsageTotals>()
   const total = emptyTotals()
   const sessions: SessionUsage[] = []
   await visitStoredSessions((session) => {
     const sessionTotals = emptyTotals()
     visitUsageEntries(session, (message, entry) => {
-      const effectivePricing = messagePricing(message, pricing, entry.model),
-        priced =
-          Boolean(entry.usage.standalone_search_requests) || hasKnownPricing(message, entry.model)
+      const effectivePricing = messagePricing(message, pricing, entry.model)
+      const priced = Boolean(entry.usage.standalone_search_requests || effectivePricing)
       const key = dayKey(entry.createdAt),
         day = days.get(key) ?? emptyTotals()
-      const detail = computeMessageUsage(entry.usage, entry.createdAt, effectivePricing)
-      addUsage(day, detail, priced)
+      const detail = computeMessageUsage(entry.usage, entry.createdAt, effectivePricing ?? UNPRICED)
+      const cache = entryCache(message, entry)
+      addUsage(day, detail, priced, cache)
       days.set(key, day)
-      addUsage(total, detail, priced)
-      addUsage(sessionTotals, detail, priced)
+      addUsage(total, detail, priced, cache)
+      addUsage(sessionTotals, detail, priced, cache)
     })
     if (sessionTotals.requests > 0) {
       sessions.push({ ...sessionTotals, id: session.id, title: session.title || '' })
@@ -294,7 +387,7 @@ export type ModelUsage = {
 
 /** Read one request at a time, grouped by the saved connection and that request's model. */
 export const collectModelUsage = async (signal?: AbortSignal): Promise<ModelUsage[]> => {
-  const pricing = usePricing.getState().pricing
+  const pricing = usePricing.getState()
   const groups = new Map<
     string,
     { providerId: string | null; model: string | null; days: Map<string, UsageTotals> }
@@ -318,9 +411,13 @@ export const collectModelUsage = async (signal?: AbortSignal): Promise<ModelUsag
         }
         const date = dayKey(entry.createdAt)
         const day = group.days.get(date) ?? emptyTotals()
-        const priced = Boolean(recorded && hasKnownPricing(message, recorded))
-        const rate = priced ? messagePricing(message, pricing, entry.model) : UNPRICED
-        addUsage(day, computeMessageUsage(entry.usage, entry.createdAt, rate), priced)
+        const rate = recorded ? messagePricing(message, pricing, recorded) : undefined
+        addUsage(
+          day,
+          computeMessageUsage(entry.usage, entry.createdAt, rate ?? UNPRICED),
+          Boolean(rate || entry.usage.standalone_search_requests),
+          entryCache(message, entry)
+        )
         group.days.set(date, day)
       }),
     signal
@@ -382,7 +479,7 @@ export const computeReplyUsage = (
     const detail = computeMessageUsage(
       entry.usage,
       entry.createdAt,
-      messagePricing(message, pricing, entry.model)
+      messagePricing(message, { ...usePricing.getState(), pricing }, entry.model) ?? UNPRICED
     )
     for (const key of Object.keys(total) as (keyof MessageUsageDetail)[]) {
       total[key] += detail[key]

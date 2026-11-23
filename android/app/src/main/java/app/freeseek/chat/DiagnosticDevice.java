@@ -3,6 +3,7 @@ package app.freeseek.chat;
 import android.Manifest;
 import android.app.ActivityManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -12,6 +13,7 @@ import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Debug;
 import android.os.Process;
+import android.provider.MediaStore;
 import android.system.Os;
 import android.system.OsConstants;
 import android.util.DisplayMetrics;
@@ -108,6 +110,8 @@ final class DiagnosticDevice {
                     == PackageManager.PERMISSION_GRANTED);
             }
         });
+        collect(collection, "camera", () -> env.put("cameraAvailable",
+            new Intent(MediaStore.ACTION_IMAGE_CAPTURE).resolveActivity(context.getPackageManager()) != null));
         collect(collection, "memory", () -> {
             Runtime runtime = Runtime.getRuntime();
             env.put("javaHeapMaxBytes", runtime.maxMemory());

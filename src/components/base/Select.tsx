@@ -28,6 +28,7 @@ export const Select = <T extends string>({
   prefix,
   pill = false,
   settingRow,
+  compactMenu = false,
   disabled = false,
   footer,
 }: {
@@ -39,6 +40,7 @@ export const Select = <T extends string>({
   prefix?: string
   pill?: boolean
   settingRow?: 'value' | 'detail'
+  compactMenu?: boolean
   disabled?: boolean
   footer?: { label: string; onSelect: () => void }
 }) => {
@@ -48,12 +50,13 @@ export const Select = <T extends string>({
   const [limit, setLimit] = useState(48)
   const panel = useOptionPanel(ariaLabel, {
     measureKey: query,
-    kind: pill || settingRow ? 'choices' : 'field',
+    kind: compactMenu ? 'fit-choices' : pill || settingRow ? 'choices' : 'field',
     align: settingRow ? 'end' : 'start',
     disabled,
   })
   const current = options.find((item) => item.value === value)
   const displayValue = current?.shortLabel ?? current?.label ?? placeholder
+  const currentDetail = settingRow === 'value' ? current?.detail : undefined
   const filterable = options.length > 8
   const needle = query.trim().toLocaleLowerCase()
   const filtered =
@@ -98,10 +101,20 @@ export const Select = <T extends string>({
         {settingRow !== 'detail' && (
           <span
             id={valueId}
-            className={settingRow ? styles.settingValue : undefined}
-            lang={current?.lang}
+            className={clsx(
+              settingRow && styles.settingValue,
+              currentDetail && styles.valueWithDetail
+            )}
+            lang={currentDetail ? undefined : current?.lang}
           >
-            {displayValue}
+            {currentDetail ? (
+              <>
+                <span lang={current?.lang}>{displayValue}</span>
+                <small>{currentDetail}</small>
+              </>
+            ) : (
+              displayValue
+            )}
           </span>
         )}
         {settingRow ? (
@@ -131,28 +144,35 @@ export const Select = <T extends string>({
               />
             </label>
           )}
-          <div className={panelStyles.list} role="listbox" aria-label={ariaLabel}>
-            {visible.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                data-panel-item=""
-                aria-selected={option.value === value}
-                lang={option.lang}
-                className={panelStyles.option}
-                onClick={() => {
-                  onChange(option.value)
-                  panel.close(true)
-                }}
-              >
-                <span className={panelStyles.copy}>
-                  <span>{option.label}</span>
-                  {option.detail && <small>{option.detail}</small>}
-                </span>
-                {option.value === value && <IconCheckOutline16 />}
-              </button>
-            ))}
+          <div
+            className={panelStyles.list}
+            role="listbox"
+            aria-label={ariaLabel}
+            data-scroll-edge=""
+          >
+            <div data-scroll-edge-content="">
+              {visible.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  data-panel-item=""
+                  aria-selected={option.value === value}
+                  lang={option.lang}
+                  className={panelStyles.option}
+                  onClick={() => {
+                    onChange(option.value)
+                    panel.close(true)
+                  }}
+                >
+                  <span className={panelStyles.copy}>
+                    <span>{option.label}</span>
+                    {option.detail && <small>{option.detail}</small>}
+                  </span>
+                  {option.value === value && <IconCheckOutline16 />}
+                </button>
+              ))}
+            </div>
           </div>
           {filtered.length > limit && (
             <button

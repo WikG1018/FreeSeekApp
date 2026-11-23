@@ -1,10 +1,10 @@
 import { createId } from '../../../utils/id.js'
 import { saveStagingDiskFile, saveStagingFiles } from '../db.js'
-import { historyFilesAvailable, writeDiskOriginal } from '../historyFiles.js'
+import { prepareDiskOriginals, writeDiskOriginal } from '../historyFiles.js'
 import { readEntry, type ArchiveEntry } from './zipReader.js'
 
-export const useDiskForArchive = (expandedBytes: number) =>
-  expandedBytes >= 512 * 1024 * 1024 && historyFilesAvailable()
+export const useDiskForArchive = async (expandedBytes: number) =>
+  expandedBytes >= 512 * 1024 * 1024 && (await prepareDiskOriginals())
 
 type MimeType = string | ((prefix: Uint8Array) => string)
 

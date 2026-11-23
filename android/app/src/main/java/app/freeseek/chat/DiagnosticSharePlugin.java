@@ -7,24 +7,29 @@ import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** 仅缓存本应用生成的诊断 ZIP，分片写入后调起系统分享器。 */
+/** 分片写入诊断 ZIP 或任务成果，再调起系统分享器。 */
 @CapacitorPlugin(name = "DiagnosticShare")
 public class DiagnosticSharePlugin extends Plugin {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Map<String, Save> saves = new HashMap<>();
     private static class Save {
-        final File file; final OutputStream stream; final long expected; long written;
-        Save(File file, OutputStream stream, long expected) { this.file = file; this.stream = stream; this.expected = expected; }
+        final File file; final OutputStream stream; final long expected; final boolean artifact; final boolean open; long written;
+        Save(File file, OutputStream stream, long expected, boolean artifact, boolean open) {
+            this.file = file; this.stream = stream; this.expected = expected; this.artifact = artifact; this.open = open;
+        }
     }
     @PluginMethod public void create(PluginCall call) {
         io.execute(() -> {
             File file = null;
             try {
                 double size = call.getDouble("size", -1.0);
-                if (!Double.isFinite(size) || size <= 0 || size > 16 * 1024 * 1024 || size != Math.floor(size) || saves.size() >= 4) throw new IOException("Invalid size");
-                file = ShareFiles.create(getContext(), call.getString("fileName", ""));
+                boolean artifact = Boolean.TRUE.equals(call.getBoolean("artifact", false));
+                boolean open = artifact && Boolean.TRUE.equals(call.getBoolean("open", false));
+                int limit = (artifact ? 128 : 16) * 1024 * 1024;
+                if (!Double.isFinite(size) || size <= 0 || size > limit || size != Math.floor(size) || saves.size() >= 4) throw new IOException("Invalid size");
+                file = ShareFiles.create(getContext(), call.getString("fileName", ""), artifact);
                 String id = UUID.randomUUID().toString();
-                saves.put(id, new Save(file, new FileOutputStream(file), (long) size));
+                saves.put(id, new Save(file, new FileOutputStream(file), (long) size, artifact, open));
                 JSObject result = new JSObject(); result.put("id", id); call.resolve(result);
             } catch (Exception error) { ShareFiles.discard(file); call.reject("Cannot prepare diagnostic share"); }
         });
@@ -50,9 +55,10 @@ public class DiagnosticSharePlugin extends Plugin {
                 save.stream.close(); saves.remove(id);
                 getActivity().runOnUiThread(() -> {
                     try {
-                        ShareFiles.open(getActivity(), save.file);
+                        if (save.open) ShareFiles.openDocument(getActivity(), save.file);
+                        else ShareFiles.open(getActivity(), save.file);
                         JSObject meta = new JSObject(); meta.put("bytes", save.written);
-                        DiagnosticsLog.record(getContext(), "diagnostics", "share.opened", meta);
+                        DiagnosticsLog.record(getContext(), save.artifact ? "chat" : "diagnostics", "share.opened", meta);
                         JSObject result = new JSObject(); result.put("launched", true); call.resolve(result);
                     } catch (Exception error) { ShareFiles.discard(save.file); call.reject("Cannot open share sheet"); }
                 });

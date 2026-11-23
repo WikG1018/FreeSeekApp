@@ -12,7 +12,8 @@ import { useTranslate } from '../../i18n/index.js'
 import { useSettings } from '../../services/settings.js'
 import { useMobileViewport } from '../../app/viewport.js'
 import { listenMediaQuery } from '../../utils/mediaQuery.js'
-import { IconChevronLeftOutline16, IconCloseOutline16 } from '../base/icons.js'
+import { IconChevronLeftOutline16 } from '../base/icons.js'
+import { Button } from '../base/Button.js'
 import { closeTopModal, hasOpenModal } from '../base/Modal.js'
 import { closeTransientPanel, hasTransientPanel } from '../base/transientPanel.js'
 import { useDialogFocus } from '../base/useDialogFocus.js'
@@ -178,6 +179,12 @@ export const SettingsShell = ({
             <aside className={styles.rail}>
               <div className={styles.railTitle}>{t('settings')}</div>
               <SettingsDirectory rail active={page} open={(next) => go(next, 'switch')} />
+              <div className={styles.railExit}>
+                <Button variant="outlined" onClick={close}>
+                  <IconChevronLeftOutline16 />
+                  {t('settingsReturnToChat')}
+                </Button>
+              </div>
             </aside>
           )}
           <div className={styles.detail}>
@@ -186,30 +193,32 @@ export const SettingsShell = ({
               data-directory={home}
               data-api-settings={page === 'account' || page.startsWith('provider') || undefined}
             >
-              {canGoBack && (
+              {/*
+                手机版：首页无返回键（靠返回手势/系统返回），二级页显示返回箭头。
+                电脑版：不用头部返回键——左栏底部已有「返回对话」，
+                再放一个箭头会造成两个返回入口。
+              */}
+              {canGoBack && !wideLayout ? (
                 <button className={styles.back} aria-label={t('back')} type="button" onClick={back}>
                   <IconChevronLeftOutline16 />
                 </button>
-              )}
+              ) : null}
               <h1 className={styles.title} ref={title} tabIndex={-1} data-dialog-initial>
                 {t(pageTitles[page])}
               </h1>
-              {(home || wideLayout) && (
-                <button
-                  className={styles.back}
-                  aria-label={t('close')}
-                  type="button"
-                  onClick={close}
-                >
-                  <IconCloseOutline16 />
-                </button>
-              )}
-              {!home && !wideLayout && <span className={styles.backPlaceholder} aria-hidden />}
+              {/* 仅二级页（有返回键）补右侧占位，保证标题居中；首页标题左对齐 */}
+              {canGoBack && !wideLayout && <span className={styles.backPlaceholder} aria-hidden />}
             </header>
-            <div ref={scroll} className={styles.scroll} data-testid="settings-scroll">
+            <div
+              ref={scroll}
+              className={styles.scroll}
+              data-testid="settings-scroll"
+              data-scroll-edge=""
+            >
               <div
                 key={page}
                 className={styles.pageBody}
+                data-scroll-edge-content=""
                 data-direction={direction}
                 data-settings-page={page}
                 data-provider-footer={

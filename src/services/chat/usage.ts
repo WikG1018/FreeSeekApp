@@ -1,5 +1,6 @@
 import type { MessageUsage } from '../api/types.js'
 import type { AssistantMessage } from './types.js'
+import { addCacheCounts, recordedCache } from '../api/providerUsage.js'
 
 export const usageEntries = (message: AssistantMessage) =>
   (message.usageHistory?.length
@@ -25,6 +26,9 @@ export const sumMessageUsage = (
     (base?.cache_creation_input_tokens ?? 0) + current.cache_creation_input_tokens,
   cache_read_input_tokens: (base?.cache_read_input_tokens ?? 0) + current.cache_read_input_tokens,
   output_tokens: (base?.output_tokens ?? 0) + current.output_tokens,
+  ...(base?.cache_counts !== undefined || current.cache_counts !== undefined
+    ? { cache_counts: addCacheCounts(base ? recordedCache(base) : null, recordedCache(current)) }
+    : {}),
   ...(base?.standalone_search_requests || current.standalone_search_requests
     ? {
         standalone_search_requests:

@@ -17,7 +17,7 @@ const Native = registerPlugin<BackupNative>('Backup')
 export const saveBackup = async (
   fileName: string,
   blob: Blob,
-  scope: 'backup' | 'diagnostics' | 'persona' = 'backup'
+  scope: 'backup' | 'diagnostics' | 'persona' | 'chat' = 'backup'
 ): Promise<boolean> => {
   const native = Capacitor.getPlatform() === 'android'
   const finish = beginDiagnosticOperation(scope, 'file.save', { bytes: blob.size, native })

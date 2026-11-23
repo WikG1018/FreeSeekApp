@@ -51,13 +51,13 @@
   right: 0;
   bottom: 0;
   height: 2px;
-  background: rgba(37, 99, 235, 0.15);
+  background: var(--fs-accent-wash);
 }
 
 .sidebarBarFill {
   display: block;
   height: 100%;
-  background: var(--fs-brand);
+  background: var(--fs-accent-fill);
   transition: width 0.25s linear;
 }
 
@@ -74,12 +74,23 @@
 }
 .notes li + li,
 .notes > p + p,
-.notes > p + ul {
+.notes > p + ul,
+.notes > div + div {
   margin-top: 8px;
 }
 .notes p {
   margin: 0;
   white-space: pre-wrap;
+}
+.notesHeading {
+  margin: 14px 0 6px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.notes > div:first-child .notesHeading {
+  margin-top: 0;
 }
 .downloadStatus {
   margin: 10px 0 0;
@@ -88,13 +99,13 @@
   height: 4px;
   margin-top: 12px;
   border-radius: 2px;
-  background: rgba(37, 99, 235, 0.15);
+  background: var(--fs-accent-wash);
   overflow: hidden;
 }
 
 .progressFill {
   display: block;
   height: 100%;
-  background: var(--fs-brand);
+  background: var(--fs-accent-fill);
   transition: width 0.25s linear;
 }

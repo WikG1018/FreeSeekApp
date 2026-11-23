@@ -23,7 +23,8 @@ export const CollapsedSider = () => {
           tone="primary"
           icon={<NewChatIcon />}
           tooltip={t('newChat')}
-          onClick={newChat}
+          data-chat-mode-anchor
+          onClick={(event) => newChat(event.currentTarget)}
         />
       </div>
     </div>

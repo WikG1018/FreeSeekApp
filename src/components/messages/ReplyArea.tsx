@@ -1,6 +1,6 @@
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
-import { memo, useEffect, useState, type ReactNode } from 'react'
+import { memo, useEffect, useId, useState, type ReactNode } from 'react'
 import {
   IconBrowseOutline16,
   IconBrowseWarningOutline16,
@@ -17,6 +17,7 @@ import {
 import type { AssistantMessage } from '../../services/chat/types.js'
 import {
   getAreaTitle,
+  getTotalThinkingSeconds,
   isDeepSearchKind,
   isImageSearchKind,
   type FindStep,
@@ -27,11 +28,14 @@ import {
   type SearchStep,
   type Source,
   type Step,
+  type ThinkingStep,
 } from '../../services/chat/view.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { Markdown } from '../markdown/Markdown.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
+import { ReplyActivity, replyActivityPhase } from './ReplyActivity.js'
+import { AgentInlineToolSteps } from './AssistantTask.js'
 import styles from './ReplyArea.module.css'
 import './thinking.markdown.css'
 
@@ -58,22 +62,79 @@ export const ReplyArea = memo(function ReplyArea({
   view,
   streaming,
   hasResponse,
+  agentMode = false,
+  activityPaused = false,
 }: {
   message: AssistantMessage
   view: ReplyView
   streaming: boolean
   hasResponse: boolean
+  agentMode?: boolean
+  activityPaused?: boolean
 }) {
-  useTranslate()
   const [open, setOpen] = useState(true)
-  const titleActive = streaming && !hasResponse
-  useTicker(titleActive, 1000)
-  if (view.steps.length === 0 && !(message.thinking && streaming)) {
+  const live = streaming && !activityPaused
+  const visibleSteps = view.steps
+  if (visibleSteps.length === 0 && !live) {
     return null
+  }
+  if (agentMode) {
+    const last = visibleSteps.at(-1)
+    const activeThought =
+      live &&
+      last?.type === 'thinking' &&
+      replyActivityPhase(message, view) === 'agentThinkingActive'
+        ? last
+        : undefined
+    return (
+      <div className={styles.agentArea}>
+        {visibleSteps.map((step, index) => {
+          if (step.type === 'thinking') {
+            return (
+              <AgentThinking
+                key={step.key}
+                step={step}
+                message={message}
+                active={step === activeThought}
+              />
+            )
+          }
+          if (step.type === 'agent-steps') {
+            return <AgentInlineToolSteps key={step.key} steps={step.steps} />
+          }
+          if (step.type === 'text') {
+            return (
+              <Markdown
+                key={step.key}
+                className="ds-assistant-message-main-content"
+                content={step.markdown}
+                loading={false}
+                cacheKey={message.id + '-' + step.key}
+                disableLink={false}
+                sources={view.sources}
+              />
+            )
+          }
+          return (
+            <StepItem
+              key={stepKey(step, index)}
+              step={step}
+              message={message}
+              sources={view.sources}
+              streaming={streaming}
+              isLast={index === visibleSteps.length - 1}
+            />
+          )
+        })}
+      </div>
+    )
   }
   // 未记录请求开关时，按是否有思考内容显示标题。
   const thinking = message.thinking ?? view.steps.some((step) => step.type === 'thinking')
-  const title = thinking ? getAreaTitle(view, streaming, Date.now(), hasResponse) : null
+  const title =
+    thinking && visibleSteps.length > 0
+      ? getAreaTitle(view, streaming, Date.now(), hasResponse)
+      : null
   const stopped = !streaming && !hasResponse
   return (
     <div className={styles.area}>
@@ -82,9 +143,15 @@ export const ReplyArea = memo(function ReplyArea({
           <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
             <IconThinkOutline16 />
           </span>
-          <span className={clsx(styles.titleText, titleActive && styles.shimmer)}>{title}</span>
+          {live ? (
+            <ReplyActivity message={message} view={view} />
+          ) : (
+            <span className={styles.titleText}>{title}</span>
+          )}
           {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
         </div>
+      ) : live ? (
+        <ReplyActivity message={message} view={view} />
       ) : null}
       {open || !title ? (
         <div className={styles.steps}>
@@ -104,10 +171,61 @@ export const ReplyArea = memo(function ReplyArea({
   )
 })
 
-const stepKey = (step: Step, index: number) =>
-  step.type === 'thinking' || step.type === 'text' || step.type === 'search'
-    ? step.key
-    : `${step.type}-${index}`
+const AgentThinking = ({
+  step,
+  message,
+  active,
+}: {
+  step: ThinkingStep
+  message: AssistantMessage
+  active: boolean
+}) => {
+  const t = useTranslate()
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  const duration = getTotalThinkingSeconds([step], Date.now())
+  const title = active
+    ? t('agentThinkingActive')
+    : duration === null
+      ? t('agentThinking')
+      : t('agentThinkingTime', { seconds: duration })
+  return (
+    <div
+      className={styles.agentThinking}
+      data-testid="agent-thinking"
+      data-live={active || undefined}
+    >
+      <button
+        type="button"
+        className={styles.agentThinkingToggle}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className={styles.agentThinkingIcon}>
+          <IconThinkOutline16 />
+        </span>
+        <span className={styles.agentThinkingText} role={active ? 'status' : undefined}>
+          {title}
+        </span>
+        {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
+      </button>
+      {open && (
+        <div id={id} className={styles.agentThinkingBody}>
+          <Markdown
+            className="ds-think-content"
+            content={step.blocks.map((block) => block.thinking).join('')}
+            loading={active}
+            cacheKey={message.id + '-' + step.key}
+            disableLink
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const stepKey = (step: Step, index: number) => ('key' in step ? step.key : `${step.type}-${index}`)
 
 const StepItem = ({
   step,
@@ -123,6 +241,8 @@ const StepItem = ({
   isLast: boolean
 }) => {
   switch (step.type) {
+    case 'agent-steps':
+      return null
     case 'thinking': {
       const lastBlock = step.blocks.at(-1)
       const thinking =
@@ -382,7 +502,20 @@ const ReadLinkRow = ({ step, isLast }: { step: ReadLinkStep; isLast: boolean }) 
   const t = useTranslate()
   return (
     <ToolRow icon={<IconLinkOutline16 />} isLast={isLast}>
-      <span className={clsx(styles.intro, styles.shimmer)}>{t('readingLink')}</span>
+      <span
+        className={clsx(
+          styles.intro,
+          step.links.some((link) => link.status === 'wip') && styles.shimmer
+        )}
+      >
+        {t(
+          step.links.some((link) => link.status === 'wip')
+            ? 'readingLink'
+            : step.links.every((link) => link.status === 'failed')
+              ? 'taskFailed'
+              : 'taskReadWeb'
+        )}
+      </span>
       {step.links.map((link) => (
         <PageLink key={link.id} page={link} />
       ))}

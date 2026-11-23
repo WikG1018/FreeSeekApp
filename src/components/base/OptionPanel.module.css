@@ -20,6 +20,41 @@
 .panel[data-kind='actions'] {
   width: 194px;
 }
+.panel[data-closing] {
+  pointer-events: none;
+  animation: settle-out 115ms var(--fs-ease-out) both;
+}
+@keyframes settle-out {
+  from {
+    transform: var(--fs-panel-exit-transform, none);
+    opacity: var(--fs-panel-exit-opacity, 1);
+  }
+  to {
+    transform: translateY(3px);
+    opacity: 0;
+  }
+}
+.panel[data-kind='compact-choices'] {
+  width: 174px;
+}
+.panel[data-kind='fit-choices'] {
+  width: max-content;
+  min-width: 128px;
+}
+.panel[data-kind='chat-mode'] {
+  width: 226px;
+}
+.panel[data-kind='chat-mode'] .copy > small {
+  white-space: normal;
+}
+.panel[data-kind='progress'],
+.panel[data-kind='artifacts'] {
+  width: 332px;
+  overflow: hidden;
+}
+.panel[data-kind='artifacts'] {
+  width: 325px;
+}
 .panel[data-kind='reasoning'] {
   width: 200px;
   overflow: visible;

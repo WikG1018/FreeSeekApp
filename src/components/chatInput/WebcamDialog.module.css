@@ -1,0 +1,33 @@
+.preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  min-height: 130px;
+  max-height: 54vh;
+  aspect-ratio: 16 / 10;
+  border-radius: 12px;
+  background: var(--fs-settings-canvas);
+  color: var(--dsw-alias-label-primary);
+}
+
+.preview video {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.preview[data-ready='true'] video {
+  display: block;
+  background: #101114;
+}
+
+.preview p {
+  margin: 0;
+  padding: 20px;
+  line-height: 1.55;
+  text-align: center;
+}

@@ -22,15 +22,28 @@
   --fs-field-line: #a7afbd;
   --fs-accent-text: #264fae;
   --fs-accent-fill: #345dcc;
+  --fs-brand-ink: var(--fs-accent-fill);
   --fs-accent-wash: #edf2ff;
   --fs-accent-line: #cedbf9;
   --fs-focus: #416bda;
   --fs-switch-off: #757e8d;
 
   /* 品牌色（FreeSeek 蓝 / 鲸鱼粉） */
-  --fs-brand: rgb(37, 99, 235);
-  --fs-brand-soft: rgba(37, 99, 235, 0.08);
+  --fs-brand: var(--fs-accent-fill);
+  --fs-brand-soft: var(--fs-accent-wash);
   --fs-accent-pink: rgb(244, 114, 182);
+
+  /* 用量排行前三名：浅淡底色 + 同色系深字，靠文字色区分名次 */
+  --fs-rank-1-bg: #fdf1e7;
+  --fs-rank-1-fg: #9a4a10;
+  --fs-rank-2-bg: #e8effc;
+  --fs-rank-2-fg: #1d4ed8;
+  --fs-rank-3-bg: #e9f6ef;
+  --fs-rank-3-fg: #116b45;
+
+  /* 侧边栏会话类型：普通对话用青色，Agent 用主题蓝，冷暖区分 */
+  --fs-chat-ink: #0f7490;
+  --fs-chat-wash: #e6f4f8;
 
   /*
    * 悬浮玻璃件（顶栏胶囊、输入栏）：底色不透明度取高值。
@@ -84,6 +97,15 @@ body {
   --scroll-color-hover: rgba(0, 0, 0, 0.15);
 }
 
+button,
+input,
+textarea,
+select,
+optgroup,
+option {
+  font-family: inherit;
+}
+
 /*
  * 字体大小缩放（网页端）：固定容器按 1/scale 放大布局后再 transform 缩小，
  * 固定定位的弹层也会跟随缩放，不会出现底部/右侧留白。
@@ -104,12 +126,22 @@ body.dark {
 
 body[data-ds-dark-theme] {
   --fs-settings-canvas: #18191c;
+  /* 用量排行：深色下改用暗底 + 亮字，色相与亮色一致 */
+  --fs-rank-1-bg: #3a2a17;
+  --fs-rank-1-fg: #f0b078;
+  --fs-rank-2-bg: #1f2c47;
+  --fs-rank-2-fg: #93b4ff;
+  --fs-rank-3-bg: #16332a;
+  --fs-rank-3-fg: #6fd3a4;
+  --fs-chat-ink: #6fc9dd;
+  --fs-chat-wash: #17303a;
   --fs-settings-surface: #222428;
   --fs-secondary-text: #b5bbc6;
   --fs-line: #393c43;
   --fs-field-line: #636a78;
   --fs-accent-text: #adc4ff;
   --fs-accent-fill: #415fb8;
+  --fs-brand-ink: var(--fs-accent-text);
   --fs-accent-wash: #252e43;
   --fs-accent-line: #404f72;
   --fs-focus: #aac0ff;
@@ -125,6 +157,10 @@ body[data-ds-dark-theme] {
   --fs-composer-surface: #2f3033;
   --fs-floating-border: rgba(255, 255, 255, 0.1);
   --fs-floating-shadow: 0 4px 18px rgba(0, 0, 0, 0.24);
+}
+
+body[data-ds-dark-theme] #fs-whale-dark feFlood {
+  flood-color: var(--fs-brand-ink);
 }
 
 body.change-theme *,
@@ -159,4 +195,12 @@ body.change-theme *::after {
 [data-sider-dragging] [data-testid='chat-composer'] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+[data-scroll-edge][data-edge-motion] > [data-scroll-edge-content] {
+  transform: translateY(var(--fs-edge-shift, 0px));
+}
+/* 松手回弹由 edgeFeedback.ts 逐帧驱动弹簧，这里不再用固定时长过渡：
+   固定 220ms 缓动会让「轻放」和「甩动」看起来一样，缺少惯性。 */
+:root [data-scroll-edge] {
+  overscroll-behavior-y: none;
 }

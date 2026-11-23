@@ -1242,28 +1242,35 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
             },
           ],
         })
-        const fetch = window.fetch
-        window.fetch = async (url) => {
+        window.webkit = { messageHandlers: { bridge: {} } }
+        const metadata = async (url) => {
           attempts.push(String(url))
           if (String(url).startsWith('https://gh-proxy.com/')) {
-            return Response.json(release('v2.9.1'))
+            return { status: 200, body: JSON.stringify(release('v2.9.1')) }
           }
           return String(url).startsWith('https://ghfast.top/') &&
             String(url).endsWith('/update.json')
-            ? Response.json(release('v99.0.0'))
-            : new Response('{}', { status: 503 })
+            ? { status: 200, body: JSON.stringify(release('v99.0.0')) }
+            : { status: 503, body: '{}' }
+        }
+        window.Capacitor.nativePromise = async (_, method, { url }) => {
+          if (method === 'get') return metadata(url)
+          throw new Error('APK not cached')
         }
         const found = await a.update.checkForUpdate({ force: true }),
           current = a.update.useUpdate.getState()
-        window.fetch = async () => Response.json(release('v2.9.1'))
+        window.Capacitor.nativePromise = async () => ({
+          status: 200,
+          body: JSON.stringify(release('v2.9.1')),
+        })
         await a.update.checkForUpdate({ force: true })
         const preserved = a.update.useUpdate.getState().release.version
-        window.fetch = async () => {
+        window.Capacitor.nativePromise = async () => {
           throw new TypeError('Offline')
         }
         await a.update.checkForUpdate({ force: true })
         const offline = a.update.useUpdate.getState()
-        window.fetch = fetch
+        delete window.webkit
         return {
           found,
           version: current.release.version,
@@ -1283,6 +1290,13 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
             'https://ghfast.top/https://github.com/WikG1018/FreeSeekApp/releases/latest/download/update.json'
         )
       )
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.Capacitor = {
+          PluginHeaders: [{ name: 'Update', methods: [{ name: 'get', rtype: 'promise' }] }],
+        }
+      })
     }
   )
 

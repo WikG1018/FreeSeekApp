@@ -2,6 +2,7 @@ import { createId } from '../../utils/id.js'
 import { ApiError } from './errorTypes.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { diagnosticError, logEvent, registerLogSecret } from '../diagnostics/log.js'
+import { apiRequestRoute } from './windowsTransport.js'
 
 export const uploadPolicy = {
   idleTimeoutMs: 120_000,
@@ -81,11 +82,10 @@ export const postMultipart = (url: string, options: Options): Promise<unknown> =
     }
     options.signal?.addEventListener('abort', abort, { once: true })
     try {
-      xhr.open('POST', url)
+      const route = apiRequestRoute(url, options.headers)
+      xhr.open('POST', route.url)
       xhr.timeout = uploadPolicy.totalTimeoutMs
-      for (const [key, value] of Object.entries(options.headers)) {
-        xhr.setRequestHeader(key, value)
-      }
+      new Headers(route.headers).forEach((value, key) => xhr.setRequestHeader(key, value))
     } catch (error) {
       fail(error)
       return

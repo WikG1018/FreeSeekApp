@@ -64,6 +64,23 @@
   background: var(--dsw-alias-bg-layer-2);
 }
 
+.cacheRate {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+.cacheRate strong {
+  color: var(--fs-brand-ink);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

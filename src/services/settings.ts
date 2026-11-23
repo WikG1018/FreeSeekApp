@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { diagnosticError, logEvent, registerLogSecret } from './diagnostics/log.js'
 import type { TtsVoice } from './api/speech.js'
+import { defaultAgentTools, type AgentTool, type AgentToolPolicy } from './tasks/policy.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
 export type Locale = 'zh-CN' | 'en-US'
@@ -8,6 +9,8 @@ export type Locale = 'zh-CN' | 'en-US'
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type StartupPagePreference = 'last-chat' | 'new-chat'
+export type ComposerEnter = 'send' | 'newline'
+export type SiderOrder = 'recent' | 'type'
 export type ThirdPartySearch = {
   enabled: boolean
   keySource: 'official' | 'separate'
@@ -20,19 +23,24 @@ type Settings = {
   locale: Locale
   themePreference: ThemePreference
   startupPage: StartupPagePreference
+  composerEnter: ComposerEnter
   location: UserLocation | null
   ttsVoice: TtsVoice
   thinking: boolean
   hasLegacyThinking: boolean
   search: boolean
   siderCollapsed: boolean
+  siderOrder: SiderOrder
   /** 正文与控件缩放；允许 0.85–1.25 之间任意微调 */
   fontScale: number
+  useSystemFont: boolean
   /** 对话内显示 Token 用量与估算费用。 */
   showUsage: boolean
   autoCompress: boolean
   showModelSwitcher: boolean
   showReasoningPicker: boolean
+  askChatMode: boolean
+  agentTools: AgentToolPolicy
   thirdPartySearch: ThirdPartySearch
   thirdPartySearchOn: boolean
   proSearchOn: boolean
@@ -44,15 +52,20 @@ const KEYS = {
   location: 'freeseek:location',
   themePreference: 'freeseek:theme-preference',
   startupPage: 'freeseek:startup-page',
+  composerEnter: 'freeseek:composer-enter',
   ttsVoice: 'freeseek:tts-voice',
   thinking: 'freeseek:thinking',
   search: 'freeseek:search',
   siderCollapsed: 'freeseek:sider-collapsed',
+  siderOrder: 'freeseek:sider-order',
   fontScale: 'freeseek:font-scale',
+  useSystemFont: 'freeseek:use-system-font',
   showUsage: 'freeseek:show-usage',
   autoCompress: 'freeseek:auto-compress',
   showModelSwitcher: 'freeseek:show-model-switcher',
   showReasoningPicker: 'freeseek:show-reasoning-picker',
+  askChatMode: 'freeseek:ask-chat-mode',
+  agentTools: 'freeseek:agent-tools',
   thirdPartySearch: 'freeseek:third-party-search',
   thirdPartySearchOn: 'freeseek:third-party-search-on',
   proSearchOn: 'freeseek:pro-search-on',
@@ -145,18 +158,40 @@ export const useSettings = create<Settings>(() => ({
   location: initialLocation(),
   themePreference: initialThemePreference(),
   startupPage: read(KEYS.startupPage) === 'new-chat' ? 'new-chat' : 'last-chat',
+  composerEnter: read(KEYS.composerEnter) === 'newline' ? 'newline' : 'send',
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
   hasLegacyThinking: read(KEYS.thinking) !== null,
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
+  siderOrder: read(KEYS.siderOrder) === 'type' ? 'type' : 'recent',
   autoCompress: read(KEYS.autoCompress) === 'true',
   showUsage: read(KEYS.showUsage) !== 'false',
   showModelSwitcher: read(KEYS.showModelSwitcher) === 'true',
   showReasoningPicker: read(KEYS.showReasoningPicker) === 'true',
+  askChatMode: read(KEYS.askChatMode) === 'true',
+  agentTools: (() => {
+    try {
+      const stored: unknown = JSON.parse(read(KEYS.agentTools) ?? '{}')
+      const selected = { ...defaultAgentTools }
+      for (const key of Object.keys(selected) as AgentTool[]) {
+        const value =
+          stored && typeof stored === 'object'
+            ? (stored as Record<string, unknown>)[key]
+            : undefined
+        if (typeof value === 'boolean') {
+          selected[key] = value
+        }
+      }
+      return selected
+    } catch {
+      return { ...defaultAgentTools }
+    }
+  })(),
   thirdPartySearch: initialThirdPartySearch(),
   thirdPartySearchOn: read(KEYS.thirdPartySearchOn) === 'true',
   proSearchOn: read(KEYS.proSearchOn) === 'true',
+  useSystemFont: read(KEYS.useSystemFont) === 'true',
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1
@@ -169,17 +204,21 @@ useSettings.subscribe((current, previous) => {
     'locale',
     'themePreference',
     'startupPage',
+    'composerEnter',
     'ttsVoice',
     'thinking',
     'search',
     'proSearchOn',
     'thirdPartySearchOn',
     'fontScale',
+    'useSystemFont',
     'showUsage',
     'showModelSwitcher',
     'showReasoningPicker',
+    'askChatMode',
     'autoCompress',
     'siderCollapsed',
+    'siderOrder',
   ] as const
   const changes: Record<string, unknown> = Object.fromEntries(
     fields
@@ -289,15 +328,55 @@ export const setFontScale = (fontScale: number) => {
   useSettings.setState({ fontScale: value })
 }
 
+export const setUseSystemFont = (enabled: boolean) => {
+  if (!write(KEYS.useSystemFont, String(enabled))) {
+    return false
+  }
+  document.documentElement.toggleAttribute('data-fs-system-font', enabled)
+  useSettings.setState({ useSystemFont: enabled })
+  return true
+}
+
 export const setSiderCollapsed = (siderCollapsed: boolean) => {
   write(KEYS.siderCollapsed, String(siderCollapsed))
   useSettings.setState({ siderCollapsed })
+}
+
+export const setSiderOrder = (siderOrder: SiderOrder) => {
+  write(KEYS.siderOrder, siderOrder)
+  useSettings.setState({ siderOrder })
+}
+
+export const setAgentTool = (name: AgentTool, enabled: boolean) => {
+  const agentTools = { ...useSettings.getState().agentTools, [name]: enabled }
+  if (!write(KEYS.agentTools, JSON.stringify(agentTools))) {
+    return false
+  }
+  useSettings.setState({ agentTools })
+  logEvent('settings', 'assistant.tool-changed', { tool: name, enabled })
+  return true
 }
 
 export const setShowUsage = (showUsage: boolean) => {
   write(KEYS.showUsage, String(showUsage))
   useSettings.setState({ showUsage })
   logEvent('ui', 'usage-display.changed', { enabled: showUsage })
+}
+
+export const setAskChatMode = (askChatMode: boolean) => {
+  if (!write(KEYS.askChatMode, String(askChatMode))) {
+    return false
+  }
+  useSettings.setState({ askChatMode })
+  return true
+}
+
+export const setComposerEnter = (composerEnter: ComposerEnter) => {
+  if (!write(KEYS.composerEnter, composerEnter)) {
+    return false
+  }
+  useSettings.setState({ composerEnter })
+  return true
 }
 
 export const setShowModelSwitcher = (showModelSwitcher: boolean) => {

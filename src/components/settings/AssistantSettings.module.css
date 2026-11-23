@@ -1,0 +1,363 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 15px;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+.field input,
+.field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--fs-field-line);
+  border-radius: 11px;
+  background: var(--fs-settings-surface);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 400;
+}
+.field textarea {
+  line-height: 1.6;
+  resize: vertical;
+}
+.field :is(input, textarea):focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 1px;
+}
+.editorText {
+  padding: 2px 0;
+}
+.editorText .hint {
+  align-self: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.selector {
+  padding: 5px 12px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.approvalActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 1;
+}
+.approvalPrimary {
+  grid-column: 1 / -1;
+}
+.approvalActions > button {
+  min-width: 0;
+  padding-inline: 8px;
+  white-space: normal;
+  line-height: 1.3;
+}
+.toolActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-block: 10px;
+}
+.noteList {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 0;
+  list-style: none;
+}
+.noteList li {
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--fs-accent-wash);
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.noteList li p {
+  margin: 0;
+}
+.noteList li .hint {
+  display: block;
+  margin-top: 4px;
+}
+.hint,
+.error {
+  margin: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hint {
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+}
+.error {
+  color: var(--dsw-alias-state-error-primary);
+}
+.record {
+  display: block;
+  width: 100%;
+  padding: 12px 15px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.5;
+  transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
+}
+.record + .record {
+  border-top: 1px solid var(--fs-line);
+}
+.recordText {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.record:focus-visible,
+.memorySuggestion:focus-visible,
+.sourceLink:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+.recordMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin-top: 5px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.recordMeta > span:not(:first-child) {
+  border-inline-start: 1px solid var(--fs-line);
+  padding-inline-start: 8px;
+}
+.recordSource {
+  min-width: 0;
+  max-width: 55%;
+  max-width: min(55%, 220px);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.recordSource svg,
+.memoryPin svg {
+  width: 13px;
+  height: 13px;
+  margin-inline-end: 4px;
+  vertical-align: -2px;
+}
+.memoryPin {
+  color: var(--fs-accent-text);
+}
+.memoryTools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.memoryAdd {
+  justify-self: end;
+  min-height: 42px;
+}
+.memoryAdd:only-child {
+  justify-self: start;
+}
+.memorySearch {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 11px;
+  padding-inline-end: 8px;
+  border: 1px solid var(--fs-field-line);
+  border-radius: 12px;
+  background: var(--fs-settings-surface);
+  color: var(--fs-secondary-text);
+  cursor: text;
+}
+.memorySearch input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  caret-color: var(--fs-accent-fill);
+  font: inherit;
+  font-size: 16px;
+}
+.memorySearch input::placeholder {
+  color: var(--fs-secondary-text);
+  opacity: 1;
+}
+.memorySearch:focus-within {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 1px;
+}
+.memoryChoices {
+  display: grid;
+  gap: 5px;
+}
+.memorySuggestion,
+.sourceLink {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  font: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.memorySuggestion {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.memorySuggestion[aria-pressed='true'] {
+  border-color: var(--fs-accent-line);
+  background-color: var(--fs-accent-wash);
+  color: var(--fs-accent-text);
+}
+.relatedMemories {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 12px;
+}
+.relatedMemories li {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+.relatedMemories p,
+.replacement p {
+  margin: 0;
+}
+.replacement {
+  display: grid;
+  justify-items: start;
+  gap: 7px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--fs-accent-wash);
+}
+.memorySource {
+  margin: 8px 0;
+}
+.sourceLink {
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  color: var(--fs-accent-text);
+}
+.sourceLink small {
+  display: block;
+  color: var(--fs-secondary-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settingNote,
+.settingError {
+  margin: 0;
+  padding: 0 15px 12px;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settingError {
+  color: var(--dsw-alias-state-error-primary);
+}
+.prompt {
+  min-height: 104px;
+}
+.toolbarNote {
+  padding: 6px 12px;
+}
+@media (hover: hover) {
+  .record:hover,
+  .sourceLink:hover,
+  .memorySuggestion:hover:not([aria-pressed='true']) {
+    background-color: var(--fs-accent-wash);
+  }
+}
+@media (max-width: 360px) {
+  .memorySearch + .memoryAdd {
+    min-width: 42px;
+    padding-inline: 10px;
+  }
+  .memorySearch + .memoryAdd span {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .record {
+    transition: none;
+  }
+}
+.suggestionReview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+.suggestionReview .field {
+  padding-inline: 0;
+}
+.suggestionReview .field textarea {
+  border-color: var(--fs-line);
+  border-radius: 14px;
+}
+.suggestionActions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--fs-line);
+  background: var(--fs-settings-canvas);
+}
+.suggestionActions button {
+  flex: 1;
+}
+.activityActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 12px;
+}

@@ -107,6 +107,16 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.tileRate {
+  margin: 4px 0;
+  color: var(--fs-brand-ink);
+  font-size: 12px;
+}
+
+.tileRate strong {
+  font-variant-numeric: tabular-nums;
+}
+
 .tileSub {
   margin-top: 2px;
   font-size: 11px;
@@ -171,7 +181,7 @@
 .chartBar {
   min-height: 3px;
   border-radius: 4px 4px 2px 2px;
-  background: linear-gradient(to top, rgba(37, 99, 235, 0.85), rgba(37, 99, 235, 0.55));
+  background: linear-gradient(to top, var(--fs-accent-fill), var(--fs-accent-line));
 }
 
 .chartLabel {
@@ -224,9 +234,21 @@
   color: var(--fs-secondary-text);
 }
 
-.sessionRow:first-child .rank {
-  background: var(--fs-brand);
-  color: #fff;
+/* 会话用量排行：前三名用浅淡底色 + 同色系深色字，靠文字颜色区分名次。
+   浅底不抢视线，深色字保证 5:1 以上对比；三种色相（橙/蓝/绿）在 20px 方块上也分得清。 */
+.sessionRow:nth-child(1) .rank {
+  background: var(--fs-rank-1-bg);
+  color: var(--fs-rank-1-fg);
+}
+
+.sessionRow:nth-child(2) .rank {
+  background: var(--fs-rank-2-bg);
+  color: var(--fs-rank-2-fg);
+}
+
+.sessionRow:nth-child(3) .rank {
+  background: var(--fs-rank-3-bg);
+  color: var(--fs-rank-3-fg);
 }
 
 .sessionTitle {
@@ -256,47 +278,57 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* 价格设置入口 */
-.pricingRow {
-  display: flex;
+.ledgerAction {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 40px;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 48px;
-  padding: 0 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 13px;
-  background: none;
-  color: inherit;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fs-brand-ink);
   font: inherit;
+  font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
-  transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
-
-  &:hover {
-    background: var(--dsw-alias-interactive-bg-hover);
-  }
-
-  &:active {
-    background: var(--dsw-alias-interactive-bg-active);
-  }
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
-  }
 }
-
+.ledgerAction:hover,
+.ledgerAction:active {
+  background: var(--fs-accent-wash);
+}
+.ledgerAction:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 2px;
+}
 .pricingRowLabel {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  line-height: 20px;
-  text-align: left;
+  white-space: nowrap;
+}
+.ledgerTotals {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.ledgerTotals .heroToday {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  padding-bottom: 4px;
+}
+.ledgerTotals .heroToday strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-primary);
 }
-
-.pricingRowValue {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--fs-secondary-text);
+.emptyActions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border-top: 1px solid var(--fs-line);
 }

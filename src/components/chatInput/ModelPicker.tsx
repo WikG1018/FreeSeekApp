@@ -1,15 +1,18 @@
 import { useMemo, useId, useState, type RefObject } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { modelInputLabel } from '../../i18n/modelInputs.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { getContextRounds } from '../../services/chat/reply.js'
 import { useChatStore } from '../../services/chat/store.js'
 import {
   OFFICIAL_MODELS,
+  modelInputCapabilities,
   modelsInProfile,
   providerModelLabel,
   ProviderConfigError,
   selectModel,
   useProviders,
+  type ModelSelection,
 } from '../../services/providers.js'
 import { IconCheckOutline16, IconChevronDownOutline14, IconSearchOutline16 } from '../base/icons.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
@@ -24,9 +27,14 @@ export const ModelPicker = ({
   editorRef,
   sessionId,
   draftImage,
-}: Context & { disabled: boolean; editorRef: RefObject<HTMLTextAreaElement> }) => {
+  fixed,
+}: Context & {
+  disabled: boolean
+  editorRef: RefObject<HTMLTextAreaElement>
+  fixed?: ModelSelection
+}) => {
   const t = useTranslate()
-  const selection = useProviders((state) => state.selection)
+  const selection = useProviders((state) => fixed ?? state.selection)
   const profile = useProviders((state) =>
     state.profiles.find((item) => item.id === selection.providerId)
   )
@@ -34,7 +42,7 @@ export const ModelPicker = ({
     side: 'top',
     align: 'start',
     editorRef,
-    disabled,
+    disabled: disabled || Boolean(fixed),
   })
   const description = useId()
   const official = selection.providerId === 'deepseek'
@@ -52,17 +60,17 @@ export const ModelPicker = ({
         data-testid="composer-model"
         data-toolbar-control="model"
         className={styles.modelTrigger}
-        aria-label={t('providerSwitch')}
+        aria-label={t(fixed ? 'assistantAgentModelFixed' : 'providerSwitch')}
         aria-describedby={description}
         title={fullName}
-        disabled={disabled}
+        disabled={disabled || Boolean(fixed)}
         {...panel.trigger}
       >
         <span className={styles.modelSurface} aria-hidden />
         <span className={styles.modelName} data-model-label="">
           {shortName}
         </span>
-        <IconChevronDownOutline14 />
+        {!fixed && <IconChevronDownOutline14 />}
       </button>
       <span hidden id={description}>
         {fullName}
@@ -108,14 +116,12 @@ const ModelChoices = ({
       {
         id: 'deepseek',
         name: t('providerOfficial'),
-        vision: true,
         profile: undefined,
         models: [...OFFICIAL_MODELS] as string[],
       },
       ...custom.map((p) => ({
         id: p.id,
         name: p.name,
-        vision: p.vision,
         profile: p,
         models: [
           ...new Set([
@@ -177,78 +183,80 @@ const ModelChoices = ({
           />
         </label>
       )}
-      <div className={panelStyles.list} role="listbox" aria-label={t('providerSwitch')}>
-        {results.map((group) => {
-          const models = group.models.slice(0, remaining)
-          remaining -= models.length
-          if (!models.length) {
-            return null
-          }
-          const official = group.id === 'deepseek'
-          return (
-            <div role="group" aria-label={group.name} key={group.id}>
-              <div className={styles.modelGroup} aria-hidden="true">
-                {group.name}
-              </div>
-              {models.map((model) => {
-                const pro = official && model === 'deepseek-v4-pro'
-                const selected = group.id === selection.providerId && model === selection.model
-                const blocked: TranslationKey | null = hasImages
-                  ? pro
-                    ? 'providerProNoImages'
-                    : !group.vision
-                      ? 'providerVisionDisabled'
+      <div
+        className={panelStyles.list}
+        role="listbox"
+        aria-label={t('providerSwitch')}
+        data-scroll-edge=""
+      >
+        <div data-scroll-edge-content="">
+          {results.map((group) => {
+            const models = group.models.slice(0, remaining)
+            remaining -= models.length
+            if (!models.length) {
+              return null
+            }
+            const official = group.id === 'deepseek'
+            return (
+              <div role="group" aria-label={group.name} key={group.id}>
+                <div className={styles.modelGroup} aria-hidden="true">
+                  {group.name}
+                </div>
+                {models.map((model) => {
+                  const pro = official && model === 'deepseek-v4-pro'
+                  const selected = group.id === selection.providerId && model === selection.model
+                  const inputs = modelInputCapabilities(model, group.profile)
+                  const blocked: TranslationKey | null =
+                    hasImages && !inputs.vision
+                      ? pro
+                        ? 'providerProNoImages'
+                        : 'providerVisionDisabled'
                       : null
-                  : null
-                return (
-                  <button
-                    type="button"
-                    role="option"
-                    data-panel-item=""
-                    key={model}
-                    aria-selected={selected}
-                    disabled={Boolean(blocked)}
-                    className={panelStyles.option}
-                    onClick={() => choose(group.id, model)}
-                  >
-                    <span className={styles.modelGlyph} aria-hidden="true">
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="17"
-                        height="17"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinejoin="round"
-                      >
-                        <path
-                          d={
-                            official
-                              ? pro
-                                ? 'm12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z'
-                                : 'm13 2-9 12h7l-1 8L20 9h-8Z'
-                              : 'm12 3 8 4v10l-8 4-8-4V7Z M4 7l8 4 8-4m-8 4v10'
-                          }
-                        />
-                      </svg>
-                    </span>
-                    <span className={panelStyles.copy}>
-                      <span>{providerModelLabel(model, group.profile)}</span>
-                      {blocked ? (
-                        <small className={styles.modelReason}>{t(blocked)}</small>
-                      ) : official ? (
-                        <small>
-                          {t(pro ? 'providerProCapability' : 'providerFlashCapability')}
-                        </small>
-                      ) : null}
-                    </span>
-                    {selected && <IconCheckOutline16 />}
-                  </button>
-                )
-              })}
-            </div>
-          )
-        })}
+                  return (
+                    <button
+                      type="button"
+                      role="option"
+                      data-panel-item=""
+                      key={model}
+                      aria-selected={selected}
+                      disabled={Boolean(blocked)}
+                      className={panelStyles.option}
+                      onClick={() => choose(group.id, model)}
+                    >
+                      <span className={styles.modelGlyph} aria-hidden="true">
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="17"
+                          height="17"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinejoin="round"
+                        >
+                          <path
+                            d={
+                              official
+                                ? pro
+                                  ? 'm12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z'
+                                  : 'm13 2-9 12h7l-1 8L20 9h-8Z'
+                                : 'm12 3 8 4v10l-8 4-8-4V7Z M4 7l8 4 8-4m-8 4v10'
+                            }
+                          />
+                        </svg>
+                      </span>
+                      <span className={panelStyles.copy}>
+                        <span>{providerModelLabel(model, group.profile)}</span>
+                        <small>{modelInputLabel(t, inputs)}</small>
+                        {blocked && <small className={styles.modelReason}>{t(blocked)}</small>}
+                      </span>
+                      {selected && <IconCheckOutline16 />}
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
       </div>
       {!count && (
         <p role="status" className={panelStyles.empty}>

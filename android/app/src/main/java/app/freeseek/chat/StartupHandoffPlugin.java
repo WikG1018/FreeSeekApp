@@ -93,7 +93,11 @@ public class StartupHandoffPlugin extends Plugin {
         mark = new ImageView(getActivity());
         mark.setImageBitmap(image);
         mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        if (dark) mark.setColorFilter(Color.rgb(227, 227, 227), PorterDuff.Mode.SRC_IN);
+        if (dark) {
+            mark.setColorFilter(
+                getContext().getColor(R.color.freeseek_whale_dark), PorterDuff.Mode.SRC_IN
+            );
+        }
         FrameLayout.LayoutParams position = new FrameLayout.LayoutParams(size, size);
         position.leftMargin = webOrigin[0] - parentOrigin[0] + (int) Math.round(left * ratio);
         position.topMargin = webOrigin[1] - parentOrigin[1] + (int) Math.round(top * ratio);
@@ -165,6 +169,14 @@ public class StartupHandoffPlugin extends Plugin {
             if (layer != null) afterWebPaint(layer, () -> remove(layer));
             call.resolve();
         });
+    }
+
+    @Override protected void handleOnPause() {
+        remove(cover);
+    }
+
+    @Override protected void handleOnDestroy() {
+        remove(cover);
     }
 
     private void afterWebPaint(FrameLayout layer, Runnable action) {

@@ -75,7 +75,7 @@
 }
 
 .ds-markdown a:not(.ds-a) {
-  color: var(--dsw-alias-brand-text);
+  color: var(--fs-brand-ink);
   transition: box-shadow var(--ds-transition-duration) var(--ds-ease-in-out);
   position: relative;
   text-decoration: none;
@@ -85,15 +85,15 @@
   border-bottom: 2px solid rgba(255 255 255 / 0);
   margin-left: -3px;
   margin-right: -3px;
-  &:hover,
-  :focus {
-    outline: none;
-    text-decoration: underline var(--dsw-alias-brand-text);
+  &:hover {
+    text-decoration: underline;
   }
 }
 
 .ds-markdown a:not(.ds-a):focus-visible {
-  box-shadow: 0 0 0 2px var(--dsw-alias-brand-text);
+  box-shadow: 0 0 0 2px currentColor;
+  outline: none;
+  text-decoration: underline;
 }
 
 .ds-markdown li > ul,
@@ -227,6 +227,14 @@
   overflow-y: hidden;
   max-width: 100%;
   padding: 4px;
+}
+
+/* Text inside a formula follows the app face; math glyphs keep KaTeX's layout metrics. */
+.ds-markdown .katex .text,
+.ds-markdown .katex .text *,
+.ds-markdown .katex .cjk_fallback,
+.ds-markdown .katex .unicode-fallback {
+  font-family: var(--dsw-font-family) !important;
 }
 
 .ds-markdown > * .ds-markdown-math {
@@ -367,6 +375,12 @@
     height: auto;
     margin: 0 auto;
   }
+}
+
+.md-mermaid-diagram text,
+.md-mermaid-diagram tspan,
+.md-mermaid-diagram foreignObject * {
+  font-family: var(--dsw-font-family) !important;
 }
 
 .md-mermaid-status {

@@ -8,7 +8,7 @@
 - assets/splash.png：启动图（白底 + 居中图形）
 - android/app/src/main/res/mipmap-*：各密度图标与自适应图层
 
-图形本身是矢量稿导出的 PNG，脚本只做裁剪、缩放与底色合成，不重绘。
+图形本身是矢量稿导出的 PNG，脚本保留透明轮廓并填充品牌色，再裁剪、缩放和合成。
 """
 from pathlib import Path
 
@@ -16,10 +16,11 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "assets" / "icon-source.png"
-NAVY = (23, 43, 73)
+BRAND_BLUE = (52, 93, 204)
 
 # Android 密度 → 传统图标边长 / 自适应图层边长（108dp）
 DENSITIES = {
+    "ldpi": (36, 81),
     "mdpi": (48, 108),
     "hdpi": (72, 162),
     "xhdpi": (96, 216),
@@ -28,19 +29,20 @@ DENSITIES = {
 }
 
 
-def load_art() -> Image.Image:
-    """读入源图并按 alpha 裁掉空白边。"""
-    art = Image.open(SRC).convert("RGBA")
-    box = art.getbbox()
-    return art.crop(box) if box else art
+def load_alpha() -> Image.Image:
+    """读入源图的透明轮廓并裁掉空白边。"""
+    alpha = Image.open(SRC).convert("RGBA").getchannel("A")
+    box = alpha.getbbox()
+    return alpha.crop(box) if box else alpha
 
 
-def place(art: Image.Image, canvas: int, width_ratio: float, background) -> Image.Image:
+def place(alpha: Image.Image, canvas: int, width_ratio: float, background) -> Image.Image:
     """把图形按目标宽度比例居中放到方形画布上。"""
     target_w = max(1, round(canvas * width_ratio))
-    scale = target_w / art.width
-    target_h = max(1, round(art.height * scale))
-    scaled = art.resize((target_w, target_h), Image.LANCZOS)
+    scale = target_w / alpha.width
+    target_h = max(1, round(alpha.height * scale))
+    scaled = Image.new("RGBA", (target_w, target_h), BRAND_BLUE)
+    scaled.putalpha(alpha.resize(scaled.size, Image.LANCZOS))
     out = Image.new("RGBA", (canvas, canvas), background)
     out.alpha_composite(scaled, ((canvas - target_w) // 2, (canvas - target_h) // 2))
     return out
@@ -69,7 +71,7 @@ def with_round_background(art: Image.Image, size: int, width_ratio: float, circl
 
 
 def main() -> None:
-    art = load_art()
+    art = load_alpha()
     assets = ROOT / "assets"
 
     # 应用商店/网页用方形图标

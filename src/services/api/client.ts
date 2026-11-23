@@ -1,3 +1,4 @@
+import { agentProbePrompt, agentProbeSystem, verifyAgentTools } from './toolProbe.js'
 import { createId } from '../../utils/id.js'
 import { ApiError } from './errorTypes.js'
 import { postMultipart, type UploadProgress } from './multipart.js'
@@ -9,12 +10,15 @@ import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import {
   streamWithProviderSearch,
+  streamWithTaskTools,
   type SearchTool,
   type SearchTurnCollector,
+  type TaskToolset,
 } from './searchTool.js'
 import {
   supportsOfficialChatExtensions,
   type ApiErrorBody,
+  type ChatModel,
   type CreateMessageRequest,
   type FileObject,
   type FilePurpose,
@@ -281,24 +285,45 @@ export async function* streamMessage(
   body: CreateMessageRequest,
   signal: AbortSignal,
   requestId = createId(),
-  search?: SearchTool
+  search?: SearchTool,
+  task?: TaskToolset
 ): AsyncGenerator<MessageStreamEvent> {
   const payload = officialRequestForModel(body)
   const includeFiles = hasFile(payload)
-  if (!search || payload.model !== 'deepseek-v4-pro') {
+  if (!task && (!search || payload.model !== 'deepseek-v4-pro')) {
     yield* streamMessageRound(apiKey, payload, signal, requestId, includeFiles)
+    return
+  }
+  if (
+    task?.host &&
+    (await task.host({
+      protocol: 'anthropic',
+      url: ANTHROPIC_BASE_URL + '/messages',
+      headers: { ...anthropicHeaders(apiKey, includeFiles), 'Content-Type': 'application/json' },
+      body: { ...payload, stream: true },
+    }))
+  ) {
     return
   }
   // Pro uses client tools on the Messages API with the sanitized request and safety check.
   let nextRequestId: string | undefined = requestId
-  yield* streamWithProviderSearch(payload, 'anthropic', search, signal, (round, collector) => {
+  const runRound = (
+    round: Record<string, unknown>,
+    collector?: SearchTurnCollector,
+    requestSignal = signal
+  ) => {
     const id = nextRequestId ?? createId()
     nextRequestId = undefined
-    return streamMessageRound(apiKey, round, signal, id, includeFiles, {
+    return streamMessageRound(apiKey, round, requestSignal, id, includeFiles, {
       collector,
       answerOnly: !collector,
     })
-  })
+  }
+  if (task) {
+    yield* streamWithTaskTools(payload, 'anthropic', task, signal, runRound)
+  } else if (search) {
+    yield* streamWithProviderSearch(payload, 'anthropic', search, signal, runRound)
+  }
 }
 
 async function* streamMessageRound(
@@ -397,4 +422,27 @@ async function* streamMessageRound(
   }
   // 服务端没有提供错误内容时保持为空，不推测断流原因。
   throw new ApiError('interrupted', '')
+}
+
+export const testOfficialAgentTools = (apiKey: string, model: ChatModel, signal: AbortSignal) => {
+  const identity = { id: 'deepseek', revision: 'official', model, protocol: 'anthropic' }
+  return verifyAgentTools(
+    identity,
+    (task) =>
+      streamMessage(
+        apiKey,
+        {
+          model,
+          system: agentProbeSystem,
+          messages: [{ role: 'user', content: agentProbePrompt }],
+          max_tokens: 512,
+          thinking: { type: 'disabled' },
+        },
+        signal,
+        undefined,
+        undefined,
+        task
+      ),
+    signal
+  )
 }

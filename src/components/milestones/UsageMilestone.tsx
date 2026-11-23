@@ -133,7 +133,12 @@ const MilestoneArt = ({ tone, paused }: { tone: Tone; paused: boolean }) => (
       className={styles.pod}
       style={{ '--milestone-mark': 'url("' + logo + '")' } as CSSProperties}
     >
-      <img className={styles.fallback} src={logo} alt="" draggable={false} />
+      <img
+        className={clsx(styles.fallback, 'fs-whale-image')}
+        src={logo}
+        alt=""
+        draggable={false}
+      />
       <span className={styles.lead} data-milestone-swim="">
         <span className={clsx(styles.shape, whaleLogo.large)} />
       </span>

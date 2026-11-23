@@ -9,8 +9,6 @@
   --sea-rose: #913654;
   --sea-rose-line: #c78ea4;
   --sea-rose-surface: #fff6fa;
-  --sea-large: #19475d;
-  --sea-small: #347f84;
   --sea-wake: rgba(38, 119, 134, 0.34);
   --sea-glow: rgba(38, 119, 134, 0.15);
   --sea-loop: 6400ms;
@@ -37,8 +35,6 @@
   --sea-rose: #ffd0de;
   --sea-rose-line: #9d8190;
   --sea-rose-surface: #3b3946;
-  --sea-large: #b8e6f0;
-  --sea-small: #8dd3cc;
   --sea-wake: rgba(121, 214, 216, 0.36);
   --sea-glow: rgba(106, 192, 200, 0.23);
 }
@@ -52,8 +48,6 @@
   --sea-rose: #ffd0de;
   --sea-rose-line: #a78795;
   --sea-rose-surface: #343842;
-  --sea-large: #c1f2e3;
-  --sea-small: #79d3ee;
   --sea-wake: rgba(108, 230, 210, 0.38);
   --sea-glow: rgba(108, 230, 210, 0.24);
   --sea-loop: 7400ms;
@@ -68,8 +62,6 @@
   --sea-rose: #ffd1e5;
   --sea-rose-line: #a78aa6;
   --sea-rose-surface: #383049;
-  --sea-large: #f0ebff;
-  --sea-small: #a8c0ff;
   --sea-wake: rgba(187, 164, 251, 0.63);
   --sea-glow: rgba(187, 164, 251, 0.24);
   --sea-loop: 8100ms;
@@ -138,11 +130,6 @@
   height: 100%;
   object-fit: contain;
 }
-[data-ds-dark-theme] .fallback,
-.tide .fallback,
-.stars .fallback {
-  filter: brightness(0) invert(0.92);
-}
 .lead,
 .follow {
   display: none;
@@ -167,12 +154,11 @@
   animation-name: starSwim;
 }
 .shape {
-  background: var(--sea-large);
+  background: var(--fs-brand-ink);
   -webkit-mask: var(--milestone-mark) center / contain no-repeat;
   mask: var(--milestone-mark) center / contain no-repeat;
 }
 .follow .shape {
-  background: var(--sea-small);
   transform: translate3d(7px, 8px, 0);
 }
 @supports ((-webkit-mask-image: url('')) and (clip-path: polygon(0 0, 100% 0, 100% 100%))) {

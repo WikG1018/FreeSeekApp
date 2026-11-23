@@ -1,6 +1,8 @@
 import { Capacitor } from '@capacitor/core'
 import { NativeDiagnostics } from './native.js'
+import { flushRetainedClientEvents, retainedClientWriteStatus } from './retained.js'
 import { browserEnvironment } from './browser.js'
+import { isWindowsDesktop } from '../api/windowsTransport.js'
 import {
   readDiagnosticLogs,
   logEvent,
@@ -19,7 +21,7 @@ import { useUploads } from '../attachments.js'
 import { useUpdate } from '../update.js'
 import { API_ORIGIN } from '../api/client.js'
 import { writeArchive } from '../chat/history/zipWriter.js'
-import { useProviders } from '../providers.js'
+import { providerModelParameters, useProviders } from '../providers.js'
 
 type Capture<T> =
   | { status: 'available'; value: T }
@@ -52,6 +54,16 @@ const jsonl = (entries: unknown[]) =>
   new Blob([entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'], {
     type: 'application/x-ndjson',
   })
+
+const timeline = (events: { timestamp: number }[]) => ({
+  count: events.length,
+  ...(events.length
+    ? {
+        firstAt: Math.min(...events.map(({ timestamp }) => timestamp)),
+        lastAt: Math.max(...events.map(({ timestamp }) => timestamp)),
+      }
+    : {}),
+})
 
 const unavailable = { unavailable: true } as const
 
@@ -97,7 +109,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     Object.values(profile.headers).forEach(registerLogSecret)
   })
   logEvent('diagnostics', 'export.started')
-  const platform = Capacitor.getPlatform()
+  const platform = isWindowsDesktop() ? 'windows' : Capacitor.getPlatform()
   const [client, storage, browserStorage, browser, native] = await Promise.all([
     readDiagnosticLogs(),
     capture(getStorageSummary),
@@ -106,7 +118,10 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       : { status: 'unsupported' as const, value: undefined },
     capture(async () => browserEnvironment()),
     platform === 'android'
-      ? capture(() => NativeDiagnostics.snapshot())
+      ? capture(async () => {
+          await capture(flushRetainedClientEvents, 800)
+          return NativeDiagnostics.snapshot()
+        }, 4800)
       : { status: 'unsupported' as const, value: undefined },
   ])
   const nativeLog = native.value
@@ -116,6 +131,10 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       : { status: 'unsupported' as const, value: undefined }
   const nativeEvents = Array.isArray(nativeLog.value?.events)
     ? nativeLog.value.events.slice(-1000).flatMap((entry) => eventFields(entry, 'native'))
+    : []
+  const retained = nativeLog.value?.retainedClient
+  const retainedEvents = Array.isArray(retained?.events)
+    ? retained.events.slice(-512).flatMap((entry) => eventFields(entry, 'client'))
     : []
   const state = useChatStore.getState()
   const active = state.activeId ? state.sessionCache[state.activeId] : undefined
@@ -130,6 +149,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   })
   const update = useUpdate.getState()
   const profile = providers.profiles.find((item) => item.id === providers.selection.providerId)
+  const modelParameters = profile && providerModelParameters(profile, providers.selection.model)
   let apiHost = 'unknown'
   try {
     apiHost = new URL(API_ORIGIN).host
@@ -165,8 +185,10 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       theme: settings.themePreference,
       startupPage: settings.startupPage,
       fontScale: settings.fontScale,
+      useSystemFont: settings.useSystemFont,
       showUsage: settings.showUsage,
       showModelSwitcher: settings.showModelSwitcher,
+      composerEnter: settings.composerEnter,
       showReasoningPicker: settings.showReasoningPicker,
       autoCompress: settings.autoCompress,
       customProvider: providers.selection.providerId !== 'deepseek',
@@ -174,14 +196,12 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       protocol: profile?.protocol ?? 'deepseek',
       officialModel:
         providers.selection.providerId === 'deepseek' ? providers.selection.model : undefined,
-      customStream: profile?.stream,
-      customStreamUsage: profile?.streamUsage,
+      customStream: modelParameters?.stream,
+      customStreamUsage: modelParameters?.streamUsage,
       customContextTokens: profile?.contextWindows?.[providers.selection.model],
-      customMaxOutputTokens:
-        profile?.modelSettings?.[providers.selection.model]?.maxOutputTokens ??
-        profile?.maxOutputTokens,
-      customVision: profile?.vision,
-      customPdf: profile?.pdf,
+      customMaxOutputTokens: modelParameters?.maxOutputTokens,
+      customVision: modelParameters?.vision,
+      customPdf: modelParameters?.pdf,
       thinking: settings.thinking,
       search: settings.search,
       proSearch: settings.proSearchOn,
@@ -194,6 +214,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     state: {
       ready: state.ready,
       initError: state.initError,
+      historyMissing: state.historyMissing,
       importing: state.importingHistory,
       sessionCount: state.sessions.length,
       cachedSessions: Object.keys(state.sessionCache).length,
@@ -220,10 +241,17 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       lastCheckedAt: update.lastCheckedAt,
     },
     storage: storage.value ?? unavailable,
+    historyCheckpoint: nativeLog.value?.historyCheckpoint,
     browserStorage: browserStorage.value ?? unavailable,
     native: native.value?.environment ?? unavailable,
   })
-  const events = client.events.flatMap((entry) => eventFields(entry, 'client'))
+  const webviewEvents = client.events.flatMap((entry) => eventFields(entry, 'client'))
+  const localIds = new Set(webviewEvents.map(({ id }) => id))
+  const recovered = retainedEvents.filter(({ id }) => id && !localIds.has(id))
+  const events = [
+    ...webviewEvents,
+    ...recovered.map((entry) => ({ ...entry, recoveredFromNative: true })),
+  ].sort((a, b) => a.timestamp - b.timestamp)
   const allEvents = [...events, ...nativeEvents]
   const errorEvents = allEvents.filter((entry) => entry.level === 'error' || entry.level === 'warn')
   const scopes: Record<string, { events: number; issues: number; latestAt: number }> =
@@ -236,11 +264,32 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   }
   const summary = {
     clientEvents: events.length,
+    recoveredClientEvents: recovered.length,
+    timeline: {
+      webview: timeline(webviewEvents),
+      native: timeline(nativeEvents),
+      retainedClient: timeline(retainedEvents),
+    },
+    clientIndexedDBEvents: client.persistedEvents,
+    clientIndexedDBCreatedThisRun: client.databaseCreatedThisRun,
     nativeEvents: nativeEvents.length,
     clientStorageAvailable: client.storageAvailable,
     nativeSnapshotAvailable: Boolean(native.value?.environment),
     unavailableClientWrites: client.unavailableWrites,
     unavailableNativeWrites: nativeLog.value?.failedWrites,
+    retainedClient: retained
+      ? {
+          limit: retained.limit,
+          historyReserve: retained.historyReserve,
+          issueReserve: retained.issueReserve,
+          readState: retained.readState,
+          evicted: retained.evicted,
+          expired: retained.expired,
+          rejected: retained.rejected,
+          failedWrites: retained.failedWrites,
+          bridge: retainedClientWriteStatus(),
+        }
+      : undefined,
     nativeLogReadFailure:
       nativeLog.value?.readFailure === 'size-limit' || nativeLog.value?.readFailure === 'unreadable'
         ? nativeLog.value.readFailure
@@ -249,6 +298,9 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       clientEvents: client.storageAvailable ? 'available' : 'memory-only',
       native: native.status,
       nativeEvents: nativeLog.status,
+      retainedClient:
+        retained?.readState ??
+        (nativeLog.status === 'available' ? 'unsupported' : nativeLog.status),
       browser: browser.status,
       storage: storage.status,
       browserStorage: browserStorage.status,
@@ -281,6 +333,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       nativeLimit: 1000,
       clientIssueReserve: LOG_ISSUE_RESERVE,
       nativeIssueReserve: 150,
+      retainedClientLimit: retained?.limit,
     },
   }
   try {
@@ -294,7 +347,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
         name: 'README.txt',
         blob: new Blob(
           [
-            'FreeSeek 诊断包\n环境信息见 environment.json，采集状态和近期问题见 summary.json。\nclient-events.jsonl 与 native-events.jsonl 记录操作、处理结果和失败阶段。带有相同 operationId 或 requestId 的记录可以一起查看。\n不包含 API Key、聊天正文、搜索词、附件原件、录音或设备唯一标识。\n日志最多保留最近 7 天。客户端最多 2000 条，原生最多 1000 条，满额时给近期警告和错误保留空间。\n反馈问题时请说明发生时间与操作步骤。\n',
+            'FreeSeek 诊断包\n设备、当前存储和最后核实的历史数量见 environment.json。采集状态、各来源的时间范围、日志淘汰及写入失败计数见 summary.json。\nclient-events.jsonl 与 native-events.jsonl 记录操作、处理结果和失败阶段。相同 operationId 或 requestId 可串起同一次操作。recoveredFromNative 表示从安卓独立日志中补回的记录。\n不包含 API Key、聊天正文、搜索词、附件原件、录音或设备唯一标识。\n日志最多保留最近 7 天。客户端最多 2000 条，原生系统日志最多 1000 条，安卓额外保存最多 512 条关键客户端记录。\n',
           ],
           { type: 'text/plain' }
         ),

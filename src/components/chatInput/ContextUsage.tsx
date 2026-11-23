@@ -16,11 +16,18 @@ import {
   type ContextModel,
 } from '../../services/chat/contextCompression.js'
 import { EMPTY_DRAFT, useDrafts } from '../../services/chat/drafts.js'
-import { replySystemPrompt, useChatStore } from '../../services/chat/store.js'
+import {
+  replySystemPrompt,
+  setSessionMemoryPaused,
+  useChatStore,
+} from '../../services/chat/store.js'
 import { usePersonas } from '../../services/personas.js'
 import { providerModelLabel, useProviders } from '../../services/providers.js'
 import { IconCloseOutline16 } from '../base/icons.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
+import { useAssistantLibrary } from '../../services/assistants/library.js'
+import { useSessionAgent } from '../session/SessionAssistant.js'
+import { SwitchRow } from '../settings/SettingsRows.js'
 import styles from './ContextUsage.module.css'
 
 const RING_LENGTH = 2 * Math.PI * 8
@@ -35,7 +42,8 @@ export const ContextUsage = memo(function ContextUsage({
   disabled: boolean
 }) {
   const t = useTranslate()
-  const { providerId, model } = useProviders((state) => state.selection)
+  const agent = useSessionAgent(sessionId)
+  const { providerId, model } = useProviders((state) => agent?.model ?? state.selection)
   const official = providerId === 'deepseek'
   const profile = useProviders((state) =>
     official ? undefined : state.profiles.find((item) => item.id === providerId)
@@ -56,6 +64,13 @@ export const ContextUsage = memo(function ContextUsage({
   const draft = useDrafts((state) => state.drafts.get(sessionId) ?? EMPTY_DRAFT)
   const visible = useMemo(() => (session ? getVisibleMessages(session) : []), [session])
   const lastReply = visible.at(-1)
+  const memoryUse =
+    lastReply?.role === 'assistant' && lastReply.status === 'done' ? lastReply.memoryUse : undefined
+  const memoryReadFailed =
+    lastReply?.role === 'assistant' && lastReply.status === 'done' && lastReply.memoryReadFailed
+  const notes = useAssistantLibrary((state) => state.data.memories)
+  const memoryEnabled = useAssistantLibrary((state) => state.data.enabled)
+  const draftMemoryPaused = useChatStore((state) => sessionId === null && state.draftMemoryPaused)
   const lastQuestion = visible.at(-2)
   const lastError =
     lastReply?.role === 'assistant' && lastReply.status === 'error'
@@ -98,7 +113,7 @@ export const ContextUsage = memo(function ContextUsage({
       ),
     [draft]
   )
-  const prompt = session?.persona?.prompt ?? defaultPrompt
+  const prompt = agent?.prompt ?? session?.persona?.prompt ?? defaultPrompt
   const systemTokens = useMemo(
     () => estimatedSystemTokens(replySystemPrompt(prompt, official)),
     [prompt, official]
@@ -106,6 +121,9 @@ export const ContextUsage = memo(function ContextUsage({
   const history = historyContext && historyContext.tokens + systemTokens
   const reserved = connection ? contextReplyReserve(connection) : undefined
   const limit = connection ? contextLength(connection) : undefined
+  // 环形只量历史；单条消息本身就可能超限，这时压缩历史也腾不出空间，需要单独提醒。
+  const inputOnly = systemTokens + draftTokens + (reserved ?? 0)
+  const inputTooLarge = limit !== undefined && inputOnly > limit
   const ratio = history !== undefined && limit ? history / limit : null
   const roundedPercent = Math.round((ratio ?? 0) * 100)
   const percent = ratio === null ? null : ratio < 1 ? Math.min(99, roundedPercent) : roundedPercent
@@ -202,6 +220,14 @@ export const ContextUsage = memo(function ContextUsage({
               ) : (
                 <p className={styles.status}>{t('contextUsageLimitUnknown')}</p>
               )}
+              {inputTooLarge && (
+                <p className={styles.overflow} role="status">
+                  {t('contextUsageDraftOverHint', {
+                    count: formatContextTokens(inputOnly),
+                    limit: formatContextTokens(limit ?? 0),
+                  })}
+                </p>
+              )}
               <dl className={styles.breakdown}>
                 <div>
                   <dt>{t('contextUsageHistory')}</dt>
@@ -216,6 +242,33 @@ export const ContextUsage = memo(function ContextUsage({
                   <dd>{formatContextTokens(reserved)}</dd>
                 </div>
               </dl>
+              {memoryUse && (
+                <details className={styles.memoryDetails}>
+                  <summary>
+                    {t('assistantMemoryUsed', { count: memoryUse.references.length })}
+                    {' · '}
+                    {formatContextTokens(memoryUse.tokens)} tokens
+                  </summary>
+                  <ul>
+                    {memoryUse.references.map(({ id, revision }) => (
+                      <li key={id}>
+                        {notes.find((note) => note.id === id && note.revision === revision)?.text ??
+                          t('assistantMemoryChanged')}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              {memoryReadFailed && (
+                <p className={styles.status}>{t('assistantMemoryReadFailed')}</p>
+              )}
+              {sessionId === null && memoryEnabled && (
+                <SwitchRow
+                  label={t('assistantMemoryPaused')}
+                  checked={draftMemoryPaused}
+                  change={(paused) => setSessionMemoryPaused(null, paused)}
+                />
+              )}
               {historyContext?.recentOnly && (
                 <p className={styles.status}>{t('compressionRecentSummary')}</p>
               )}

@@ -1,4 +1,5 @@
 import { useTranslate } from '../../i18n/index.js'
+import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import clsx from 'clsx'
 import { memo, useState } from 'react'
 import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
@@ -24,7 +25,14 @@ import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js
 import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
 import { ReplyArea } from './ReplyArea.js'
+import { ReplyActivity } from './ReplyActivity.js'
 import { useReplyView } from './useReplyView.js'
+import {
+  AgentOutputs,
+  AgentPlanPrompt,
+  AgentProgressButton,
+  AgentRunRecovery,
+} from './AssistantTask.js'
 import { MessageUsage } from '../usage/MessageUsage.js'
 import {
   BranchSwitcher,
@@ -38,22 +46,28 @@ const TOP_UP_URL = 'https://platform.deepseek.com/top_up'
 export const AssistantMessage = memo(function AssistantMessage({
   sessionId,
   message,
+  round,
   isLast,
   streaming,
   busy,
   versions,
   onSelectVersion,
+  onPlanReply,
 }: {
   sessionId: string
   message: AssistantMessageType
+  round?: number
   isLast: boolean
   streaming: boolean
   busy: boolean
   versions: MessageVersions
   onSelectVersion: SelectMessageVersion
+  onPlanReply: () => void
 }) {
   const t = useTranslate()
-  const view = useReplyView(message, streaming)
+  const sessionAgent = useChatStore((state) => state.sessionCache[sessionId]?.mode === 'agent')
+  const agentMode = sessionAgent || Boolean(message.task)
+  const view = useReplyView(message, streaming, agentMode)
   // 新回复（含重新生成）挂载时创建不足 800ms 播放一次入场动画
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
   const panelEntry = useSearchPanel((state) => state.entry)
@@ -68,20 +82,32 @@ export const AssistantMessage = memo(function AssistantMessage({
   const responseText = [answer?.text, notice?.presentation === 'response' ? notice.text : null]
     .filter(Boolean)
     .join('\n\n')
-  const copyText = responseText || notice?.text
+  const copyText = responseText || message.task?.run?.question || notice?.text
   const compressing = useChatStore((s) => (streaming ? s.compressing[sessionId] : undefined))
-  const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={clsx(styles.message, fresh && styles.fresh)} data-message-id={message.id}>
-      {refused ? null : (
-        <ReplyArea
-          message={message}
-          view={view}
-          streaming={streaming}
-          hasResponse={!!responseText}
-        />
-      )}
+      {!refused &&
+        (agentMode ? (
+          <div data-testid="assistant-task">
+            <ReplyArea
+              message={message}
+              view={view}
+              streaming={streaming}
+              hasResponse={!!responseText}
+              agentMode
+              activityPaused={!!compressing}
+            />
+          </div>
+        ) : (
+          <ReplyArea
+            message={message}
+            view={view}
+            streaming={streaming}
+            hasResponse={!!responseText}
+            activityPaused={!!compressing}
+          />
+        ))}
       {answer ? (
         <ExpandableContent
           text={answer.markdown}
@@ -98,14 +124,47 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         />
       ) : null}
+      {!refused && agentMode && streaming && !compressing && (
+        <ReplyActivity message={message} view={view} transcriptTail />
+      )}
+      {!refused && !streaming && message.task && (
+        <AgentPlanPrompt
+          task={message.task}
+          sessionId={sessionId}
+          replyId={message.id}
+          current={isLast && !busy && !isWindowsDesktop()}
+          onReply={onPlanReply}
+        />
+      )}
+      {!refused && (!isLast || isWindowsDesktop()) && message.task && (
+        <AgentProgressButton
+          task={message.task}
+          sessionId={sessionId}
+          replyId={message.id}
+          current={false}
+          busy={busy}
+          streaming={false}
+        />
+      )}
+      {!refused && message.task && (
+        <AgentOutputs
+          task={message.task}
+          sessionId={sessionId}
+          createdAt={message.createdAt}
+          round={round}
+        />
+      )}
+      {!refused &&
+        !streaming &&
+        !busy &&
+        isLast &&
+        !isWindowsDesktop() &&
+        message.task &&
+        !notice && (
+          <AgentRunRecovery task={message.task} sessionId={sessionId} replyId={message.id} />
+        )}
       {compressing ? (
         <div role="status">{t('compressionProgress', { percent: compressing.percent })}</div>
-      ) : waiting ? (
-        <div className={styles.waiting}>
-          {[0, 1, 2].map((index) => (
-            <span key={index} className={styles.waitingDot} />
-          ))}
-        </div>
       ) : null}
       {notice?.presentation === 'response' ? (
         <Markdown
@@ -197,7 +256,11 @@ export const AssistantMessage = memo(function AssistantMessage({
               <div className={styles.compressionEstimate}>{t('compressionRecentHint')}</div>
             )}
             {notice.action === 'newChat' ? (
-              <button type="button" className={styles.noticeAction} onClick={newChat}>
+              <button
+                type="button"
+                className={styles.noticeAction}
+                onClick={(event) => newChat(event.currentTarget)}
+              >
                 {t('newChatWithoutHistory')}
               </button>
             ) : null}
@@ -245,7 +308,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               }}
             />
           </div>
-          {isLast && canContinueReply(message) ? (
+          {isLast && !message.task?.run && canContinueReply(message) ? (
             <Button
               variant="outlined"
               size="s"

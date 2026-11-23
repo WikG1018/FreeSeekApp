@@ -169,6 +169,16 @@
   border-radius: 3px;
   background: var(--context-fill);
 }
+.overflow {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--dsw-alias-state-error-primary);
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .status {
   margin: 6px 0 10px;
   color: var(--fs-secondary-text);
@@ -208,4 +218,18 @@
 .rejected p {
   margin: 4px 0 0;
   color: var(--fs-secondary-text);
+}
+.memoryDetails {
+  padding: 8px 0 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.memoryDetails summary {
+  color: var(--fs-brand-ink);
+  cursor: pointer;
+}
+.memoryDetails ul {
+  max-height: 175px;
+  overflow-y: auto;
+  padding-inline-start: 18px;
 }

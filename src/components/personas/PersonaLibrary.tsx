@@ -5,6 +5,7 @@ import {
   exportPersonas,
   importPersonas,
   isBuiltin,
+  localizePersona,
   PersonaError,
   removePersona,
   setDefaultPersona,
@@ -14,6 +15,7 @@ import {
 } from '../../services/personas.js'
 import { setSessionPersona, useChatStore } from '../../services/chat/store.js'
 import { saveBackup } from '../../services/saveBackup.js'
+import { useSettings } from '../../services/settings.js'
 import { Menu } from '../base/Menu.js'
 import { IconButton } from '../base/IconButton.js'
 import { Button } from '../base/Button.js'
@@ -111,6 +113,7 @@ export const PersonaEditor = ({ persona, onDone }: { persona: Persona; onDone: (
 export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void }) => {
   const t = useTranslate(),
     { personas, defaultId } = usePersonas()
+  const locale = useSettings((state) => state.locale)
   const [confirmDelete, setConfirmDelete] = useState<Persona | null>(null)
   const [search, setSearch] = useState(''),
     [busy, setBusy] = useState(false)
@@ -121,12 +124,14 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
     replacing = useChatStore((state) => state.importingHistory)
   const streaming = useChatStore((state) => (activeId ? Boolean(state.streaming[activeId]) : false))
   const current = useChatStore((state) => (activeId ? state.sessionCache[activeId] : undefined))
-  const visible = personas.filter(
-    (p) =>
+  const visible = personas.filter((persona) => {
+    const { name, prompt } = localizePersona(persona, locale)
+    return (
       !query ||
-      p.name.toLocaleLowerCase().includes(query) ||
-      p.prompt.toLocaleLowerCase().includes(query)
-  )
+      name.toLocaleLowerCase().includes(query) ||
+      prompt.toLocaleLowerCase().includes(query)
+    )
+  })
   const run = (action: () => void) => {
     try {
       action()
@@ -231,10 +236,12 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
             <div className={styles.list}>
               {items.map((persona) => {
                 const selected = persona.id === defaultId
+                const { name, prompt } = localizePersona(persona, locale)
                 const applied = Boolean(
                   current &&
                   ((current.persona?.name === persona.name &&
                     current.persona?.prompt === persona.prompt) ||
+                    (current.persona?.name === name && current.persona?.prompt === prompt) ||
                     (!current.persona && persona.id === 'builtin-default'))
                 )
                 return (
@@ -246,7 +253,7 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
                       onClick={() => run(() => setDefaultPersona(persona.id))}
                     >
                       <span className={styles.itemHeader}>
-                        <span className={styles.itemName}>{persona.name}</span>
+                        <span className={styles.itemName}>{name}</span>
                         {selected && (
                           <span className={styles.badge}>
                             <IconCheckOutline16 />
@@ -255,9 +262,7 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
                         )}
                       </span>
                       <span className={styles.itemPrompt}>
-                        {persona.prompt
-                          ? persona.prompt.slice(0, 240)
-                          : t('personaDefaultPromptHint')}
+                        {prompt ? prompt.slice(0, 240) : t('personaDefaultPromptHint')}
                       </span>
                     </button>
                     <Menu
@@ -271,12 +276,7 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
                                 disabled: streaming || replacing || !current || applied,
                                 onSelect: () => {
                                   if (
-                                    setSessionPersona(
-                                      activeId,
-                                      persona.prompt
-                                        ? { name: persona.name, prompt: persona.prompt }
-                                        : null
-                                    )
+                                    setSessionPersona(activeId, prompt ? { name, prompt } : null)
                                   ) {
                                     showToast({ key: 'personaApplied' })
                                   } else {
@@ -293,8 +293,8 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
                           onSelect: () =>
                             onEdit({
                               id: '',
-                              name: t('personaCopyName', { name: persona.name }).slice(0, 80),
-                              prompt: persona.prompt,
+                              name: t('personaCopyName', { name }).slice(0, 80),
+                              prompt,
                             }),
                         },
                         ...(!builtin
@@ -321,7 +321,7 @@ export const PersonaLibrary = ({ onEdit }: { onEdit: (persona: Persona) => void 
                           size="xl"
                           className={styles.more}
                           icon={<IconEllipsisOutline16 />}
-                          aria-label={t('personaMore', { name: persona.name })}
+                          aria-label={t('personaMore', { name })}
                           aria-haspopup="menu"
                           aria-expanded={open}
                           onClick={toggle}

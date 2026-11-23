@@ -256,7 +256,7 @@ export const AccountPage = ({
         <Modal
           centered
           title={
-            <span className={styles.readyTitle}>
+            <span className={styles.readyTitle} tabIndex={-1} data-modal-initial-focus>
               <span aria-hidden="true">
                 <IconCheckOutline16 />
               </span>
@@ -265,14 +265,14 @@ export const AccountPage = ({
           }
           onClose={() => setReady(false)}
           footer={
-            <>
+            <div className={styles.readyActions}>
               <Button variant="outlined" onClick={() => setReady(false)}>
-                {t('officialStayInSettings')}
+                {t('officialBackToSettings')}
               </Button>
               <Button onClick={goChat}>
                 {t(customName === null ? 'officialStartChat' : 'officialSwitchAndChat')}
               </Button>
-            </>
+            </div>
           }
         >
           <p className={styles.readyMessage}>

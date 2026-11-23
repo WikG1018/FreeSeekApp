@@ -18,7 +18,7 @@ const AVAILABLE = typeof window === 'undefined' || window.isSecureContext
 const describeRecordingError = (error: unknown): TranslationMessage => {
   if (error instanceof DOMException) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-      return { key: 'voiceInputPermissionDenied' }
+      return { key: isNativeApp() ? 'voiceInputPermissionDenied' : 'voiceInputBrowserPermission' }
     }
     if (error.name === 'NotFoundError') {
       return { key: 'voiceInputNoDevice' }

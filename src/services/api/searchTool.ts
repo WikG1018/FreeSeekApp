@@ -2,13 +2,24 @@ import { ApiError } from './errorTypes.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ProviderProfile } from '../providers.js'
 import type { MessageStreamEvent } from './types.js'
+import type { GoalWire } from '../tasks/goalBridge.js'
+import type { AgentStopReason } from '../tasks/runState.js'
+
+import {
+  announceClientTools,
+  compactTaskResults,
+  collectProviderSearchTurn,
+  continueGoalConversation,
+  type ProviderToolTurn,
+  type SearchTurnCollector,
+} from './toolProtocols.js'
+export type { SearchTurnCollector } from './toolProtocols.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {}
-const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
-const str = (value: unknown) => (typeof value === 'string' ? value : '')
 
+const str = (value: unknown) => (typeof value === 'string' ? value : '')
 const name = 'freeseek_web_search'
 const MAX_SEARCH_REQUESTS = 3
 const SEARCH_BUDGET_MS = 30_000
@@ -24,17 +35,32 @@ const parameters = {
   required: ['query', 'count'],
   additionalProperties: false,
 }
-export const anthropicSearchTool = { name, description, input_schema: parameters }
-
 export type SearchInput = { query: string; count: number }
-export type SearchOutput = { text: string; isError?: boolean }
+export type SearchOutput = { text: string; isError?: boolean; sourceUrls?: string[] }
 export type SearchTool = {
   execute: (input: SearchInput, timeoutMs: number) => Promise<SearchOutput>
   unavailable: () => void
 }
 
-type ToolCall = { id: string; name: string; input: unknown }
-type ToolTurn<T> = { calls: ToolCall[]; continuation: (outputs: SearchOutput[]) => T }
+export type ToolDefinition = { name: string; description: string; parameters: Json }
+export type TaskToolset = {
+  definitions: ToolDefinition[]
+  statefulNames?: string[]
+  execute: (name: string, input: unknown, timeoutMs: number) => Promise<SearchOutput>
+  unavailable: () => void
+  limited: (reason: AgentStopReason) => void
+  host?: (wire: GoalWire) => Promise<boolean>
+  beforeRound?: (body: Json) => Promise<AgentStopReason | undefined>
+  afterRound?: (confirmed: boolean) => void
+  failedCall?: (reason: string) => void
+  waiting?: () => boolean
+  finish?: () => void
+  continueGoal?: () => string | undefined
+  rememberForegroundResult?: (id: string, value: SearchOutput) => void
+  abandonPendingMcp?: () => void
+}
+export const webSearchDefinition: ToolDefinition = { name, description, parameters }
+export const parseSearchInput = (input: unknown): SearchInput | undefined => searchInput(input)
 
 const parseArguments = (value: unknown): unknown => {
   try {
@@ -61,293 +87,6 @@ const searchInput = (value: unknown): SearchInput | undefined => {
   return { query, count }
 }
 
-const uniqueCallIds = (calls: ToolCall[]) =>
-  calls.every((call) => call.id && call.name) &&
-  new Set(calls.map((call) => call.id)).size === calls.length
-
-/** The companion request needs complete native blocks, especially signed thinking and tool IDs. */
-const collectAnthropicSearchTurn = () => {
-  const blocks = new Map<number, Json>()
-  const argumentsByIndex = new Map<number, string>()
-  const invalidArguments = new Set<number>()
-  return {
-    read(raw: unknown) {
-      const data = object(raw)
-      if (data.type === 'message') {
-        list(data.content).forEach((part, index) => blocks.set(index, object(part)))
-      }
-      const index = data.index
-      if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) {
-        return
-      }
-      if (data.type === 'content_block_start') {
-        blocks.set(index, { ...object(data.content_block) })
-      }
-      const block = blocks.get(index)
-      if (data.type !== 'content_block_delta' || !block) {
-        return
-      }
-      const delta = object(data.delta)
-      if (block.type === 'tool_use' && delta.type === 'input_json_delta') {
-        const args = (argumentsByIndex.get(index) ?? '') + str(delta.partial_json)
-        if (args.length > 4096) {
-          invalidArguments.add(index)
-        } else {
-          argumentsByIndex.set(index, args)
-        }
-      } else if (block.type === 'thinking' && delta.type === 'thinking_delta') {
-        block.thinking = str(block.thinking) + str(delta.thinking)
-      } else if (block.type === 'thinking' && delta.type === 'signature_delta') {
-        block.signature = str(block.signature) + str(delta.signature)
-      } else if (block.type === 'text' && delta.type === 'text_delta') {
-        block.text = str(block.text) + str(delta.text)
-      }
-    },
-    finish(): ToolTurn<Json[]> | undefined {
-      const content = [...blocks]
-        .sort(([first], [second]) => first - second)
-        .map(([index, block]) =>
-          block.type === 'tool_use' && argumentsByIndex.has(index)
-            ? { ...block, input: parseArguments(argumentsByIndex.get(index)) ?? {} }
-            : block
-        )
-      const calls = content
-        .filter((block) => block.type === 'tool_use')
-        .map((block) => ({ id: str(block.id), name: str(block.name), input: block.input }))
-      if (invalidArguments.size || !calls.length || !uniqueCallIds(calls)) {
-        return undefined
-      }
-      return {
-        calls,
-        continuation: (outputs) => [
-          { role: 'assistant', content },
-          {
-            role: 'user',
-            content: outputs.map(({ text, isError }, i) => ({
-              type: 'tool_result',
-              tool_use_id: calls[i].id,
-              content: text,
-              ...(isError && { is_error: true }),
-            })),
-          },
-        ],
-      }
-    },
-  }
-}
-
-const announceProviderSearch = (body: Json, protocol: ProviderProfile['protocol']): Json => {
-  const declaration = { name, description, parameters }
-  if (protocol === 'gemini') {
-    return {
-      ...body,
-      tools: [{ functionDeclarations: [{ name, description, parametersJsonSchema: parameters }] }],
-      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-    }
-  }
-  if (protocol === 'anthropic') {
-    return { ...body, tools: [anthropicSearchTool], tool_choice: { type: 'auto' } }
-  }
-  if (protocol === 'responses') {
-    return {
-      ...body,
-      tools: [{ type: 'function', ...declaration, strict: false }],
-      tool_choice: 'auto',
-      // Responses runs statelessly. Replay opaque reasoning state when the provider returns it.
-      include: [...new Set([...list(body.include), 'reasoning.encrypted_content'])],
-    }
-  }
-  return { ...body, tools: [{ type: 'function', function: declaration }], tool_choice: 'auto' }
-}
-
-type ProviderToolTurn = ToolTurn<Json>
-const collectChatCompletions = (body: Json) => {
-  const calls = new Map<number, { id: string; name: string; arguments: string }>()
-  const reasoningDetails: unknown[] = []
-  let content = ''
-  let reasoning = ''
-  let reasoningContent = ''
-  let invalid = false
-  return {
-    read(data: Json) {
-      const choice = object(list(data.choices)[0])
-      const delta = object(choice.delta ?? choice.message)
-      content += Array.isArray(delta.content)
-        ? delta.content.map((part) => str(object(part).text)).join('')
-        : str(delta.content)
-      reasoning += str(delta.reasoning)
-      reasoningContent += str(delta.reasoning_content)
-      reasoningDetails.push(...list(delta.reasoning_details))
-      list(delta.tool_calls).forEach((entry, i) => {
-        const part = object(entry)
-        const index = typeof part.index === 'number' ? part.index : i
-        const item = calls.get(index) ?? { id: '', name: '', arguments: '' }
-        const fn = object(part.function)
-        item.id ||= str(part.id)
-        item.name ||= str(fn.name)
-        item.arguments += str(fn.arguments)
-        invalid ||=
-          item.arguments.length > 4096 || (part.type !== undefined && part.type !== 'function')
-        if (!invalid) {
-          calls.set(index, item)
-        }
-      })
-    },
-    finish(): ProviderToolTurn | undefined {
-      const items = [...calls].sort(([first], [second]) => first - second).map(([, call]) => call)
-      const toolCalls = items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        input: item.arguments,
-      }))
-      if (invalid || !toolCalls.length || !uniqueCallIds(toolCalls)) {
-        return undefined
-      }
-      return {
-        calls: toolCalls,
-        continuation: (outputs) => ({
-          ...body,
-          messages: [
-            ...list(body.messages),
-            {
-              role: 'assistant',
-              content: content || null,
-              ...(reasoning && { reasoning }),
-              ...(reasoningContent && { reasoning_content: reasoningContent }),
-              ...(reasoningDetails.length && { reasoning_details: reasoningDetails }),
-              tool_calls: items.map(({ id, name, arguments: args }) => ({
-                id,
-                type: 'function',
-                function: { name, arguments: args },
-              })),
-            },
-            ...outputs.map(({ text }, i) => ({
-              role: 'tool',
-              tool_call_id: items[i].id,
-              content: text,
-            })),
-          ],
-        }),
-      }
-    },
-  }
-}
-
-const collectResponses = (body: Json) => {
-  let output: unknown[] = []
-  return {
-    read(data: Json) {
-      if (data.type === 'response.completed' || (!data.type && data.status === 'completed')) {
-        output = list(object(data.response ?? data).output)
-      }
-    },
-    finish(): ProviderToolTurn | undefined {
-      const calls = output
-        .map(object)
-        .filter((item) => item.type === 'function_call')
-        .map((item) => ({
-          id: str(item.call_id),
-          name: str(item.name),
-          input: item.arguments,
-        }))
-      if (!calls.length || !uniqueCallIds(calls)) {
-        return undefined
-      }
-      return {
-        calls,
-        continuation: (outputs) => ({
-          ...body,
-          input: [
-            ...list(body.input),
-            ...output,
-            ...outputs.map(({ text }, i) => ({
-              type: 'function_call_output',
-              call_id: calls[i].id,
-              output: text,
-            })),
-          ],
-        }),
-      }
-    },
-  }
-}
-
-const collectGemini = (body: Json) => {
-  const parts: unknown[] = []
-  let completed = false
-  return {
-    read(data: Json) {
-      const candidate = object(list(data.candidates)[0])
-      parts.push(...list(object(candidate.content).parts))
-      if (candidate.finishReason) {
-        completed = candidate.finishReason === 'STOP'
-      }
-    },
-    finish(): ProviderToolTurn | undefined {
-      const calls = parts
-        .map(object)
-        .filter((part) => part.functionCall)
-        .map(({ functionCall }) => {
-          const call = object(functionCall)
-          return { id: str(call.id), name: str(call.name), input: call.args }
-        })
-      if (!completed || !calls.length || calls.some((call) => !call.name)) {
-        return undefined
-      }
-      return {
-        calls,
-        continuation: (outputs) => ({
-          ...body,
-          contents: [
-            ...list(body.contents),
-            { role: 'model', parts },
-            {
-              role: 'user',
-              parts: outputs.map(({ text, isError }, i) => ({
-                functionResponse: {
-                  name: calls[i].name,
-                  ...(calls[i].id && { id: calls[i].id }),
-                  response: isError ? { error: text } : { output: text },
-                },
-              })),
-            },
-          ],
-        }),
-      }
-    },
-  }
-}
-
-const collectProviderSearchTurn = (body: Json, protocol: ProviderProfile['protocol']) => {
-  if (protocol === 'openai') {
-    return collectChatCompletions(body)
-  }
-  if (protocol === 'responses') {
-    return collectResponses(body)
-  }
-  if (protocol === 'gemini') {
-    return collectGemini(body)
-  }
-  const turn = collectAnthropicSearchTurn()
-  return {
-    read: turn.read,
-    finish(): ProviderToolTurn | undefined {
-      const result = turn.finish()
-      return (
-        result && {
-          calls: result.calls,
-          continuation: (outputs) => ({
-            ...body,
-            messages: [...list(body.messages), ...result.continuation(outputs)],
-          }),
-        }
-      )
-    },
-  }
-}
-
-export type SearchTurnCollector = ReturnType<typeof collectProviderSearchTurn>
-
 const answerWithoutMoreSearch = (body: Json, protocol: ProviderProfile['protocol']): Json => {
   if (protocol === 'gemini') {
     return { ...body, toolConfig: { functionCallingConfig: { mode: 'NONE' } } }
@@ -368,7 +107,7 @@ export async function* streamWithProviderSearch(
     collector?: SearchTurnCollector
   ) => AsyncGenerator<MessageStreamEvent, ProviderToolTurn | undefined>
 ): AsyncGenerator<MessageStreamEvent> {
-  let request = announceProviderSearch(body, protocol)
+  let request = announceClientTools(body, protocol, [webSearchDefinition])
   const queries = new Set<string>()
   let remainingMs = SEARCH_BUDGET_MS
   let canSearch = true
@@ -440,4 +179,178 @@ export async function* streamWithProviderSearch(
     request = turn.continuation(outputs)
   }
   yield* stream(answerWithoutMoreSearch(request, protocol))
+}
+
+const TASK_ARGUMENT_LIMIT = 160_000
+const TASK_BATCH_LIMIT = 24
+const TASK_FALLBACK_ROUNDS = 40
+const TASK_TOOL_TIMEOUT_MS = 25_000
+const TASK_MODEL_IDLE_MS = 300_000
+
+/** Keep the useful parts of prior results in the request, with complete evidence in the run. */
+export async function* streamWithTaskTools(
+  body: Json,
+  protocol: ProviderProfile['protocol'],
+  tools: TaskToolset,
+  signal: AbortSignal,
+  stream: (
+    body: Json,
+    collector?: SearchTurnCollector,
+    requestSignal?: AbortSignal
+  ) => AsyncGenerator<MessageStreamEvent, ProviderToolTurn | undefined>
+): AsyncGenerator<MessageStreamEvent> {
+  let request = announceClientTools(body, protocol, tools.definitions)
+  const allowed = new Set(tools.definitions.map((tool) => tool.name))
+  const stateful = new Set(tools.statefulNames)
+  const completed = new Map<string, SearchOutput>()
+  let lastBatch = ''
+  let repeats = 0
+  for (let round = 0; tools.beforeRound || round < TASK_FALLBACK_ROUNDS; round++) {
+    signal.throwIfAborted()
+    if (round > 1) {
+      request = compactTaskResults(request, protocol)
+    }
+    const blocked = await tools.beforeRound?.(request)
+    if (blocked) {
+      tools.limited(blocked)
+      return
+    }
+    signal.throwIfAborted()
+    let turn: ProviderToolTurn | undefined
+    let outputLimited = false
+    let text = ''
+    const requestController = new AbortController()
+    const abort = () => requestController.abort(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    const armIdle = () => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => requestController.abort(), TASK_MODEL_IDLE_MS)
+    }
+    armIdle()
+    try {
+      const iterator = stream(
+        request,
+        collectProviderSearchTurn(request, protocol, TASK_ARGUMENT_LIMIT),
+        requestController.signal
+      )
+      try {
+        for (;;) {
+          const result = await iterator.next()
+          if (result.done) {
+            turn = result.value
+            break
+          }
+          const event = result.value
+          if (
+            event.type === 'message_start' ||
+            event.type === 'content_block_start' ||
+            event.type === 'content_block_delta' ||
+            event.type === 'agent_tool_input'
+          ) {
+            armIdle()
+          }
+          if (event.type === 'content_block_start' && event.content_block.type === 'text') {
+            text += event.content_block.text
+          } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            text += event.delta.text
+          }
+          if (event.type === 'message_delta' && event.delta.stop_reason === 'max_tokens') {
+            outputLimited = true
+          }
+          yield event
+        }
+      } finally {
+        await iterator.return(undefined)
+      }
+      tools.afterRound?.(true)
+    } catch (error) {
+      const confirmed =
+        error instanceof ApiError &&
+        (error.kind === 'http' || error.kind === 'protocol' || error.kind === 'stream')
+      tools.afterRound?.(confirmed)
+      if (signal.aborted) {
+        signal.throwIfAborted()
+      }
+      if (requestController.signal.aborted) {
+        tools.limited('provider-timeout')
+        return
+      }
+      if (
+        error instanceof ApiError &&
+        (error.localMessage?.key === 'providerSearchToolRejected' ||
+          error.localMessage?.key === 'providerToolUnsupported')
+      ) {
+        tools.unavailable()
+        return
+      }
+      throw error
+    } finally {
+      clearTimeout(idleTimer)
+      signal.removeEventListener('abort', abort)
+    }
+    if (outputLimited) {
+      tools.limited('output-limit')
+      return
+    }
+    if (!turn) {
+      const followup = tools.continueGoal?.()
+      if (followup) {
+        request = continueGoalConversation(request, protocol, text, followup)
+        continue
+      }
+      tools.finish?.()
+      return
+    }
+    if (turn.calls.length > TASK_BATCH_LIMIT) {
+      tools.failedCall?.('tool-batch-too-large')
+      tools.limited('no-progress')
+      return
+    }
+    const keys = turn.calls.map(({ name, input }) => name + ':' + JSON.stringify(input)).join('\n')
+    const repeatsStateful = turn.calls.some(({ name }) => stateful.has(name))
+    repeats = keys === lastBatch && !repeatsStateful ? repeats + 1 : 1
+    lastBatch = keys
+    if (repeats >= 4) {
+      tools.limited('no-progress')
+      return
+    }
+
+    const outputs: SearchOutput[] = []
+    for (const call of turn.calls) {
+      signal.throwIfAborted()
+      const raw = typeof call.input === 'string' ? call.input : JSON.stringify(call.input)
+      const parsed = raw && raw.length <= TASK_ARGUMENT_LIMIT ? parseArguments(raw) : undefined
+      if (
+        !allowed.has(call.name) ||
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed)
+      ) {
+        tools.failedCall?.(allowed.has(call.name) ? 'invalid-arguments' : 'unknown-tool')
+        outputs.push({
+          isError: true,
+          text: 'This tool or its arguments are unavailable. Use an enabled tool with valid arguments.',
+        })
+        continue
+      }
+      const key = call.name + ':' + raw
+      const cached = stateful.has(call.name) ? undefined : completed.get(key)
+      if (cached) {
+        outputs.push(cached)
+        continue
+      }
+      const output = await tools.execute(call.name, parsed, TASK_TOOL_TIMEOUT_MS)
+      signal.throwIfAborted()
+      if (!stateful.has(call.name) && !output.isError && completed.size < 120) {
+        completed.set(key, output)
+      }
+      outputs.push(output)
+      if (tools.waiting?.()) {
+        return
+      }
+    }
+    request = turn.continuation(outputs)
+  }
+  tools.limited('budget-requests')
 }

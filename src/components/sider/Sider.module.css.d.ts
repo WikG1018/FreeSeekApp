@@ -2,6 +2,11 @@ declare const styles: {
   readonly sider: string
   readonly top: string
   readonly appName: string
+  readonly quickActions: string
+  readonly historyToolbar: string
+  readonly sortButton: string
+  readonly sortChevron: string
+  readonly deleteMemory: string
   readonly newChat: string
   readonly newChatIcon: string
   readonly listWrap: string

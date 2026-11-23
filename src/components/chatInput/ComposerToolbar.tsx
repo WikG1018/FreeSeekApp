@@ -4,6 +4,7 @@ import { supportsOfficialChatExtensions } from '../../services/api/types.js'
 import {
   activeReasoning,
   providerModelLabel,
+  selectedReasoning,
   setReasoningOverride,
   useProviders,
 } from '../../services/providers.js'
@@ -25,6 +26,8 @@ import { ReasoningOptions, reasoningLabels } from '../base/ReasoningOptions.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
 import { ContextUsage } from './ContextUsage.js'
 import { ModelPicker } from './ModelPicker.js'
+import { AgentRunModeControl } from './AgentRunMode.js'
+import { useChatMode, useSessionAgent } from '../session/SessionAssistant.js'
 import { useComposerToolbarLayout } from './useComposerToolbarLayout.js'
 import styles from './ChatInput.module.css'
 
@@ -34,43 +37,50 @@ export const ComposerToolbar = memo(function ComposerToolbar({
   draftImage,
   disabled,
   modelLocked,
+  planLocked,
 }: {
   editorRef: RefObject<HTMLTextAreaElement>
   sessionId: string | null
   draftImage: boolean
   disabled: boolean
   modelLocked: boolean
+  planLocked: boolean
 }) {
   const t = useTranslate()
   const state = useProviders()
   const settings = useSettings()
-  const { selection, reasoningOverride } = state
+  const agent = useSessionAgent(sessionId)
+  const taskMode = useChatMode(sessionId) === 'agent'
+  const selection = agent?.model ?? state.selection
   const official = selection.providerId === 'deepseek'
   const profile = state.profiles.find((item) => item.id === selection.providerId)
-  const control = activeReasoning(state, settings)
-  const level =
-    control &&
-    reasoningOverride?.sessionId === sessionId &&
-    control.levels.includes(reasoningOverride.level)
-      ? reasoningOverride.level
-      : control?.defaultLevel
+  const control = activeReasoning({ ...state, selection }, settings)
+  const level = selectedReasoning(sessionId, selection)?.level
   const showPicker = Boolean(settings.showModelSwitcher && settings.showReasoningPicker && control)
   const active = level !== undefined && level !== 'off'
   const switchable = Boolean(
     control?.levels.includes('off') && control.levels.some((value) => value !== 'off')
   )
-  const embeddedSearch = official && supportsOfficialChatExtensions(selection.model)
-  const searchReady = embeddedSearch || Boolean(thirdPartySearchKey(settings))
-  const searchOn = embeddedSearch
+  const officialFlash = official && supportsOfficialChatExtensions(selection.model)
+  const embeddedSearch = officialFlash && !taskMode
+  const searchAllowed = agent?.search !== false && (!taskMode || settings.agentTools.search)
+  const searchReady = searchAllowed && (embeddedSearch || Boolean(thirdPartySearchKey(settings)))
+  const searchOn = officialFlash
     ? settings.search
     : official
       ? settings.proSearchOn
       : settings.thirdPartySearchOn
-  const searchHint = !searchReady
-    ? 'thirdPartySearchSetupHint'
-    : embeddedSearch
-      ? 'deactivatedSearchTooltip'
-      : 'thirdPartySearchPricing'
+  const searchHint = !searchAllowed
+    ? taskMode && !settings.agentTools.search
+      ? 'agentSearchToolDisabled'
+      : 'assistantSearchDisabled'
+    : !searchReady
+      ? taskMode
+        ? 'taskSearchSetup'
+        : 'thirdPartySearchSetupHint'
+      : embeddedSearch
+        ? 'deactivatedSearchTooltip'
+        : 'thirdPartySearchPricing'
   const title = t('reasoningStrength')
   const panel = useOptionPanel(title, {
     kind: 'reasoning',
@@ -85,6 +95,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
     [
       providerModelLabel(selection.model, profile),
       settings.showModelSwitcher,
+      taskMode,
       showPicker,
       displayLevel,
       settings.locale,
@@ -103,10 +114,20 @@ export const ComposerToolbar = memo(function ComposerToolbar({
       role="group"
       aria-label={t('composerTools')}
       data-testid="composer-toolbar"
+      data-mode={taskMode ? 'agent' : undefined}
     >
-      {settings.showModelSwitcher && (
+      {taskMode && (
+        <AgentRunModeControl
+          sessionId={sessionId}
+          disabled={disabled || modelLocked || planLocked}
+          lockedToPlan={planLocked}
+          editorRef={editorRef}
+        />
+      )}
+      {(settings.showModelSwitcher || agent?.model) && (
         <ModelPicker
           disabled={disabled || modelLocked}
+          fixed={agent?.model ?? undefined}
           editorRef={editorRef}
           sessionId={sessionId}
           draftImage={draftImage}
@@ -163,7 +184,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
                   control.defaultLevel !== 'off'
                     ? control.defaultLevel
                     : (control.levels.find((item) => item !== 'off') ?? control.defaultLevel)
-                setReasoningOverride(sessionId, active ? 'off' : on)
+                setReasoningOverride(sessionId, active ? 'off' : on, selection)
               }}
             >
               <span className={styles.toolFace}>
@@ -187,10 +208,10 @@ export const ComposerToolbar = memo(function ComposerToolbar({
             data-toolbar-control="search"
             onClick={() => {
               if (!searchReady) {
-                showToast({ key: 'thirdPartySearchSetupHint' })
+                showToast({ key: searchHint })
                 return
               }
-              if (embeddedSearch) {
+              if (officialFlash) {
                 setSearch(!searchOn)
               } else if (official) {
                 setProSearchOn(!searchOn)
@@ -201,7 +222,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
           >
             <span className={styles.toolFace}>
               <IconGlobeLanguageOutline14 />
-              <span>
+              <span className={styles.searchLabel}>
                 <span className={styles.searchFull}>{t('search')}</span>
                 <span className={styles.searchShort}>{t('searchShort')}</span>
               </span>
@@ -220,7 +241,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
             level={level}
             showDefault
             choose={(value) => {
-              setReasoningOverride(sessionId, value)
+              setReasoningOverride(sessionId, value, selection)
               panel.close(true)
             }}
           />

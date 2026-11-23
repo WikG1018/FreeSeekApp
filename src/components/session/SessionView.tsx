@@ -1,16 +1,21 @@
 import clsx from 'clsx'
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
+import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import { newChat } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
 import { useSettings } from '../../services/settings.js'
+import { conversationRounds, sessionArtifacts } from '../../services/tasks/sessionArtifacts.js'
 import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
 import { MobileHeader } from './MobileHeader.js'
+import { SessionAssistant, useSessionAgent } from './SessionAssistant.js'
+import { SessionArtifactsButton } from './SessionArtifacts.js'
+import { useAssistantLibrary } from '../../services/assistants/library.js'
 import styles from './SessionView.module.css'
 
 /** 会话内所有已记录回复的 token 总量（输入含缓存 + 输出） */
@@ -47,22 +52,49 @@ export const SessionView = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const showUsage = useSettings((state) => state.showUsage)
-  const title = session.title || t('untitledChat')
+  const agent = useSessionAgent(session.id)
+  const controls = useAssistantLibrary(
+    (state) => state.data.enabled || (!isWindowsDesktop() && state.data.agents.length > 0)
+  )
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const { artifacts, rounds } = useMemo(() => {
+    if (
+      !session.messages.some(
+        (message) => message.role === 'assistant' && message.task?.artifacts.length
+      )
+    ) {
+      return { artifacts: [] }
+    }
+    const rounds = conversationRounds(session.messages)
+    return { artifacts: sessionArtifacts(session.messages, rounds), rounds }
+  }, [session.messages])
+  const artifactsButton = artifacts.length > 0 && (
+    <SessionArtifactsButton key={session.id} files={artifacts} sessionId={session.id} />
+  )
+  const agentName = agent?.name ?? session.agent?.name
+  const title =
+    (session.mode === 'agent' ? 'Agent · ' : '') +
+    (session.title || t(session.inherited ? 'inheritedChatTitle' : 'untitledChat')) +
+    (agentName ? ' · ' + agentName : '')
+  const openAssistant =
+    controls || (!isWindowsDesktop() && session.agent) ? () => setAssistantOpen(true) : undefined
   const tokens = useMemo(() => sessionTokens(session), [session])
-  const pricing = usePricing((state) => state.pricing)
+  const pricing = usePricing()
   const cost = useMemo(
     () =>
       getVisibleMessages(session).reduce((total, message) => {
         if (message.role !== 'assistant' || !message.usage) {
           return total
         }
-        return total + computeReplyUsage(message, pricing).costCny
+        return total + computeReplyUsage(message, pricing.pricing).costCny
       }, 0),
     [session, pricing]
   )
   const viewRef = useRef<HTMLDivElement>(null),
     dockRef = useRef<HTMLDivElement>(null),
     headerRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+  const focusComposer = useCallback(() => editorRef.current?.focus({ preventScroll: true }), [])
   // 遮罩和末尾留白随输入框真实高度变化，长草稿、附件和字体缩放不会盖住最后一条消息。
   useLayoutEffect(() => {
     const view = viewRef.current,
@@ -101,33 +133,66 @@ export const SessionView = ({
   return (
     <div ref={viewRef} className={styles.view} data-testid="chat-view">
       {isMobile ? (
-        <MobileHeader title={title} headerRef={headerRef} />
+        <MobileHeader
+          title={title}
+          headerRef={headerRef}
+          openAssistant={openAssistant}
+          artifactsButton={artifactsButton}
+        />
       ) : (
         <div ref={headerRef} className={styles.header} data-testid="chat-header">
           <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
-            <div className={styles.title}>{title}</div>
+            {openAssistant ? (
+              <button
+                type="button"
+                className={clsx(styles.title, styles.assistantTitle)}
+                aria-label={t('assistantChatOptions')}
+                onClick={openAssistant}
+              >
+                {title}
+              </button>
+            ) : (
+              <div className={styles.title}>{title}</div>
+            )}
             {showUsage && tokens > 0 ? (
               <span className={styles.usage} title={t('usageTokensTitle')}>
                 {formatTokens(tokens)} tok{priced ? ` · ${formatCost(cost)}` : ''}
               </span>
             ) : null}
           </div>
-          <button
-            type="button"
-            className={styles.headerAction}
-            aria-label={t('newChat')}
-            onClick={newChat}
-          >
-            <IconNewChatOutline20 />
-          </button>
+          <div className={styles.headerActions}>
+            {artifactsButton}
+            <button
+              type="button"
+              className={styles.headerAction}
+              aria-label={t('newChat')}
+              data-chat-mode-anchor
+              onClick={(event) => newChat(event.currentTarget)}
+            >
+              <IconNewChatOutline20 />
+            </button>
+          </div>
         </div>
       )}
-      <MessageList session={session} streaming={streaming} />
+      <MessageList
+        session={session}
+        streaming={streaming}
+        rounds={rounds}
+        onPlanReply={focusComposer}
+      />
       <div ref={dockRef} className={styles.dock} data-testid="chat-dock">
         <div className={styles.dockInner}>
-          <ChatInput sessionId={session.id} />
+          <ChatInput sessionId={session.id} editorRef={editorRef} />
         </div>
       </div>
+      {assistantOpen && (
+        <SessionAssistant
+          key={session.id}
+          session={session}
+          streaming={streaming}
+          close={() => setAssistantOpen(false)}
+        />
+      )}
     </div>
   )
 }

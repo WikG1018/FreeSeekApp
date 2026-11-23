@@ -24,7 +24,8 @@
     </style>
     <style name="AppTheme.NoActionBarLaunch" parent="AppTheme.LaunchBase" />
     <color name="freeseek_launch_surface">#FFFFFF</color>
-    <color name="freeseek_launch_ink">#172B45</color>
+    <color name="freeseek_launch_ink">#345DCC</color>
+    <color name="freeseek_whale_dark">#ADC4FF</color>
     <bool name="freeseek_launch_light_bars">true</bool>
 
     <style name="FreeSeekWindowDark">

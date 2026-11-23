@@ -41,6 +41,10 @@ export const browserEnvironment = () => {
     createImageBitmap: typeof createImageBitmap === 'function',
     mediaDevices: Boolean(navigator.mediaDevices),
     capabilities: {
+      camera: typeof navigator.mediaDevices?.getUserMedia === 'function',
+      fileShare: typeof navigator.canShare === 'function',
+      browserFileStorage: typeof navigator.storage?.getDirectory === 'function',
+      tabLocks: Boolean(navigator.locks),
       indexedDB: typeof indexedDB !== 'undefined',
       streamRead: typeof ReadableStream === 'function',
       streamWrite: typeof WritableStream === 'function',

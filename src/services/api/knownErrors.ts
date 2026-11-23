@@ -74,8 +74,8 @@ export const describeKnownApiError = (
     return { key: 'replyOutputLimitInvalid', params: apiLimitCounts(message) }
   }
   if (
-    /^(?:context_length_exceeded|context_window_exceeded|prompt_too_long)$/i.test(code) ||
-    /\bcontext[_-](?:length|window)[_-]exceeded\b|\bmax(?:imum)?\s+(?:model\s+)?context\s+(?:length|window|limit)\b|\bcontext\s+(?:length|window|limit)\s+(?:is\s+)?(?:exceeded|too long|of\s+[\d,]+)|\b(?:exceeds?|over)\s+(?:the\s+)?(?:model['’]s\s+)?(?:max(?:imum)?\s+)?context\s+(?:length|window|limit)\b|\b(?:prompt|input|context)\s+is\s+too\s+long\b|\binput\s+tokens?.{0,38}(?:exceeds?|too\s+long)\b/i.test(
+    /^(?:context_length_exceeded|context_window_exceeded|prompt_too_long|user_input_too_long)$/i.test(code) ||
+    /\bcontext[_-](?:length|window)[_-]exceeded\b|\bmax(?:imum)?\s+(?:model\s+)?context\s+(?:length|window|limit)\b|\bcontext\s+(?:length|window|limit)\s+(?:is\s+)?(?:exceeded|too long|of\s+[\d,]+)|\b(?:exceeds?|over)\s+(?:the\s+)?(?:model['’]s\s+)?(?:max(?:imum)?\s+)?context\s+(?:length|window|limit)\b|\b(?:prompt|input|context)\s+is\s+too\s+long\b|\binput\s+tokens?.{0,38}(?:exceeds?|too\s+long)\b|\buser\s+input\s+too\s+long\b|\btokens?\b.{0,40}\b(?:but\s+)?(?:the\s+)?max(?:imum)?\s+(?:is|of)\s*[:=]?\s*[\d,]+/i.test(
       message
     )
   ) {
@@ -95,11 +95,25 @@ export const apiLimitCounts = (message: string): Record<string, number> => {
   const patterns: [string, RegExp][] = [
     [
       'contextLimitTokens',
+      // 第三方网关与官方文档解析常见句式：… exceeds max 32768 tokens / limit is 32768
+      /\bexceeds?\s+(?:the\s+)?(?:max(?:imum)?|limit)(?:\s+(?:of|is))?\s*[:=]?\s*([\d,]+)\s*tokens?\b/i,
+    ],
+    [
+      'contextLimitTokens',
       /(?:maximum context length|context (?:window|limit))(?:\s+(?:is|of))?\s*[:=]?\s*([\d,]+)(?=\s*(?:tokens?\b|[.;,)]|$))/i,
+    ],
+    [
+      'contextLimitTokens',
+      /\b(?:but\s+)?(?:the\s+)?max(?:imum)?\s+(?:is|of)\s*[:=]?\s*([\d,]+)/i,
     ],
     [
       'requestedTokens',
       /(?:you requested|request contains)\s*([\d,]+)\s+tokens?\b|requested tokens?\s*[:=]\s*([\d,]+)/i,
+    ],
+    [
+      // 同上句式里的实际用量：159058 tokens exceeds max …
+      'requestedTokens',
+      /\b([\d,]+)\s*tokens?\s+exceeds?\b/i,
     ],
     [
       'outputLimitTokens',
@@ -108,6 +122,9 @@ export const apiLimitCounts = (message: string): Record<string, number> => {
   ]
   const result: Record<string, number> = {}
   for (const [key, pattern] of patterns) {
+    if (result[key] !== undefined) {
+      continue
+    }
     const match = pattern.exec(message),
       value = match ? Number((match[1] ?? match[2]).replaceAll(',', '')) : NaN
     if (Number.isInteger(value) && value > 0 && value <= 10000000) {

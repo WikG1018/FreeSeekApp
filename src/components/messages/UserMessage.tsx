@@ -2,13 +2,16 @@ import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
 import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
-import { IconEditOutline16 } from '../base/icons.js'
-import { editMessage, retryUpload } from '../../services/chat/store.js'
+import { IconBookOutline16, IconEditOutline16 } from '../base/icons.js'
+import { editMessage, retryUpload, useChatStore } from '../../services/chat/store.js'
+import { useAssistantLibrary } from '../../services/assistants/library.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
+import { openMemoryEditor } from '../settings/MemoryDialogs.js'
+import { useSessionAgent } from '../session/SessionAssistant.js'
 import {
   BranchSwitcher,
   type MessageVersions,
@@ -40,6 +43,8 @@ export const UserMessage = memo(function UserMessage({
   onSelectVersion: SelectMessageVersion
 }) {
   const t = useTranslate()
+  const memoryEnabled = useAssistantLibrary((state) => state.data.enabled)
+  const agent = useSessionAgent(sessionId)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -57,7 +62,11 @@ export const UserMessage = memo(function UserMessage({
   }, [editing, draft])
 
   const sendEdit = () => {
-    if (canSend && ensureApiKey() && editMessage(sessionId, message.id, draft.trim())) {
+    if (
+      canSend &&
+      (agent?.model || ensureApiKey()) &&
+      editMessage(sessionId, message.id, draft.trim())
+    ) {
       stopReadAloud()
       setEditing(false)
     }
@@ -79,6 +88,8 @@ export const UserMessage = memo(function UserMessage({
             <MessageFile
               key={file.id}
               file={file}
+              sessionId={sessionId}
+              createdAt={message.createdAt}
               onRetry={retryUploadId ? () => retryUpload(sessionId, retryUploadId) : null}
             />
           ))}
@@ -124,6 +135,20 @@ export const UserMessage = memo(function UserMessage({
           <div className={styles.bottom}>
             <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
               {message.content ? <CopyButton text={message.content} /> : null}
+              {memoryEnabled && message.content.trim() && (
+                <IconButton
+                  icon={<IconBookOutline16 />}
+                  tooltip={t('assistantSaveFromMessage')}
+                  tooltipPlacement="bottom"
+                  onClick={() =>
+                    openMemoryEditor({
+                      text: message.content,
+                      agentId: useChatStore.getState().sessionCache[sessionId]?.agent?.id,
+                      source: { sessionId, messageId: message.id },
+                    })
+                  }
+                />
+              )}
               <IconButton
                 icon={<IconEditOutline16 />}
                 tooltip={t('editMessage')}

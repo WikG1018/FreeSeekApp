@@ -15,8 +15,13 @@ import java.util.UUID;
 final class ShareFiles {
     private ShareFiles() {}
     static File create(Context context, String name) throws IOException {
-        if (name.length() > 180 || !name.matches("freeseek-[A-Za-z0-9_.-]+\\.zip")) throw new IOException("Invalid diagnostic filename");
-        File root = new File(context.getCacheDir(), "diagnostic-shares");
+        return create(context, name, false);
+    }
+    static File create(Context context, String name, boolean artifact) throws IOException {
+        if (artifact ? !isDocumentName(name) : name == null || !name.matches("freeseek-[A-Za-z0-9_.-]{1,150}\\.zip")) {
+            throw new IOException("Invalid share filename");
+        }
+        File root = new File(context.getCacheDir(), artifact ? "task-shares" : "diagnostic-shares");
         if (!root.isDirectory() && !root.mkdirs() && !root.isDirectory()) {
             throw new IOException("Cannot create share cache");
         }
@@ -43,10 +48,36 @@ final class ShareFiles {
     static Intent intent(Context context, File file) {
         Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);
         Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("application/zip"); send.putExtra(Intent.EXTRA_STREAM, uri);
-        send.setClipData(ClipData.newRawUri("diagnostics", uri));
+        send.setType(typeOf(file.getName())); send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.setClipData(ClipData.newRawUri("FreeSeek", uri));
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         return send;
+    }
+    static boolean isDocumentName(String name) {
+        return name != null && name.matches("(?i)[^\\p{Cntrl}/\\\\<>:\"|?*]{1,81}\\.(xlsx|docx|pptx|pdf|md|csv|json|txt|zip|glb|stl|patch|png)");
+    }
+    static String typeOf(String filename) {
+        String name = filename.toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (name.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        if (name.endsWith(".pdf")) return "application/pdf";
+        if (name.endsWith(".md")) return "text/markdown";
+        if (name.endsWith(".csv")) return "text/csv";
+        if (name.endsWith(".json")) return "application/json";
+        if (name.endsWith(".txt")) return "text/plain";
+        if (name.endsWith(".glb")) return "model/gltf-binary";
+        if (name.endsWith(".stl")) return "model/stl";
+        if (name.endsWith(".patch")) return "text/x-diff";
+        if (name.endsWith(".png")) return "image/png";
+        return "application/zip";
+    }
+    static void openDocument(Activity activity, File file) {
+        Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", file);
+        Intent view = new Intent(Intent.ACTION_VIEW);
+        view.setDataAndType(uri, typeOf(file.getName()));
+        view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        activity.startActivity(view);
     }
     static void open(Activity activity, File file) {
         Intent chooser = Intent.createChooser(intent(activity, file), null);

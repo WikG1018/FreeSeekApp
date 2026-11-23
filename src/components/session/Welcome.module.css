@@ -97,7 +97,7 @@
   left: 55%;
   width: 5px;
   height: 5px;
-  border: 1px solid var(--fs-accent-text);
+  border: 1px solid var(--fs-brand-ink);
   border-radius: 50%;
   opacity: 0;
 }
@@ -115,28 +115,20 @@
 }
 
 .greeting {
-  margin-top: 14px;
+  margin: 14px 0 0;
   font-size: 24px;
   line-height: 32px;
   font-weight: 600;
   text-align: center;
   color: var(--dsw-alias-label-primary);
 }
-.hello {
-  position: relative;
+.greetingPart {
   display: inline-block;
-}
-.helloAccent {
-  position: absolute;
-  top: 0;
-  left: 0;
-  color: var(--fs-accent-text);
-  opacity: 0;
-  pointer-events: none;
   white-space: nowrap;
 }
-.helloAccent::before {
-  content: attr(data-text);
+.greeting[data-greeting-feedback] {
+  border-radius: 6px;
+  background-color: var(--fs-accent-wash);
 }
 
 /* 继承上下文提示：卡片形态，比胶囊更易读 */
@@ -147,7 +139,7 @@
   box-sizing: border-box;
   max-width: 680px;
   padding: 8px 8px 8px 14px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
+  border: 1px solid var(--fs-accent-line);
   border-radius: 14px;
   background: var(--fs-accent-wash);
   font-size: 14px;
@@ -177,7 +169,7 @@
   transition: background-color var(--fs-duration-fast) var(--fs-ease-out);
 
   &:hover {
-    background: rgba(37, 99, 235, 0.12);
+    background: var(--fs-accent-wash);
   }
 
   &:focus-visible {
@@ -228,8 +220,8 @@
     transform var(--fs-duration-fast) var(--fs-ease-out);
 
   &:hover {
-    border-color: rgba(37, 99, 235, 0.4);
-    background: rgba(37, 99, 235, 0.12);
+    border-color: var(--fs-accent-fill);
+    background: var(--fs-accent-wash);
   }
 
   &:active {
@@ -278,8 +270,4 @@
     width: 48px;
     height: 48px;
   }
-}
-
-[data-ds-dark-theme] .whaleArt img {
-  filter: brightness(0) invert(0.89);
 }

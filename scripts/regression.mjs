@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { unzipSync } from 'fflate'
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { resolve, dirname } from 'node:path'
 import { chromium } from 'playwright'
@@ -14,6 +15,16 @@ import { runImportCases } from './test/import-cases.mjs'
 import { runNavigationCases } from './test/navigation-cases.mjs'
 import { runInterfaceCases } from './test/interface-cases.mjs'
 import { runCompressionCases } from './test/compression-cases.mjs'
+import { runDesktopCases } from './test/desktop-cases.mjs'
+import { runAssistantCases } from './test/assistant-cases.mjs'
+import { runAgentWorkflowCases } from './test/agent-workflow-cases.mjs'
+import { runTaskModeCases } from './test/task-mode-cases.mjs'
+import { runDocumentLayoutCases } from './test/document-layout-cases.mjs'
+import { runTaskReaderCases } from './test/task-reader-cases.mjs'
+import { runNativeBrowserCases } from './test/native-browser-cases.mjs'
+import { runHistoryRecoveryCases } from './test/history-recovery-cases.mjs'
+import { runFontCases } from './test/font-cases.mjs'
+import { runDiagnosticRetentionCases } from './test/diagnostic-retention-cases.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.FREESEEK_TEST_PORT) || 8187
@@ -110,7 +121,10 @@ const run = async (name, test, setup, waitReady = true) => {
   maxActiveUploads = 0
   const context = await browser.newContext({
     locale: 'zh-CN',
-    viewport: { width: 390, height: 844 },
+    viewport: {
+      width: process.env.FREESEEK_TEST_DESKTOP ? 1366 : 390,
+      height: process.env.FREESEEK_TEST_DESKTOP ? 900 : 844,
+    },
   })
   await context.route('**/*', (route) =>
     new URL(route.request().url()).hostname === '127.0.0.1'
@@ -158,6 +172,9 @@ try {
   await mkdir(resolve(root, 'tmp/regression'), { recursive: true })
   await runCompressionCases(run)
   await runCompatibilityCases(run)
+  await runHistoryRecoveryCases(run)
+  await runFontCases(run)
+  await runDiagnosticRetentionCases(run)
   await runAndroidStabilityCases({
     run,
     behavior: (value) => {
@@ -169,6 +186,13 @@ try {
   await runImportCases({ run })
   await runNavigationCases({ run })
   await runInterfaceCases({ run })
+  await runAssistantCases(run)
+  await runAgentWorkflowCases(run)
+  await runTaskModeCases(run)
+  await runDocumentLayoutCases(run)
+  await runTaskReaderCases(run)
+  await runNativeBrowserCases(run)
+  await runDesktopCases(run)
   await runStabilityCases({
     run,
     root,
@@ -341,6 +365,108 @@ try {
         return await (await a.db.loadFile(session.messages[0].files[0].id)).text()
       })
       assert.equal(result, 'UNSAVED ORIGINAL')
+    }
+  )
+
+  await run(
+    'save warning retries real writes, reopens a closed database and backs up pending originals',
+    async (page) => {
+      const id = await page.evaluate(async () => {
+        const a = window.__audit
+        document.documentElement.setAttribute('data-android-window', '')
+        document.documentElement.style.setProperty('--fs-native-top', '44px')
+        await a.seed([
+          a.fixtures.session({
+            id: 'existing-history',
+            messages: [a.fixtures.user('old', 'Keep this existing chat')],
+          }),
+        ])
+        a.settings.setApiKey('test-storage-fixture')
+        window.fetch = async (url) =>
+          String(url).endsWith('/files')
+            ? new Response(JSON.stringify({ id: 'file-api-fixture' }))
+            : a.response('This reply is still available in memory')
+        a.drafts.addDraftFiles(
+          null,
+          [new File(['Recovery bytes'], 'source.txt', { type: 'text/plain' })],
+          'test-storage-fixture'
+        )
+        const until = Date.now() + 5000
+        while (
+          Object.values(a.uploads.useUploads.getState().tasks).some(
+            (task) => task.status === 'uploading'
+          )
+        ) {
+          if (Date.now() > until) throw new Error('Fixture attachment did not finish')
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        let database
+        window.saveAttempts = 0
+        const transaction = IDBDatabase.prototype.transaction
+        const put = IDBObjectStore.prototype.put
+        IDBDatabase.prototype.transaction = function (...args) {
+          if (this.name === 'freeseek') database = this
+          return transaction.apply(this, args)
+        }
+        IDBObjectStore.prototype.put = function (...args) {
+          if (this.name === 'sessions' || this.name === 'files') {
+            window.saveAttempts++
+            throw new DOMException('Fixture out of storage', 'QuotaExceededError')
+          }
+          return put.apply(this, args)
+        }
+        window.restoreStoreAndCloseConnection = () => {
+          IDBObjectStore.prototype.put = put
+          IDBDatabase.prototype.transaction = transaction
+          if (!database) throw new Error('The fixture did not capture a real IndexedDB connection')
+          database.close()
+        }
+        a.drafts.setDraftText(null, 'Recover this uncommitted conversation')
+        a.store.sendMessage(null)
+        await a.waitIdle()
+        return a.store.useChatStore.getState().activeId
+      })
+      assert.ok(id)
+      const warning = page.getByTestId('chat-save-warning')
+      await warning.getByText('本机存储空间不足。腾出空间后再重试保存。').waitFor()
+      assert.ok(
+        (await warning.getByText('对话或附件尚未保存', { exact: true }).boundingBox()).y >= 44
+      )
+      const before = await page.evaluate(() => window.saveAttempts)
+      await warning.getByRole('button', { name: '重试保存', exact: true }).click()
+      await warning.getByText('重试后仍未保存，可先备份。').waitFor()
+      assert.ok((await page.evaluate(() => window.saveAttempts)) > before)
+
+      const pending = page.waitForEvent('download')
+      await warning.getByRole('button', { name: '备份待保存对话', exact: true }).click()
+      const download = await pending
+      assert.match(download.suggestedFilename(), /^freeseek-recovery-/)
+      const archive = unzipSync(await readFile(await download.path()))
+      const manifest = JSON.parse(Buffer.from(archive['manifest.json']).toString('utf8'))
+      assert.deepEqual(manifest.sessions, [id])
+      assert.equal(
+        Buffer.from(archive['freeseek/files/' + manifest.files[0].id + '.bin']).toString(),
+        'Recovery bytes'
+      )
+
+      await page.evaluate(() => window.restoreStoreAndCloseConnection())
+      await warning.getByRole('button', { name: '重试保存', exact: true }).click()
+      await warning.waitFor({ state: 'detached' })
+      const saved = await page.evaluate(async (id) => {
+        const a = window.__audit
+        const session = await a.db.loadSession(id)
+        const original = await a.db.loadFile(session.messages[0].files[0].id)
+        return {
+          text: session.messages[0].content,
+          original: await original.text(),
+          existing: (await a.db.loadSession('existing-history')).messages[0].content,
+        }
+      }, id)
+      assert.deepEqual(saved, {
+        text: 'Recover this uncommitted conversation',
+        original: 'Recovery bytes',
+        existing: 'Keep this existing chat',
+      })
     }
   )
 

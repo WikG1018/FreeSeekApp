@@ -44,6 +44,148 @@ const mockMilestoneForeground = (context) =>
 
 export const runInterfaceCases = async ({ run }) => {
   await run(
+    'cache hit rates use only measured prompt tokens in the reply and settings',
+    async (page) => {
+      const measured = await page.evaluate(async () => {
+        const a = window.__audit
+        const provider = a.normalizeProviderUsage
+        const first = provider(
+          {
+            prompt_tokens: 1000,
+            prompt_cache_hit_tokens: 200,
+            prompt_cache_miss_tokens: 800,
+            completion_tokens: 5,
+          },
+          'openai'
+        )
+        const second = provider(
+          { input_tokens: 1, cache_read_input_tokens: 9, output_tokens: 3 },
+          'anthropic'
+        )
+        const unknown = provider({ prompt_tokens: 2000, completion_tokens: 1 }, 'openai')
+        const reply = a.fixtures.assistant('cache-reply', '这里可以查看缓存命中率。', {
+          model: 'synthetic-cache-model',
+          usage: first,
+          usageHistory: [first, second, unknown].map((usage) => ({ createdAt: Date.now(), usage })),
+        })
+        await a.seed([
+          a.fixtures.session({
+            id: 'cache-fixture',
+            messages: [a.fixtures.user('q', '统计缓存'), reply],
+          }),
+        ])
+        const models = await a.usage.collectModelUsage()
+        return [
+          a.usage.formatCacheHitRate(a.usage.replyCacheCounts(reply), 'zh-CN'),
+          a.usage.formatCacheHitRate(unknown.cache_counts, 'zh-CN'),
+          a.usage.formatCacheHitRate(
+            a.usage.totalCacheCounts(a.usage.sumUsage(models[0].days)),
+            'zh-CN'
+          ),
+        ]
+      })
+      assert.deepEqual(measured, ['20.7%', '—', '20.7%'])
+      await page.setViewportSize({ width: 320, height: 720 })
+      await page.getByRole('button', { name: /tok/ }).first().click()
+      await page.getByText('缓存命中率', { exact: true }).waitFor()
+      await page.getByText('20.7%', { exact: true }).waitFor()
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('usage'))
+      const totals = page.locator('[data-settings-page="usage"]')
+      await totals.getByText('缓存命中率').waitFor()
+      await totals.getByText('20.7%', { exact: true }).waitFor()
+      await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+      await totals.getByText('Cache hit rate').waitFor()
+    }
+  )
+  await run(
+    'chat Enter preference applies to the composer, keeps IME selection safe and leaves search submitting',
+    async (page) => {
+      await page.setViewportSize({ width: 360, height: 780 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        a.settings.setApiKey('composer-fixture-key')
+        a.settings.setSearch(false)
+        await a.seed([a.fixtures.session({ id: 'composer-enter-test', title: '回车验收对话' })])
+        const fetcher = window.fetch
+        window.__composerRequests = 0
+        window.fetch = (url, init) => {
+          if (!new URL(url).pathname.endsWith('/anthropic/v1/messages')) return fetcher(url, init)
+          window.__composerRequests++
+          return Promise.resolve(a.response('发送成功。'))
+        }
+        a.settingsDialog.openSettings('chat')
+      })
+      const enterSetting = page.getByRole('button', { name: '输入法回车键', exact: true })
+      const choose = async (value) => {
+        await enterSetting.click()
+        const menu = page.getByRole('dialog', { name: '输入法回车键', exact: true })
+        const option = menu.getByRole('option', { name: value, exact: true })
+        await option.waitFor()
+        const [panel, row] = await Promise.all([menu.boundingBox(), enterSetting.boundingBox()])
+        assert.ok(panel.width <= 145 && panel.width < row.width / 2)
+        assert.ok(Math.abs(panel.x + panel.width - row.x - row.width) <= 2)
+        await option.click()
+        await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      }
+      const input = page.getByTestId('chat-composer').locator('textarea')
+      await choose('换行')
+      assert.equal(await input.getAttribute('enterkeyhint'), 'enter')
+      await input.fill('第一行')
+      await input.press('Enter')
+      assert.equal(await input.inputValue(), '第一行\n')
+      assert.equal(await page.evaluate(() => window.__composerRequests), 0)
+      assert.equal(
+        await page.evaluate(() => localStorage.getItem('freeseek:composer-enter')),
+        'newline'
+      )
+
+      await page.getByTestId('chat-header').getByRole('button').first().click()
+      const search = page.getByTestId('sider-quick-actions').getByRole('searchbox')
+      await search.fill('回车验收')
+      assert.equal(await search.getAttribute('enterkeyhint'), 'search')
+      await search.press('Enter')
+      await page.getByTestId('sider-list').getByText('回车验收对话', { exact: true }).waitFor()
+      assert.equal(await search.evaluate((element) => document.activeElement === element), false)
+      await page.keyboard.press('Escape')
+
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('chat'))
+      await choose('发送')
+      assert.equal(await input.getAttribute('enterkeyhint'), 'send')
+      await input.fill('中文输入')
+      await input.evaluate((element) => {
+        element.dispatchEvent(
+          new CompositionEvent('compositionstart', { bubbles: true, data: 'zhong' })
+        )
+        element.dispatchEvent(
+          new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', isComposing: true })
+        )
+        element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中' }))
+      })
+      assert.equal(await page.evaluate(() => window.__composerRequests), 0)
+      await input.press('Shift+Enter')
+      assert.equal(await input.inputValue(), '中文输入\n')
+      await input.press('Enter')
+      await page.waitForFunction(() => window.__composerRequests === 1)
+      await page.evaluate(() => window.__audit.waitIdle())
+      await input.fill('软件键盘回车')
+      const cancelled = await input.evaluate(
+        (element) =>
+          !element.dispatchEvent(
+            new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType: 'insertLineBreak',
+            })
+          )
+      )
+      assert.equal(cancelled, true)
+      await page.waitForFunction(() => window.__composerRequests === 2)
+      await page.evaluate(() => window.__audit.waitIdle())
+      assert.equal(await input.inputValue(), '')
+    }
+  )
+
+  await run(
     'onboarding, About and Settings share the same key-free import screen',
     async (page) => {
       const clean = new URL(page.url())
@@ -71,13 +213,25 @@ export const runInterfaceCases = async ({ run }) => {
       await confirm.getByRole('button', { name: '取消', exact: true }).click()
       await confirm.waitFor({ state: 'detached' })
 
-      await back(page)
+      const rail = page.getByTestId('settings-rail')
+      if (!(await rail.isVisible())) {
+        await back(page)
+      }
       await page.locator('[data-settings-target="about"]').click()
+      await button('隐私与开源许可').click()
+      const privacy = page.locator('[data-settings-page="aboutInfo"]')
+      await privacy.getByRole('heading', { name: '哪些内容会发给外部服务' }).waitFor()
+      assert.match(await privacy.innerText(), /你选定的 API 服务/)
+      await back(page)
       await button('使用指南').click()
       await page.getByRole('button', { name: /^把以前的聊天搬过来/ }).click()
       await data.waitFor()
       assert.equal(await tutorial.getAttribute('aria-expanded'), 'true')
-      await back(page)
+      if (await rail.isVisible()) {
+        await rail.locator('[data-settings-target="about"]').click()
+      } else {
+        await back(page)
+      }
       await page.locator('[data-settings-target="data"]').click()
       await data.waitFor()
       assert.equal(await tutorial.getAttribute('aria-expanded'), 'false')
@@ -118,11 +272,11 @@ export const runInterfaceCases = async ({ run }) => {
             : original(url, ...args)
       })
       await page.getByRole('button', { name: '验证并保存', exact: true }).click()
-      const success = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true })
+      const success = page.getByRole('dialog', { name: 'DeepSeek 已就绪', exact: true })
       await success.waitFor()
-      assert.match(await success.textContent(), /只有接入其他模型服务商或自建网关/)
+      assert.match(await success.textContent(), /接入其他模型服务或自建网关/)
       assert.doesNotMatch(await success.textContent(), /synthetic-ui-verified-key/)
-      await success.getByRole('button', { name: '留在设置', exact: true }).click()
+      await success.getByRole('button', { name: '返回设置', exact: true }).click()
       await page.getByText('已配置', { exact: true }).waitFor()
       await page.getByRole('radio', { name: /DeepSeek V4 Pro/ }).check()
       await page.getByRole('button', { name: '高级自定义配置', exact: true }).click()
@@ -176,6 +330,9 @@ export const runInterfaceCases = async ({ run }) => {
       await page.setViewportSize({ width: 1080, height: 780 })
       await page.evaluate(() => window.__audit.settingsDialog.openSettings())
       await page.getByTestId('settings-rail').waitFor()
+      await dialog(page).getByRole('button', { name: '返回对话', exact: true }).click()
+      await dialog(page).waitFor({ state: 'detached' })
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings())
       await page.getByLabel('API Key', { exact: true }).fill('not-yet-saved')
       await page.setViewportSize({ width: 390, height: 844 })
       await page.getByTestId('settings-rail').waitFor({ state: 'detached' })
@@ -196,11 +353,22 @@ export const runInterfaceCases = async ({ run }) => {
       const field = page.locator('#persona-name')
       await field.fill('写作伙伴')
       await page.keyboard.press('Escape')
-      await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+      const keepEditing = page.getByRole('button', { name: '继续编辑', exact: true })
+      await keepEditing.click()
+      await keepEditing.waitFor({ state: 'detached' })
       assert.equal(await field.inputValue(), '写作伙伴')
       await page.locator('#persona-prompt').fill('将说明改成两段短文。')
       await page.getByRole('button', { name: '保存', exact: true }).click()
       await page.locator('[data-settings-page="personas"]').waitFor()
+      const custom = await page.evaluate(() =>
+        window.__audit.personas.usePersonas
+          .getState()
+          .personas.filter(({ id }) => !id.startsWith('builtin-'))
+          .map(({ name, prompt }) => ({ name, prompt }))
+      )
+      assert.deepEqual(custom, [{ name: '写作伙伴', prompt: '将说明改成两段短文。' }])
+      const search = page.locator('[data-settings-page="personas"] input[type="search"]')
+      await search.fill('写作伙伴')
       await page.getByText('写作伙伴', { exact: true }).waitFor()
     }
   )
@@ -503,7 +671,9 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByTestId('chat-header').getByText('旅行清单', { exact: true }).waitFor()
       await advance(5_000)
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
-      await page.getByTestId('settings-directory').waitFor()
+      await page
+        .locator('[data-testid="settings-directory"], [data-testid="settings-rail"]')
+        .waitFor()
       await advance(3_000)
       await page.getByRole('button', { name: '使用时长', exact: true }).click()
       await page.getByTestId('screen-time-today').waitFor()
@@ -852,10 +1022,108 @@ export const runInterfaceCases = async ({ run }) => {
   )
 
   await run(
+    'pricing separates official and custom models and recalculates usage by connection',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const sample = a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name: '报价测试服务',
+          url: 'https://sample.example.test/v1',
+          model: 'example-model',
+        })
+        const date = Date.UTC(2026, 10, 22, 1)
+        const make = (id, model, providerId) =>
+          a.fixtures.assistant(id, 'sample', {
+            model,
+            connection: { providerId },
+            createdAt: date,
+            usage: {
+              input_tokens: 1_000_000,
+              output_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          })
+        await a.seed([
+          a.fixtures.session({
+            id: 'price-demo',
+            title: '模型费用示例',
+            messages: [
+              make('flash', 'deepseek-flash', 'deepseek'),
+              make('pro', 'deepseek-v4-pro', 'deepseek'),
+              make('other', 'example-model', sample.id),
+            ].flatMap((reply, index, replies) => [
+              a.fixtures.user('question-' + index, '成本示例', {
+                parentId: index > 0 ? replies[index - 1].id : null,
+                selectedChildId: reply.id,
+              }),
+              { ...reply, parentId: 'question-' + index },
+            ]),
+            rootMessageId: 'question-0',
+          }),
+        ])
+        a.settingsDialog.openSettings('usage')
+      })
+      const pricing = page.getByRole('button', { name: '价格设置', exact: true })
+      await pricing.waitFor()
+      if (process.env.FREESEEK_TASK_PREVIEWS) {
+        await page.screenshot({
+          path: 'tmp/regression/task/usage-' + page.viewportSize().width + '.png',
+        })
+      }
+      await pricing.click()
+      const model = page.getByRole('button', { name: '计价模型', exact: true })
+      assert.match(await model.textContent(), /DeepSeek Flash/)
+      const rates = page.getByRole('spinbutton')
+      assert.equal(await rates.nth(1).inputValue(), '1')
+      await model.click()
+      await page.getByRole('option', { name: 'DeepSeek V4 Pro', exact: true }).click()
+      assert.equal(await rates.nth(1).inputValue(), '4.5')
+      assert.equal(await rates.nth(4).inputValue(), '9')
+      if (process.env.FREESEEK_TASK_PREVIEWS) {
+        await page.screenshot({
+          path: 'tmp/regression/task/pricing-' + page.viewportSize().width + '.png',
+        })
+      }
+      await rates.nth(1).fill('6')
+      await page.getByRole('button', { name: '保存价格', exact: true }).click()
+      await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+      await model.click()
+      await page.getByRole('option', { name: /example-model.*报价测试服务/ }).click()
+      assert.equal(await rates.count(), 3)
+      assert.equal(await rates.nth(1).inputValue(), '')
+      await rates.nth(0).fill('0')
+      await rates.nth(1).fill('2')
+      await rates.nth(2).fill('4')
+      await page.getByRole('button', { name: '保存价格', exact: true }).click()
+      await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+      const values = await page.evaluate(async () => {
+        const a = window.__audit
+        const pack = await a.backup.exportHistory()
+        localStorage.removeItem('freeseek:model-prices')
+        await a.backup.importHistory(new File([pack.blob], 'model-price-check.zip'))
+        return Object.fromEntries(
+          (await a.usage.collectModelUsage()).map(({ model, days }) => [model, days[0].costCny])
+        )
+      })
+      assert.deepEqual(values, { 'deepseek-flash': 1, 'deepseek-v4-pro': 6, 'example-model': 2 })
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('usagePricing'))
+      await model.click()
+      await page.getByRole('option', { name: 'DeepSeek V4 Pro', exact: true }).click()
+      assert.equal(await rates.nth(1).inputValue(), '6')
+    }
+  )
+
+  await run(
     'welcome whales swim while responding and keep reduced-motion feedback',
     async (page) => {
       const whale = page.getByTestId('welcome-whale')
       await whale.waitFor()
+      const greeting = page.getByRole('heading', { name: '你好，我能帮什么忙吗？', exact: true })
+      await greeting.waitFor()
       const current = () =>
         whale
           .locator('[data-whale-ride]')
@@ -863,9 +1131,20 @@ export const runInterfaceCases = async ({ run }) => {
           .evaluate((el) => el.style.transform)
       const before = await current()
       await whale.click()
-      await page.waitForFunction(
-        () => Number(document.querySelector('[data-whale-accent]').style.opacity) > 0.25
-      )
+      const waitForGreeting = async () => {
+        for (const position of [0, 0.5, 1]) {
+          await page.waitForFunction((portion) => {
+            const offsets = Array.from(
+              document.querySelectorAll('[data-greeting-part]'),
+              (part) => new DOMMatrix(part.style.transform || 'none').m42
+            )
+            const part = Math.floor((offsets.length - 1) * portion)
+            const otherEnd = portion === 0 ? offsets.at(-1) : offsets[0]
+            return offsets[part] < -4 && otherEnd >= 0
+          }, position)
+        }
+      }
+      await waitForGreeting()
       assert.notEqual(await current(), before)
 
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
@@ -880,16 +1159,27 @@ export const runInterfaceCases = async ({ run }) => {
         paused
       )
 
+      await page.waitForFunction(() =>
+        Array.from(document.querySelectorAll('[data-greeting-part]')).every(
+          (part) => part.style.transform === 'none'
+        )
+      )
+      await whale.click()
+      await waitForGreeting()
+
       await page.emulateMedia({ reducedMotion: 'reduce' })
       await page.waitForFunction(
         () => document.querySelector('[data-whale-ride]').style.transform === 'none'
       )
       await whale.focus()
       await page.keyboard.press('Enter')
-      await page.waitForFunction(
-        () => Number(document.querySelector('[data-whale-accent]').style.opacity) > 0.25
-      )
+      await page.locator('[data-startup-greeting][data-greeting-feedback]').waitFor()
       assert.equal(await current(), 'none')
+      assert.ok(
+        await greeting
+          .locator('[data-greeting-part]')
+          .evaluateAll((parts) => parts.every((part) => part.style.transform === 'none'))
+      )
       assert.equal(
         await whale
           .locator('[data-whale-reply]')
@@ -897,6 +1187,67 @@ export const runInterfaceCases = async ({ run }) => {
           .evaluate((el) => el.style.transform),
         'none'
       )
+    }
+  )
+
+  await run(
+    'release brand color reaches the packaged whale, the selected chat and markdown links in both themes',
+    async (page) => {
+      const heading = page.getByRole('heading', { name: '你好，我能帮什么忙吗？', exact: true })
+      await heading.waitFor()
+      const art = await page.evaluate(async () => {
+        const img = document.querySelector('[data-whale-ride] img')
+        await img.decode()
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const brush = canvas.getContext('2d')
+        brush.drawImage(img, 0, 0)
+        const { data } = brush.getImageData(0, 0, canvas.width, canvas.height)
+        let brandPixels = 0
+        for (let i = 0; i < data.length; i += 4) {
+          brandPixels += Number(
+            data[i] === 52 && data[i + 1] === 93 && data[i + 2] === 204 && data[i + 3] === 255
+          )
+        }
+        return brandPixels
+      })
+      assert.ok(art > 200, 'visible whale pixels use the approved blue')
+      assert.notEqual(
+        await heading.evaluate((node) => getComputedStyle(node).color),
+        'rgb(52, 93, 204)'
+      )
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        a.settings.setThemePreference('light')
+        await a.seed([
+          f.session({
+            id: 'brand-proof',
+            title: '颜色验收',
+            messages: [
+              f.user('q', '查看正文链接'),
+              f.assistant('answer', '[验收链接](https://example.test)'),
+            ],
+          }),
+        ])
+      })
+      const link = page.locator('.ds-markdown a').filter({ hasText: '验收链接' })
+      await link.waitFor()
+      if (page.viewportSize().width < 768) {
+        await page.getByRole('button', { name: '打开边栏' }).click()
+      }
+      const selected = page.locator('[data-session-id="brand-proof"] [aria-current="page"]')
+      await selected.waitFor()
+      const color = (element) => element.evaluate((node) => getComputedStyle(node).color)
+      assert.equal(await color(link), 'rgb(52, 93, 204)')
+      assert.equal(await color(selected), 'rgb(52, 93, 204)')
+      await page.evaluate(() => window.__audit.settings.setThemePreference('dark'))
+      await page.waitForFunction(() => {
+        const link = document.querySelector('.ds-markdown a')
+        return link && getComputedStyle(link).color === 'rgb(173, 196, 255)'
+      })
+      assert.equal(await color(selected), 'rgb(173, 196, 255)')
     }
   )
 
@@ -981,12 +1332,10 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByRole('button', { name: '添加连接', exact: true }).click()
       await page.getByRole('button', { name: '手动配置', exact: true }).click()
       const more = page.getByRole('button', { name: '连接高级参数', exact: true }),
-        shelf = page
-          .locator('[data-settings-page=providerConnection]')
-          .getByRole('spinbutton')
-          .first()
+        shelf = page.getByLabel('模型列表地址（可选）', { exact: true })
       await more.click()
-      await shelf.fill('7777')
+      assert.equal(await page.getByRole('spinbutton').count(), 0)
+      await shelf.fill('https://models.example.test/catalog')
       await more.click()
       const id = await more.getAttribute('aria-controls')
       await page.waitForFunction((id) => document.getElementById(id).hidden, id)
@@ -998,7 +1347,7 @@ export const runInterfaceCases = async ({ run }) => {
         true
       )
       await more.click()
-      assert.equal(await shelf.inputValue(), '7777')
+      assert.equal(await shelf.inputValue(), 'https://models.example.test/catalog')
       await page.emulateMedia({ reducedMotion: 'reduce' })
       await more.click()
       assert.ok(await page.evaluate((id) => document.getElementById(id).hidden, id))
@@ -1016,6 +1365,61 @@ export const runInterfaceCases = async ({ run }) => {
   )
 
   await run(
+    'custom model attachment controls and badges are independent within one connection',
+    async (page) => {
+      await page.evaluate(() => {
+        const a = window.__audit
+        a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          url: 'https://models.example.test/v1',
+          name: '混合能力连接',
+          model: 'photo-model',
+          models: ['photo-model', 'plain-model'],
+        })
+        a.settingsDialog.openSettings('providers')
+      })
+      await page.getByRole('button', { name: '混合能力连接', exact: true }).click()
+      const models = page.locator('[data-settings-page="providerModels"]')
+      const photo = models.getByRole('button', { name: 'photo-model', exact: true })
+      const plain = models.getByRole('button', { name: 'plain-model', exact: true })
+      await photo.click()
+      const editor = page.locator('[data-settings-page="providerModel"]')
+      const vision = editor.getByRole('switch', { name: '支持图片输入', exact: true })
+      const pdf = editor.getByRole('switch', { name: '支持 PDF 输入', exact: true })
+      await vision.click()
+      await pdf.click()
+      await editor.getByRole('button', { name: '模型高级参数', exact: true }).click()
+      await editor.getByRole('spinbutton', { name: /采样温度/ }).fill('0.45')
+      await editor.getByRole('button', { name: '保存', exact: true }).click()
+      await photo.waitFor()
+      assert.match(await photo.innerText(), /图片/)
+      assert.match(await photo.innerText(), /PDF/)
+      assert.doesNotMatch(await plain.innerText(), /图片|PDF/)
+      await plain.click()
+      assert.equal(await vision.getAttribute('aria-checked'), 'false')
+      assert.equal(await pdf.getAttribute('aria-checked'), 'false')
+      const saved = await page.evaluate(
+        () => window.__audit.providers.useProviders.getState().profiles[0].modelSettings
+      )
+      assert.equal(saved['photo-model'].temperature, 0.45)
+      assert.equal(saved['plain-model'], undefined)
+
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('account'))
+      const account = page.locator('[data-settings-page="account"]')
+      await account.getByRole('radio', { name: /DeepSeek Flash.*文本 · 图片 · PDF/ }).waitFor()
+      await account.getByRole('button', { name: '选择服务', exact: true }).click()
+      const panel = page.getByTestId('option-panel')
+      await panel.getByRole('option', { name: '混合能力连接', exact: true }).click()
+      const selector = account.getByRole('button', { name: '模型名称 / ID', exact: true })
+      await selector.getByText('文本 · 图片 · PDF', { exact: true }).waitFor()
+      await selector.click()
+      await panel.getByRole('option', { name: /photo-model.*文本 · 图片 · PDF/ }).waitFor()
+      await panel.getByRole('option', { name: /plain-model.*纯文本/ }).click()
+      await selector.getByText('纯文本', { exact: true }).waitFor()
+    }
+  )
+
+  await run(
     'onboarding only announces a verified and persisted official key, then returns to the existing draft',
     async (page) => {
       const u = new URL(page.url())
@@ -1023,7 +1427,7 @@ export const runInterfaceCases = async ({ run }) => {
       await page.goto(u.href)
       await page.getByRole('button', { name: '我已阅读，继续', exact: true }).click()
       await page.getByRole('button', { name: /^和 AI 聊天/ }).click()
-      const ready = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true }),
+      const ready = page.getByRole('dialog', { name: 'DeepSeek 已就绪', exact: true }),
         key = page.getByLabel('API Key', { exact: true })
       await page.evaluate(() => window.__audit.drafts.setDraftText(null, '保留原有草稿'))
       let status = 401
@@ -1104,12 +1508,12 @@ export const runInterfaceCases = async ({ run }) => {
         r.fulfill({ status: 200, contentType: 'application/json', body: '{"data":[]}' })
       )
       const key = page.getByLabel('API Key', { exact: true }),
-        ready = page.getByRole('dialog', { name: 'DeepSeek 官方 API 已就绪', exact: true })
+        ready = page.getByRole('dialog', { name: 'DeepSeek 已就绪', exact: true })
       await key.fill('replace-one')
       await page.getByRole('button', { name: '验证并保存', exact: true }).click()
       await ready.waitFor()
       assert.match(await ready.innerText(), /我的服务商/)
-      await ready.getByRole('button', { name: '留在设置' }).click()
+      await ready.getByRole('button', { name: '返回设置', exact: true }).click()
       assert.equal(
         await page.evaluate(() => window.__audit.providers.useProviders.getState().selection.model),
         'custom-choice'
@@ -1195,94 +1599,43 @@ export const runInterfaceCases = async ({ run }) => {
   )
 
   await run(
-    'update notices show notes before download or install, and About keeps the installed notes offline',
+    'Android predownloads updates without opening a dialog and still requires an install tap',
     async (page) => {
-      await page.evaluate(async () => {
-        const a = window.__audit
-        window.androidBridge = {}
-        const metadata = {
-          tag_name: 'v99.2.1',
-          body: '- 第一项新版改进\n- 第二项新版改进',
-          assets: [
-            {
-              name: 'freeseek-v99.2.1-release.apk',
-              size: 123,
-              browser_download_url:
-                'https://github.com/WikG1018/FreeSeekApp/releases/download/v99.2.1/freeseek-v99.2.1-release.apk',
-              digest: 'sha256:' + 'a'.repeat(64),
-            },
-          ],
-        }
-        window.__updateCalls = { download: 0, install: 0 }
-        window.__readyFile = false
-        window.Capacitor.nativeCallback = () => 'fixture-listener'
-        window.Capacitor.nativePromise = async (plugin, method) => {
-          if (plugin !== 'Update') throw new Error('Unsupported test plugin')
-          if (method === 'get') return { status: 200, body: JSON.stringify(metadata) }
-          if (method === 'hasFile')
-            return {
-              exists: window.__readyFile,
-              path: window.__readyFile ? '/verified.apk' : '',
-              size: 123,
-            }
-          if (method === 'download') {
-            window.__updateCalls.download++
-            return new Promise(
-              (resolve) =>
-                (window.__finishDownload = () => {
-                  window.__readyFile = true
-                  resolve({ path: '/verified.apk', size: 123 })
-                })
-            )
-          }
-          if (method === 'install') {
-            window.__updateCalls.install++
-            return { installed: true }
-          }
-          if (method === 'removeListener') return {}
-          throw new Error('Unsupported test method ' + method)
-        }
-        await a.update.checkForUpdate({ force: true })
-      })
       const calls = () => page.evaluate(() => window.__updateCalls)
-      assert.deepEqual(await calls(), { download: 0, install: 0 })
-      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
       const notice = page.getByTestId('sider-header').getByTestId('sidebar-update'),
         notes = page.getByRole('dialog', { name: '版本 v99.2.1 更新内容', exact: true })
-      assert.equal(await notice.innerText(), '更新 v99.2.1')
+      await page.waitForFunction(() => window.__updateCalls.download === 1)
+      assert.equal(await notes.count(), 0)
+      assert.deepEqual(await calls(), { download: 1, install: 0 })
+      await page.evaluate(() => window.__audit.update.checkForUpdate({ force: true }))
+      assert.deepEqual(await calls(), { download: 1, install: 0 })
+
+      await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      assert.match(await notice.innerText(), /下载中/)
       await notice.click()
       assert.equal(await notes.getByRole('listitem').count(), 2)
-      assert.deepEqual(await calls(), { download: 0, install: 0 })
-      await notes.getByRole('button', { name: '下载更新', exact: true }).click()
-      await page
-        .waitForFunction(() => typeof window.__finishDownload === 'function')
-        .catch(async (error) => {
-          throw new Error(
-            String(error) +
-              ' ' +
-              JSON.stringify(
-                await page.evaluate(() => ({
-                  calls: window.__updateCalls,
-                  status: window.__audit.update.useUpdate.getState().status,
-                  error: window.__audit.update.useUpdate.getState().error,
-                  stored: window.__readyFile,
-                }))
-              )
-          )
-        })
+      assert.equal(await notes.getByRole('button', { name: '安装更新', exact: true }).count(), 0)
       await page.keyboard.press('Escape')
       await notes.waitFor({ state: 'detached' })
-      await page.evaluate(() => window.__audit.update.useUpdate.setState({ percent: 57 }))
+      await page.evaluate(() => window.__updateProgress({ received: 70, total: 123 }))
       assert.match(await notice.innerText(), /57%/)
       await notice.click()
       assert.equal(await notes.getByRole('progressbar').getAttribute('aria-valuenow'), '57')
+
+      await page.evaluate(() => window.__failDownload())
+      await notes.getByText('下载失败，可以重试', { exact: true }).waitFor()
+      assert.deepEqual(await calls(), { download: 4, install: 0 })
+      await page.evaluate(() => (window.__failSources = false))
+      await notes.getByRole('button', { name: '下载更新', exact: true }).click()
+      await page.waitForFunction(() => window.__updateCalls.download === 5)
       await page.evaluate(() => window.__finishDownload())
       await page.keyboard.press('Escape')
       await notes.waitFor({ state: 'detached' })
       await notice.click()
-      assert.deepEqual(await calls(), { download: 1, install: 0 })
+      assert.deepEqual(await calls(), { download: 5, install: 0 })
       await notes.getByRole('button', { name: '安装更新', exact: true }).click()
-      assert.deepEqual(await calls(), { download: 1, install: 1 })
+      await page.waitForFunction(() => window.__updateCalls.install === 1)
+      assert.deepEqual(await calls(), { download: 5, install: 1 })
       await page.keyboard.press('Escape')
       await notes.waitFor({ state: 'detached' })
       await page.evaluate(() => {
@@ -1321,12 +1674,37 @@ export const runInterfaceCases = async ({ run }) => {
       await installed.waitFor({ state: 'detached' })
       await page.getByRole('button', { name: /检查更新/ }).click()
       await notes.waitFor()
-      assert.deepEqual(await calls(), { download: 1, install: 1 })
+      assert.equal(await notes.getByRole('button', { name: '安装更新', exact: true }).count(), 1)
+      assert.deepEqual(await calls(), { download: 5, install: 1 })
     },
     async (context) => {
       await context.addInitScript(() => {
+        window.CapacitorCustomPlatform = { name: 'android' }
+        const metadata = {
+          tag_name: 'v99.2.1',
+          body: '- 第一项新版改进\n- 第二项新版改进',
+          assets: [
+            {
+              name: 'freeseek-v99.2.1-release.apk',
+              size: 123,
+              browser_download_url:
+                'https://github.com/WikG1018/FreeSeekApp/releases/download/v99.2.1/freeseek-v99.2.1-release.apk',
+              digest: 'sha256:' + 'a'.repeat(64),
+            },
+          ],
+        }
+        window.__updateCalls = { download: 0, install: 0 }
+        let readyFile = false
         window.Capacitor = {
           PluginHeaders: [
+            {
+              name: 'App',
+              methods: [
+                { name: 'addListener', rtype: 'callback' },
+                { name: 'removeListener', rtype: 'promise' },
+                { name: 'getState', rtype: 'promise' },
+              ],
+            },
             {
               name: 'Update',
               methods: [
@@ -1342,6 +1720,40 @@ export const runInterfaceCases = async ({ run }) => {
               })),
             },
           ],
+          nativeCallback: (plugin, method, options, callback) => {
+            if (plugin === 'Update' && options.eventName === 'progress') {
+              window.__updateProgress = callback
+            }
+            return 'fixture-listener'
+          },
+          nativePromise: async (plugin, method) => {
+            if (plugin === 'App') return { isActive: true }
+            if (plugin !== 'Update') throw new Error('Unsupported test plugin')
+            if (method === 'get') return { status: 200, body: JSON.stringify(metadata) }
+            if (method === 'hasFile') {
+              return { exists: readyFile, path: readyFile ? '/verified.apk' : '', size: 123 }
+            }
+            if (method === 'download') {
+              window.__updateCalls.download++
+              if (window.__failSources) throw new Error('Fixture download error')
+              return new Promise((resolve, reject) => {
+                window.__finishDownload = () => {
+                  readyFile = true
+                  resolve({ path: '/verified.apk', size: 123 })
+                }
+                window.__failDownload = () => {
+                  window.__failSources = true
+                  reject(new Error('Fixture download error'))
+                }
+              })
+            }
+            if (method === 'install') {
+              window.__updateCalls.install++
+              return { installed: true }
+            }
+            if (method === 'removeListener') return {}
+            throw new Error('Unsupported test method ' + method)
+          },
         }
       })
     }

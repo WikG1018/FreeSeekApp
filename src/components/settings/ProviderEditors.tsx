@@ -5,12 +5,18 @@ import {
   testProviderModel,
   type ProviderCatalogModel,
 } from '../../services/api/providerClient.js'
-import { providerAccess, providerPreset } from '../../services/providerPresets.js'
+import {
+  presetConnectionName,
+  presetName,
+  providerAccess,
+  providerPreset,
+} from '../../services/providerPresets.js'
 import {
   modelsInProfile,
   modelSettingsFor,
   ProviderConfigError,
   providerModelLabel,
+  providerModelParameters,
   saveProvider,
   validModel,
   type ProviderModelSettings,
@@ -148,6 +154,7 @@ export const ProviderConnectionPage = ({
   onDeleted: () => void
 }) => {
   const t = useTranslate()
+  const locale = useSettings((state) => state.locale)
   const [form, setForm] = useState(initial)
   const [headerText, setHeaderText] = useState(() => JSON.stringify(initial.headers, null, 2))
   const [bodyText, setBodyText] = useState(() => JSON.stringify(initial.extraBody, null, 2))
@@ -210,7 +217,9 @@ export const ProviderConnectionPage = ({
         <div className={styles.providerIdentity}>
           <ProviderMark id={preset.id} />
           <span>
-            <strong>{access?.connectionName ?? preset.name}</strong>
+            <strong>
+              {access ? presetConnectionName(preset, access, locale) : presetName(preset, locale)}
+            </strong>
             {access && (
               <small>
                 {t(presetDescription ?? providerAccessLabel(access, preset.id))}
@@ -265,7 +274,9 @@ export const ProviderConnectionPage = ({
             label={t(accessKeyLabel)}
             value={form.apiKey}
             change={(value) => update('apiKey', value)}
-            placeholder={preset && t(accessKeyPlaceholder, { provider: preset.name })}
+            placeholder={
+              preset && t(accessKeyPlaceholder, { provider: presetName(preset, locale) })
+            }
             helpHref={access?.docs}
           />
           {!access && <p className={styles.hint}>{t('providerKeyHint')}</p>}
@@ -287,50 +298,6 @@ export const ProviderConnectionPage = ({
                 onChange={(event) => update('modelListUrl', event.target.value)}
               />
             </Field>
-            <Field label={t('providerMaxOutput')}>
-              <input
-                type="number"
-                min={16}
-                max={1048576}
-                required
-                value={form.maxOutputTokens || ''}
-                onChange={(event) => update('maxOutputTokens', Number(event.target.value))}
-              />
-            </Field>
-            <Field label={t('providerTemperature')}>
-              <input
-                type="number"
-                min={0}
-                max={2}
-                step="any"
-                value={form.temperature ?? ''}
-                onChange={(event) =>
-                  update('temperature', event.target.value ? Number(event.target.value) : null)
-                }
-              />
-            </Field>
-            {form.protocol === 'openai' && (
-              <div className={styles.field}>
-                <span>{t('providerTokenParameter')}</span>
-                <Select
-                  ariaLabel={t('providerTokenParameter')}
-                  value={form.tokenParameter}
-                  options={[
-                    { value: 'max_tokens', label: 'max_tokens' },
-                    { value: 'max_completion_tokens', label: 'max_completion_tokens' },
-                  ]}
-                  onChange={(value) => update('tokenParameter', value)}
-                />
-              </div>
-            )}
-            {check(t('providerStreaming'), form.stream, (value) => update('stream', value))}
-            {form.protocol === 'openai' &&
-              form.stream &&
-              check(t('providerStreamUsage'), form.streamUsage, (value) =>
-                update('streamUsage', value)
-              )}
-            {check(t('providerVision'), form.vision, (value) => update('vision', value))}
-            {check(t('providerPdf'), form.pdf, (value) => update('pdf', value))}
             <Field label={t('providerHeaders')}>
               <textarea
                 rows={3}
@@ -345,7 +312,7 @@ export const ProviderConnectionPage = ({
                 onChange={(event) => setBodyText(event.target.value)}
               />
             </Field>
-            <p className={styles.hint}>{t('providerCapabilitiesHint')}</p>
+            <p className={styles.hint}>{t('providerExtraHint')}</p>
             {initial.id && (
               <Row label={t('providerDelete')} danger onClick={() => setDeleting(true)} />
             )}
@@ -500,24 +467,27 @@ export const ProviderModelsPage = ({
         </div>
       )}
       <Section title={t('providerModelsSection', { count: models.length })}>
-        {visible.slice(0, limit).map((model) => (
-          <Row
-            key={model}
-            label={providerModelLabel(model, profile)}
-            description={providerModelLabel(model, profile) !== model ? model : undefined}
-            detail={[
-              profile.vision && t('providerModelVisionBadge'),
-              profile.pdf && t('providerModelPdfBadge'),
-              customReasoning(profile, model) && t('providerModelReasoningBadge'),
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-            prominent
-            badge={profile.model === model ? t('providerDefaultModelBadge') : undefined}
-            onClick={() => editModel({ id: model })}
-            target="providerModel"
-          />
-        ))}
+        {visible.slice(0, limit).map((model) => {
+          const parameters = providerModelParameters(profile, model)
+          return (
+            <Row
+              key={model}
+              label={providerModelLabel(model, profile)}
+              description={providerModelLabel(model, profile) !== model ? model : undefined}
+              detail={[
+                parameters.vision && t('providerModelVisionBadge'),
+                parameters.pdf && t('providerModelPdfBadge'),
+                customReasoning(profile, model) && t('providerModelReasoningBadge'),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              prominent
+              badge={profile.model === model ? t('providerDefaultModelBadge') : undefined}
+              onClick={() => editModel({ id: model })}
+              target="providerModel"
+            />
+          )
+        })}
         {visible.length > limit && (
           <Row label={t('modelShowMore')} onClick={() => setLimit((value) => value + 40)} />
         )}
@@ -638,6 +608,8 @@ export const ProviderModelPage = ({
   const [deleting, setDeleting] = useState(false)
   const request = useRef<AbortController>()
   useEffect(() => () => request.current?.abort(), [])
+  const update = <K extends keyof ProviderModelSettings>(key: K, value: ProviderModelSettings[K]) =>
+    setSettings((previous) => ({ ...previous, [key]: value }))
   const leave = useSettingsLeave(
     id !== selected.id ||
       JSON.stringify(settings) !== JSON.stringify(initialOptions) ||
@@ -664,6 +636,7 @@ export const ProviderModelPage = ({
       },
     },
   }
+  const parameters = providerModelParameters(candidate, model)
   const capability = validModel(model) ? customReasoning(candidate, model) : undefined
   const saveDisabled = busy || !validModel(model)
   const saveMenu = useOptionPanel(t('providerMoreSaveActions'), {
@@ -703,7 +676,8 @@ export const ProviderModelPage = ({
     setError('')
     setResult('')
     try {
-      const tested = await testProviderModel({ ...candidate, model }, current.signal)
+      const profile = { ...candidate, model }
+      const tested = await testProviderModel(profile, current.signal)
       if (!current.signal.aborted) {
         setResult(t('providerTestSuccess', { ms: tested.elapsedMs }) + '\n' + tested.text)
       }
@@ -764,8 +738,12 @@ export const ProviderModelPage = ({
           label={t('providerModelOutputLabel')}
           fieldLabel={t('providerMaxOutput')}
           value={output}
-          summary={output ? Number(output).toLocaleString() : t('providerInheritedOutput')}
-          placeholder={String(profile.maxOutputTokens)}
+          summary={
+            output
+              ? Number(output).toLocaleString()
+              : t('providerDefaultOutput', { tokens: parameters.maxOutputTokens.toLocaleString() })
+          }
+          placeholder={String(parameters.maxOutputTokens)}
           min={16}
           max={1048576}
           change={setOutput}
@@ -777,8 +755,53 @@ export const ProviderModelPage = ({
           />
         )}
       </Section>
+      <Section title={t('providerModelInputs')}>
+        <SwitchRow
+          label={t('providerVision')}
+          checked={parameters.vision}
+          change={(enabled) => update('vision', enabled)}
+        />
+        <SwitchRow
+          label={t('providerPdf')}
+          checked={parameters.pdf}
+          change={(enabled) => update('pdf', enabled)}
+        />
+        <p className={styles.insetHint}>{t('providerCapabilitiesHint')}</p>
+      </Section>
       <SettingsDisclosure title={t('providerModelAdvanced')} icon={<IconSettingsOutline16 />}>
         <div className={styles.fields}>
+          <Field label={t('providerTemperature')}>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step="any"
+              value={settings.temperature ?? ''}
+              onChange={(event) =>
+                update('temperature', event.target.value ? Number(event.target.value) : undefined)
+              }
+            />
+          </Field>
+          {profile.protocol === 'openai' && (
+            <div className={styles.field}>
+              <span>{t('providerTokenParameter')}</span>
+              <Select
+                ariaLabel={t('providerTokenParameter')}
+                value={parameters.tokenParameter}
+                options={[
+                  { value: 'max_tokens', label: 'max_tokens' },
+                  { value: 'max_completion_tokens', label: 'max_completion_tokens' },
+                ]}
+                onChange={(value) => update('tokenParameter', value)}
+              />
+            </div>
+          )}
+          {check(t('providerStreaming'), parameters.stream, (value) => update('stream', value))}
+          {profile.protocol === 'openai' &&
+            parameters.stream &&
+            check(t('providerStreamUsage'), parameters.streamUsage, (value) =>
+              update('streamUsage', value)
+            )}
           <div className={styles.field}>
             <span>{t('reasoningAdapter')}</span>
             <Select

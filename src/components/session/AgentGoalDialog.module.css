@@ -1,0 +1,47 @@
+.sheet {
+  --modal-header-gap: 16px;
+  --modal-footer-gap: 16px;
+}
+@media (min-width: 768px) {
+  .sheet {
+    width: 420px;
+  }
+}
+.fields {
+  display: grid;
+  gap: 16px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field label,
+.fieldTitle {
+  font-weight: 620;
+  color: var(--dsw-alias-label-primary);
+}
+.field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid var(--fs-line);
+  border-radius: 10px;
+  background: var(--fs-settings-canvas);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 16px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.field textarea:focus-visible {
+  outline: 2px solid var(--fs-brand-ink);
+  outline-offset: 1px;
+}
+.field small {
+  color: var(--fs-secondary-text);
+}
+.field p {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary);
+}

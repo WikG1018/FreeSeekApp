@@ -16,6 +16,15 @@ export type SettingsPageId =
   | 'chat'
   | 'personas'
   | 'personaEdit'
+  | 'assistantSettings'
+  | 'memories'
+  | 'memoryDetails'
+  | 'memorySuggestions'
+  | 'agents'
+  | 'agentDetails'
+  | 'agentTools'
+  | 'agentExtensions'
+  | 'agentEdit'
   | 'appearance'
   | 'data'
   | 'usage'
@@ -31,8 +40,24 @@ export type SettingsPageId =
 
 /** 可直接打开任意设置，返回路径始终与从目录进入时一致。 */
 export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
+  if (page === 'agentExtensions') {
+    return 'agentTools'
+  }
   if (page === 'personaEdit') {
     return 'personas'
+  }
+  if (
+    page === 'memories' ||
+    page === 'agents' ||
+    page === 'memoryDetails' ||
+    page === 'memorySuggestions' ||
+    page === 'agentDetails' ||
+    page === 'agentTools'
+  ) {
+    return 'assistantSettings'
+  }
+  if (page === 'agentEdit') {
+    return 'agents'
   }
   if (page === 'providers') {
     return 'account'

@@ -1,8 +1,15 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import { App as CapacitorApp } from '@capacitor/app'
+import {
+  hasAndroidBackgroundWork,
+  openTaskNotificationSettings,
+  readTaskNotificationPermission,
+} from '../../services/tasks/goalBridge.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
   setFontScale,
   setAutoCompress,
+  setComposerEnter,
   setLocale,
   setShowModelSwitcher,
   setShowReasoningPicker,
@@ -10,12 +17,13 @@ import {
   setStartupPage,
   setThemePreference,
   setTtsVoice,
+  setUseSystemFont,
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
 import { IconCheckOutline16 } from '../base/icons.js'
 import { Select } from '../base/Select.js'
-import { Section, SwitchRow } from './SettingsRows.js'
+import { Row, Section, SwitchRow } from './SettingsRows.js'
 import styles from './Settings.module.css'
 
 const themeChoices: { value: ThemePreference; label: TranslationKey }[] = [
@@ -32,7 +40,8 @@ const fontChoices: { value: number; label: TranslationKey }[] = [
 
 export const AppearancePage = () => {
   const t = useTranslate()
-  const { themePreference, fontScale, locale } = useSettings()
+  const { themePreference, fontScale, locale, useSystemFont } = useSettings()
+  const [fontSaveFailed, setFontSaveFailed] = useState(false)
   const name = useId()
   return (
     <>
@@ -63,7 +72,22 @@ export const AppearancePage = () => {
           ))}
         </div>
       </Section>
-      <Section title={t('settingsFontSize')}>
+      <Section title={t('settingsFont')}>
+        <Select
+          ariaLabel={t('settingsFontFamily')}
+          settingRow="value"
+          value={useSystemFont ? 'system' : 'misans'}
+          options={[
+            { value: 'misans', label: t('settingsFontMiSans') },
+            { value: 'system', label: t('settingsFontSystem') },
+          ]}
+          onChange={(font) => setFontSaveFailed(!setUseSystemFont(font === 'system'))}
+        />
+        {fontSaveFailed && (
+          <p className={styles.errorNote} role="alert">
+            {t('settingsFontSaveFailed')}
+          </p>
+        )}
         <div className={styles.fontPreview}>{t('settingsFontPreview')}</div>
         <div className={styles.segments} role="radiogroup" aria-label={t('settingsFontSize')}>
           {fontChoices.map((option) => (
@@ -119,11 +143,72 @@ const Choice = ({
   </label>
 )
 
+const BackgroundNotifications = () => {
+  const t = useTranslate()
+  const [granted, setGranted] = useState<boolean>()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(false)
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void readTaskNotificationPermission()
+        .then(({ granted }) => {
+          if (active) {
+            setGranted(granted)
+          }
+        })
+        .catch(() => {})
+    }
+    refresh()
+    const listener = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        refresh()
+      }
+    })
+    return () => {
+      active = false
+      void listener.then((handle) => handle.remove()).catch(() => {})
+    }
+  }, [])
+  return (
+    <Section title={t('settingsBackgroundSection')}>
+      <Row
+        label={t('settingsBackgroundNotifications')}
+        description={t('settingsBackgroundNotificationsHelp')}
+        value={
+          granted === undefined
+            ? undefined
+            : t(granted ? 'settingsBackgroundAllowed' : 'settingsBackgroundDenied')
+        }
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true)
+          setError(false)
+          try {
+            setGranted((await openTaskNotificationSettings()).granted)
+          } catch {
+            setError(true)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
+      {error && (
+        <p className={styles.paragraph} role="alert">
+          {t('settingsBackgroundOpenError')}
+        </p>
+      )}
+    </Section>
+  )
+}
+
 export const ChatPreferencesPage = () => {
   const t = useTranslate(),
     name = useId()
   const startupPage = useSettings((s) => s.startupPage)
   const [startupSaveFailed, setStartupSaveFailed] = useState(false)
+  const composerEnter = useSettings((s) => s.composerEnter)
+  const [composerSaveFailed, setComposerSaveFailed] = useState(false)
   const showModelSwitcher = useSettings((s) => s.showModelSwitcher),
     showReasoningPicker = useSettings((s) => s.showReasoningPicker),
     autoCompress = useSettings((s) => s.autoCompress),
@@ -135,6 +220,7 @@ export const ChatPreferencesPage = () => {
         <Select
           ariaLabel={t('settingsStartupPage')}
           settingRow="value"
+          compactMenu
           value={startupPage}
           options={[
             { value: 'last-chat', label: t('settingsStartupLastChat') },
@@ -145,6 +231,24 @@ export const ChatPreferencesPage = () => {
         {startupSaveFailed && (
           <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
             {t('settingsStartupSaveFailed')}
+          </p>
+        )}
+      </Section>
+      <Section title={t('settingsChatInput')}>
+        <Select
+          ariaLabel={t('settingsComposerEnter')}
+          settingRow="value"
+          compactMenu
+          value={composerEnter}
+          options={[
+            { value: 'send', label: t('settingsComposerSend') },
+            { value: 'newline', label: t('settingsComposerNewline') },
+          ]}
+          onChange={(value) => setComposerSaveFailed(!setComposerEnter(value))}
+        />
+        {composerSaveFailed && (
+          <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
+            {t('settingsComposerSaveFailed')}
           </p>
         )}
       </Section>
@@ -163,6 +267,7 @@ export const ChatPreferencesPage = () => {
         )}
         <SwitchRow label={t('settingsShowUsage')} checked={showUsage} change={setShowUsage} />
       </Section>
+      {hasAndroidBackgroundWork() && <BackgroundNotifications />}
       <Section title={t('longChats')}>
         <SwitchRow label={t('autoCompress')} checked={autoCompress} change={setAutoCompress} />
         <p className={styles.paragraph}>{t('autoCompressHint')}</p>

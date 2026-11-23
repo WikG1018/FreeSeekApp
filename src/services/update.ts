@@ -3,9 +3,10 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
 import { openExternal } from '../utils/openExternal.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from './diagnostics/log.js'
+import { isWindowsDesktop } from './api/windowsTransport.js'
 
 /**
- * 应用内更新：检查版本，展示发行说明，用户选择下载和安装。
+ * 应用内更新：检查版本、预下载并展示发行说明，用户确认安装。
  *
  * - 发布 API 与独立更新清单分别探测，兼容只代理 Release 附件的镜像站
  * - 结果缓存 6 小时，避免每次启动都请求
@@ -22,6 +23,12 @@ const METADATA_SOURCES = [
   ...MIRRORS.map((mirror) => `${mirror}${RELEASE_MANIFEST}`),
 ]
 const CACHE_KEY = 'freeseek:update-cache'
+const cacheKey = () =>
+  isWindowsDesktop()
+    ? 'freeseek:windows-update-cache'
+    : Capacitor.isNativePlatform()
+      ? CACHE_KEY
+      : 'freeseek:web-update-cache'
 const CACHE_TTL = 6 * 3600_000
 const FETCH_TIMEOUT = 8000
 
@@ -41,11 +48,22 @@ type NativeUpdate = {
   addListener: (
     event: 'progress',
     cb: (payload: { received: number; total: number }) => void
-  ) => Promise<{ remove: () => void }>
+  ) => Promise<{ remove: () => Promise<void> }>
 }
 
 const UpdateNative = registerPlugin<NativeUpdate>('Update')
 type PackageCheck = { expectedSize: number; sha256: string | null; version: string }
+type PackageUpdater = Pick<NativeUpdate, 'get' | 'hasFile' | 'download' | 'install' | 'addListener'>
+type ReleaseAsset = { name: string; size: number; url: string; sha256: string | null }
+
+declare global {
+  interface Window {
+    freeseekWindowsUpdate?: PackageUpdater
+  }
+}
+
+const packageUpdater = () => (isWindowsDesktop() ? window.freeseekWindowsUpdate : UpdateNative)
+const browserUpdate = () => !isWindowsDesktop() && !Capacitor.isNativePlatform()
 
 export type ReleaseInfo = {
   version: string
@@ -53,7 +71,9 @@ export type ReleaseInfo = {
   notes: string
   publishedAt: string
   pageUrl: string
-  apk: { name: string; size: number; url: string; sha256: string | null } | null
+  apk: ReleaseAsset | null
+  windows?: ReleaseAsset
+  webFiles?: string[]
 }
 
 export type UpdateStatus =
@@ -114,7 +134,7 @@ type Cache = { at: number; release: ReleaseInfo | null }
 
 const readCache = (): Cache => {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null')
+    const parsed: unknown = JSON.parse(localStorage.getItem(cacheKey()) ?? 'null')
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
@@ -127,20 +147,32 @@ const readCache = (): Cache => {
       if (!cached) {
         return { at: parsed.at, release: null }
       }
+      if (browserUpdate()) {
+        return {
+          at: parsed.at,
+          release: toWebRelease({
+            version: cached.version,
+            notes: cached.notes,
+            files: cached.webFiles,
+          }),
+        }
+      }
       const release = toRelease({
         tag_name: cached.tag,
         body: typeof cached.notes === 'string' ? cached.notes : '',
         published_at: typeof cached.publishedAt === 'string' ? cached.publishedAt : '',
-        assets: cached.apk
-          ? [
-              {
-                name: cached.apk.name,
-                size: cached.apk.size,
-                browser_download_url: cached.apk.url,
-                ...(cached.apk.sha256 ? { digest: `sha256:${cached.apk.sha256}` } : {}),
-              },
-            ]
-          : [],
+        assets: [cached.apk, cached.windows].flatMap((asset) =>
+          asset
+            ? [
+                {
+                  name: asset.name,
+                  size: asset.size,
+                  browser_download_url: asset.url,
+                  ...(asset.sha256 ? { digest: `sha256:${asset.sha256}` } : {}),
+                },
+              ]
+            : []
+        ),
       })
       return { at: parsed.at, release }
     }
@@ -152,7 +184,7 @@ const readCache = (): Cache => {
 
 const writeCache = (release: ReleaseInfo | null) => {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), release }))
+    localStorage.setItem(cacheKey(), JSON.stringify({ at: Date.now(), release }))
   } catch {
     // 存储不可用时只在内存生效
   }
@@ -168,29 +200,53 @@ type GithubRelease = {
   assets?: GithubAsset[]
 }
 
+const releaseAsset = (asset: GithubAsset | undefined, tag: string): ReleaseAsset | null => {
+  if (!asset) {
+    return null
+  }
+  const url = new URL(asset.browser_download_url)
+  if (
+    url.origin !== 'https://github.com' ||
+    url.username ||
+    url.password ||
+    url.pathname !== `/${REPO}/releases/download/${tag}/${asset.name}` ||
+    url.search ||
+    url.hash ||
+    !Number.isSafeInteger(asset.size) ||
+    asset.size <= 0 ||
+    asset.size > 512 * 1024 * 1024
+  ) {
+    throw new Error('Invalid release asset')
+  }
+  if (asset.digest != null && !/^sha256:[a-f0-9]{64}$/i.test(asset.digest)) {
+    throw new Error('Invalid release digest')
+  }
+  return {
+    name: asset.name,
+    size: asset.size,
+    url: url.href,
+    sha256: asset.digest?.slice(7).toLowerCase() ?? null,
+  }
+}
+
 export const toRelease = (data: GithubRelease): ReleaseInfo => {
   const tag = data.tag_name ?? ''
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
     throw new Error('Invalid release tag')
   }
   const assets = data.assets ?? []
-  const apk = assets.find((asset) => asset.name === `freeseek-${tag}-release.apk`) ?? null
-  if (apk) {
-    const url = new URL(apk.browser_download_url)
-    if (
-      url.origin !== 'https://github.com' ||
-      url.pathname !== `/${REPO}/releases/download/${tag}/${apk.name}` ||
-      url.search ||
-      url.hash ||
-      !Number.isSafeInteger(apk.size) ||
-      apk.size <= 0 ||
-      apk.size > 512 * 1024 * 1024
-    ) {
-      throw new Error('Invalid release asset')
-    }
-    if (apk.digest != null && !/^sha256:[a-f0-9]{64}$/i.test(apk.digest)) {
-      throw new Error('Invalid release digest')
-    }
+  const apk = releaseAsset(
+    assets.find((asset) => asset.name === `freeseek-${tag}-release.apk`),
+    tag
+  )
+  let windows: ReleaseAsset | null = null
+  try {
+    windows = releaseAsset(
+      assets.find((asset) => asset.name === `freeseek-${tag}-windows-x64-setup.exe`),
+      tag
+    )
+  } catch {
+    // Windows metadata does not change whether this release can be installed on Android.
   }
   return {
     version: tag.replace(/^v/i, ''),
@@ -198,23 +254,40 @@ export const toRelease = (data: GithubRelease): ReleaseInfo => {
     notes: (data.body ?? '').trim(),
     publishedAt: data.published_at ?? '',
     pageUrl: `https://github.com/${REPO}/releases/tag/${tag}`,
-    apk: apk
-      ? {
-          name: apk.name,
-          size: apk.size,
-          url: apk.browser_download_url,
-          sha256: /^sha256:[a-f0-9]{64}$/i.test(apk.digest ?? '')
-            ? (apk.digest ?? '').slice(7).toLowerCase()
-            : null,
-        }
-      : null,
+    apk,
+    ...(windows?.sha256 ? { windows } : {}),
+  }
+}
+
+const availablePackage = (release: ReleaseInfo) =>
+  isWindowsDesktop() ? release.windows : release.apk
+
+const toWebRelease = (data: { version: unknown; notes: unknown; files: unknown }): ReleaseInfo => {
+  const { version, notes, files } = data
+  if (
+    typeof version !== 'string' ||
+    !Array.isArray(files) ||
+    !files.length ||
+    files.length > 32 ||
+    files.some(
+      (file) =>
+        typeof file !== 'string' ||
+        !/^static\/(?:js|css)\/(?:async\/)?[\w~.-]+\.[a-f0-9]{8}\.(?:js|css)$/.test(file)
+    )
+  ) {
+    throw new Error('Invalid web update manifest')
+  }
+  return {
+    ...toRelease({ tag_name: 'v' + version, body: typeof notes === 'string' ? notes : '' }),
+    webFiles: [...new Set(files as string[])],
   }
 }
 
 /** 超时覆盖响应头和完整响应体；拒绝无限滴流与过大的 HTML 错误页。 */
 const readText = async (url: string): Promise<{ status: number; text: string }> => {
-  if (Capacitor.isNativePlatform()) {
-    const result = await UpdateNative.get({ url, timeoutMs: FETCH_TIMEOUT })
+  const updater = !browserUpdate() && packageUpdater()
+  if (updater) {
+    const result = await updater.get({ url, timeoutMs: FETCH_TIMEOUT })
     return { status: result.status, text: result.body }
   }
   const controller = new AbortController()
@@ -222,8 +295,9 @@ const readText = async (url: string): Promise<{ status: number; text: string }> 
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { Accept: 'application/vnd.github+json' },
+      headers: { Accept: 'application/json' },
       cache: 'no-store',
+      redirect: 'error',
     })
     const reader = response.body?.getReader()
     if (!reader) {
@@ -276,7 +350,10 @@ const readReleaseSource = async (
       const data = JSON.parse(text) as GithubRelease
       if (data?.tag_name) {
         const release = toRelease(data)
-        if (release.apk) {
+        if (
+          availablePackage(release) ||
+          (isWindowsDesktop() && !isNewer(release.version, currentVersion()))
+        ) {
           return { release, mirror: source }
         }
       }
@@ -288,9 +365,16 @@ const readReleaseSource = async (
 }
 
 const fetchRelease = async () => {
+  if (browserUpdate()) {
+    const { status, text } = await readText(new URL('web-version.json', window.location.href).href)
+    return status === 200 ? { release: toWebRelease(JSON.parse(text)), mirror: 'web' } : null
+  }
   const official = await readReleaseSource(RELEASE_API)
   if (official) {
     return official
+  }
+  if (isWindowsDesktop()) {
+    return readReleaseSource(RELEASE_MANIFEST)
   }
   // A successful mirror response can still be stale. Try the fallback sources within one timeout window.
   const results = await Promise.all(METADATA_SOURCES.slice(1).map(readReleaseSource))
@@ -306,53 +390,106 @@ const fetchRelease = async () => {
 /** 把资源地址映射到某个镜像前缀下 */
 const mirrored = (mirror: string, url: string) => (mirror ? `${mirror}${url}` : url)
 
-const fileNameFor = (release: ReleaseInfo) => `freeseek-${release.version}.apk`
+const fileNameFor = (release: ReleaseInfo, asset: ReleaseAsset) =>
+  isWindowsDesktop() ? asset.name : `freeseek-${release.version}.apk`
+let preparedWebVersion = ''
 
-const showRelease = async (release: ReleaseInfo, at: number): Promise<boolean> => {
+const showRelease = async (
+  release: ReleaseInfo,
+  at: number,
+  predownload = true
+): Promise<boolean> => {
   const newer = isNewer(release.version, currentVersion())
   let path = ''
-  if (newer && release.apk && Capacitor.isNativePlatform()) {
-    const cached = await UpdateNative.hasFile({
-      fileName: fileNameFor(release),
-      expectedSize: release.apk.size,
-      sha256: release.apk.sha256,
-      version: release.version,
-    }).catch(() => null)
+  const asset = availablePackage(release)
+  if (newer && asset && !browserUpdate()) {
+    const cached = await packageUpdater()
+      ?.hasFile({
+        fileName: fileNameFor(release, asset),
+        expectedSize: asset.size,
+        sha256: asset.sha256,
+        version: release.version,
+      })
+      .catch(() => null)
     if (cached?.exists) {
       path = cached.path
     }
   }
+  const ready = Boolean(path || (release.webFiles && preparedWebVersion === release.version))
   useUpdate.setState({
     release,
     lastCheckedAt: at,
-    status: path ? 'ready' : newer ? 'available' : 'latest',
+    status: ready ? 'ready' : newer ? 'available' : 'latest',
     filePath: path,
-    percent: path ? 100 : 0,
+    percent: ready ? 100 : 0,
     error: '',
   })
+  if (
+    predownload &&
+    newer &&
+    !ready &&
+    (release.webFiles || (asset && (isWindowsDesktop() || Capacitor.getPlatform() === 'android')))
+  ) {
+    void downloadUpdate('automatic')
+  }
   return newer
+}
+
+const prepareWebUpdate = async (release: ReleaseInfo, files: string[], trigger: string) => {
+  useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
+  const finish = beginDiagnosticOperation('update', 'web.prepare', {
+    version: release.version,
+    trigger,
+  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 30_000)
+  try {
+    for (const [index, path] of files.entries()) {
+      const response = await fetch(new URL(path, window.location.href), {
+        signal: controller.signal,
+        mode: 'same-origin',
+        cache: 'force-cache',
+        redirect: 'error',
+      })
+      if (!response.ok || response.headers.get('content-type')?.includes('text/html')) {
+        throw new Error('Web update resource unavailable')
+      }
+      await response.arrayBuffer()
+      useUpdate.setState({ percent: Math.round(((index + 1) / files.length) * 100) })
+    }
+    preparedWebVersion = release.version
+    useUpdate.setState({ status: 'ready', percent: 100 })
+    finish('completed', { files: files.length })
+    return true
+  } catch (error) {
+    useUpdate.setState({ status: 'available', percent: 0, error: 'download-failed' })
+    finish('failed', diagnosticError(error))
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** 检查更新；返回是否有新版本 */
 export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> => {
   const state = useUpdate.getState()
   if (state.status === 'checking' || state.status === 'downloading') {
-    return false
+    return Boolean(state.release && isNewer(state.release.version, currentVersion()))
   }
   const cache = readCache()
   const known =
     state.release && (!cache.release || !isNewer(cache.release.version, state.release.version))
       ? state.release
       : cache.release
+  useUpdate.setState({ status: 'checking', error: '' })
   if (!force && cache.release && Date.now() - cache.at < CACHE_TTL) {
     return showRelease(known ?? cache.release, cache.at)
   }
 
   logEvent('update', 'check.started', { force })
-  useUpdate.setState({ status: 'checking', error: '' })
   const offline = async () => {
     if (known && isNewer(known.version, currentVersion())) {
-      await showRelease(known, cache.at || state.lastCheckedAt)
+      await showRelease(known, cache.at || state.lastCheckedAt, false)
       useUpdate.setState({ error: 'network' })
       logEvent(
         'update',
@@ -370,7 +507,10 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
     if (!found) {
       return await offline()
     }
-    const release = known && isNewer(known.version, found.release.version) ? known : found.release
+    const release =
+      !found.release.webFiles && known && isNewer(known.version, found.release.version)
+        ? known
+        : found.release
     writeCache(release)
     const newer = await showRelease(release, Date.now())
     logEvent('update', 'check.completed', { version: release.version, newer, source: found.mirror })
@@ -382,50 +522,60 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
 }
 
 /** 下载更新包：依次尝试直连和镜像，始终保留校验与手动重试。 */
-export const downloadUpdate = async (): Promise<boolean> => {
+export const downloadUpdate = async (
+  trigger: 'automatic' | 'manual' = 'manual'
+): Promise<boolean> => {
   const { release, status } = useUpdate.getState()
-  const apk = release?.apk
-  if (!apk) {
+  if (!release) {
     return false
   }
   if (status !== 'available' || !isNewer(release.version, currentVersion())) {
     return status === 'ready'
   }
-  if (!Capacitor.isNativePlatform()) {
-    // 网页端不做预下载，直接给出发布页
-    useUpdate.setState({ status: 'available' })
+  if (browserUpdate()) {
+    return release.webFiles ? prepareWebUpdate(release, release.webFiles, trigger) : false
+  }
+  const asset = availablePackage(release)
+  const updater = packageUpdater()
+  if (!asset || !updater) {
     return false
   }
 
   useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
   const finish = beginDiagnosticOperation('update', 'download.transfer', {
     version: release.version,
-    expectedBytes: apk.size,
-    checksumAvailable: Boolean(apk.sha256),
+    trigger,
+    expectedBytes: asset.size,
+    checksumAvailable: Boolean(asset.sha256),
   })
   let receivedBytes = 0
-  const listener = await UpdateNative.addListener('progress', ({ received, total }) => {
-    receivedBytes = received
-    useUpdate.setState({
-      percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
+  const listener = await updater
+    .addListener('progress', ({ received, total }) => {
+      if (useUpdate.getState().status !== 'downloading') {
+        return
+      }
+      receivedBytes = received
+      useUpdate.setState({
+        percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
+      })
     })
-  }).catch(() => null)
+    .catch(() => null)
 
-  const fileName = fileNameFor(release)
+  const fileName = fileNameFor(release, asset)
   try {
-    const check = { expectedSize: apk.size, sha256: apk.sha256 ?? null, version: release.version }
-    const cached = await UpdateNative.hasFile({ fileName, ...check })
+    const check = { expectedSize: asset.size, sha256: asset.sha256, version: release.version }
+    const cached = await updater.hasFile({ fileName, ...check })
     if (cached.exists) {
       useUpdate.setState({ status: 'ready', percent: 100, filePath: cached.path })
       finish('completed', { cached: true })
       return true
     }
-    const mirrors = MIRRORS.map((m) => mirrored(m, apk.url))
+    const mirrors = isWindowsDesktop() ? [asset.url] : MIRRORS.map((m) => mirrored(m, asset.url))
     for (const url of mirrors) {
       receivedBytes = 0
       const source = new URL(url).host
       try {
-        const result = await UpdateNative.download({ url, fileName, ...check })
+        const result = await updater.download({ url, fileName, ...check })
         useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
         finish('completed', { source, receivedBytes })
         return true
@@ -449,36 +599,72 @@ export const downloadUpdate = async (): Promise<boolean> => {
     useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
     return false
   } finally {
-    void listener?.remove()
+    await listener?.remove().catch(() => {})
   }
 }
 
-/** 安装已下载的包；返回是否成功拉起安装器 */
+const waitForSavedHistory = async () => {
+  const { saveChatsBeforeRestart, useChatStore } = await import('./chat/store.js')
+  const drafts = browserUpdate() || isWindowsDesktop() ? await import('./chat/drafts.js') : null
+  const busy = () =>
+    Boolean(
+      drafts &&
+      (Object.keys(useChatStore.getState().streaming).length > 0 ||
+        Array.from(drafts.useDrafts.getState().drafts.values()).some(
+          (draft) => draft.attachments.length > 0
+        ))
+    )
+  if (busy()) {
+    return 'active-chat'
+  }
+  if (!(await saveChatsBeforeRestart())) {
+    return 'history-unsaved'
+  }
+  return busy() ? 'active-chat' : undefined
+}
+
+/** 安装已下载的包或刷新网页。 */
 export const installUpdate = async (): Promise<{ installed: boolean; reason?: string }> => {
-  const { filePath, release } = useUpdate.getState()
-  if (!Capacitor.isNativePlatform()) {
-    if (release) {
-      await openExternal(release.pageUrl)
+  const { filePath, release, status } = useUpdate.getState()
+  if (browserUpdate()) {
+    if (status !== 'ready' || !release?.webFiles) {
+      return { installed: false, reason: 'no-release' }
     }
-    return { installed: false, reason: 'web' }
+    try {
+      const reason = await waitForSavedHistory()
+      if (reason) {
+        return { installed: false, reason }
+      }
+      if (!navigator.onLine) {
+        return { installed: false, reason: 'web-offline' }
+      }
+      logEvent('update', 'web.reload', { version: release.version })
+      window.location.reload()
+      return { installed: true }
+    } catch (error) {
+      logEvent('update', 'web.reload-failed', diagnosticError(error), 'error')
+      return { installed: false, reason: 'install-failed' }
+    }
   }
   if (!filePath) {
     return { installed: false, reason: 'no-file' }
   }
   try {
-    if (!release?.apk) {
+    const updater = packageUpdater()
+    const asset = release && availablePackage(release)
+    if (!release || !asset || !updater) {
       return { installed: false, reason: 'no-release' }
     }
     logEvent('update', 'install.requested', { version: release.version })
-    const { saveChatsBeforeRestart } = await import('./chat/store.js')
-    if (!(await saveChatsBeforeRestart())) {
-      logEvent('update', 'install.waiting-for-history', {}, 'warn')
-      return { installed: false, reason: 'history-unsaved' }
+    const reason = await waitForSavedHistory()
+    if (reason) {
+      logEvent('update', 'install.waiting-for-history', { reason }, 'warn')
+      return { installed: false, reason }
     }
-    const result = await UpdateNative.install({
+    const result = await updater.install({
       path: filePath,
-      expectedSize: release.apk.size,
-      sha256: release.apk.sha256 ?? null,
+      expectedSize: asset.size,
+      sha256: asset.sha256,
       version: release.version,
     })
     logEvent(
@@ -522,7 +708,7 @@ let lastAutoCheck = 0
  * 1. 每次启动都查（不再被 6 小时缓存挡住），首屏渲染后 2.5 秒开始
  * 2. 回到前台超过 30 分钟补查一次
  * 3. 常驻运行时每 6 小时查一次
- * 查到新版本时显示侧边栏入口，由更新说明页发起下载。
+ * 查到新版本后自动准备安装包或网页资源，侧边栏可查看更新说明与进度。
  */
 export const initUpdateChecker = (): void => {
   const run = (reason: string) => {

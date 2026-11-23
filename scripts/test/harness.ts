@@ -1,9 +1,18 @@
+import { readNativeBrowser } from '../../src/services/tasks/nativeBrowser.js'
 import '../../src/compatibility.js'
 import { createId } from '../../src/utils/id.js'
 import { readJsonEntry } from '../../src/services/chat/history/readJson.js'
 import { writeArchive } from '../../src/services/chat/history/zipWriter.js'
 import { toIndexEntry } from '../../src/services/chat/history/toArchive.js'
 import * as personas from '../../src/services/personas.js'
+import * as assistantLibrary from '../../src/services/assistants/library.js'
+import * as assistantMemory from '../../src/services/assistants/memory.js'
+import * as taskArtifacts from '../../src/services/tasks/artifacts.js'
+import * as workspaces from '../../src/services/tasks/workspaces.js'
+import { normalizeProviderUsage } from '../../src/services/api/providerUsage.js'
+import { en } from '../../src/i18n/en.js'
+import { zh } from '../../src/i18n/zh.js'
+import * as taskAttachments from '../../src/services/tasks/attachments.js'
 import * as branches from '../../src/services/chat/branches.js'
 import * as diagnostics from '../../src/services/diagnostics/log.js'
 import * as multipart from '../../src/services/api/multipart.js'
@@ -91,6 +100,8 @@ const response = (
       .join(''),
     { headers: { 'Content-Type': 'text/event-stream' } }
   )
+import * as taskReaderWeb from '../../src/services/tasks/web.js'
+import * as taskReaderBrowser from '../../src/services/tasks/browser.js'
 import * as db from '../../src/services/chat/db.js'
 import * as store from '../../src/services/chat/store.js'
 import * as settings from '../../src/services/settings.js'
@@ -115,11 +126,18 @@ import { toSessionFile } from '../../src/services/chat/history/toArchive.js'
 import { toLocalSession } from '../../src/services/chat/history/toLocal.js'
 import { exportArchive } from '../../src/services/chat/history/exportArchive.js'
 import { importArchive } from '../../src/services/chat/history/importArchive.js'
+import {
+  stageArchiveFile,
+  useDiskForArchive,
+} from '../../src/services/chat/history/stageArchiveFile.js'
 import { readArchive, readEntry } from '../../src/services/chat/history/zipReader.js'
 import { renderMermaid } from '../../src/services/markdown/mermaid.js'
 
 Object.assign(window, {
   __audit: {
+    taskReaderWeb,
+    taskReaderBrowser,
+    readNativeBrowser,
     db,
     store,
     settings,
@@ -144,12 +162,21 @@ Object.assign(window, {
     toLocalSession,
     exportArchive,
     importArchive,
+    stageArchiveFile,
+    useDiskForArchive,
     readArchive,
     readEntry,
     renderMermaid,
     writeArchive,
     toIndexEntry,
     personas,
+    assistantLibrary,
+    assistantMemory,
+    taskArtifacts,
+    workspaces,
+    normalizeProviderUsage,
+    messages: { en, zh },
+    taskAttachments,
     sumMessageUsage,
     fixtures: { user, assistant, session },
     seed,

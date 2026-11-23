@@ -1,10 +1,12 @@
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import { useSettings } from '../../services/settings.js'
 import { modelLabel, useProviders } from '../../services/providers.js'
-import { usePersonas } from '../../services/personas.js'
+import { localizePersona, usePersonas } from '../../services/personas.js'
 import {
   IconBrowseOutline16,
+  IconBookOutline16,
   IconClockOutline16,
   IconDataOutline16,
   IconFileOutline16,
@@ -29,6 +31,15 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   chat: 'settingsChatPreferences',
   personas: 'personaManagerTitle',
   personaEdit: 'settingsEditPersona',
+  assistantSettings: isWindowsDesktop() ? 'assistantMemory' : 'assistantSettings',
+  memories: 'assistantMemories',
+  memoryDetails: 'assistantMemoryDetails',
+  memorySuggestions: 'assistantPendingMemories',
+  agents: 'assistantAgents',
+  agentDetails: 'assistantAgentDetails',
+  agentTools: 'assistantAgentGlobalTools',
+  agentExtensions: 'projectExtensions',
+  agentEdit: 'assistantAgentEdit',
   appearance: 'settingsAppearanceLanguage',
   usage: 'usageTitle',
   usagePricing: 'usagePricingTitle',
@@ -49,6 +60,7 @@ const groups = [
       ['account', IconBrowseOutline16],
       ['chat', IconSettingsOutline16],
       ['personas', IconUserOutline16],
+      ['assistantSettings', IconBookOutline16],
     ],
   },
   {
@@ -76,14 +88,15 @@ export const SettingsDirectory = ({
   const apiKey = useSettings((s) => s.apiKey),
     theme = useSettings((s) => s.themePreference)
   const selection = useProviders((s) => s.selection)
-  const persona = usePersonas((s) => s.personas.find((p) => p.id === s.defaultId)?.name)
+  const locale = useSettings((s) => s.locale)
+  const persona = usePersonas((s) => s.personas.find((p) => p.id === s.defaultId))
   const count = useChatStore((s) => s.sessions.length)
   const values: Partial<Record<SettingsPageId, string>> = {
     account:
       selection.providerId === 'deepseek' && !apiKey
         ? t('settingsApiKeyMissing')
         : modelLabel(selection.model),
-    personas: persona,
+    personas: persona ? localizePersona(persona, locale).name : undefined,
     appearance: t(
       theme === 'system' ? 'themeSystem' : theme === 'dark' ? 'themeDark' : 'themeLight'
     ),
@@ -108,6 +121,7 @@ export const SettingsDirectory = ({
                 rail &&
                 (active === id ||
                   parentSettingsPage(active) === id ||
+                  (id === 'assistantSettings' && active === 'agentEdit') ||
                   (id === 'usage' && active === 'usageModel') ||
                   (id === 'account' && active.startsWith('provider')))
               }

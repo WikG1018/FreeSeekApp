@@ -76,18 +76,27 @@ export const runImmersiveCases = async ({ run }) => {
   await run(
     'attachment chooser preserves compact composer height and keeps every action usable with large text',
     async (page) => {
-      await page.evaluate(() => window.__audit.settings.setApiKey('fixture'))
+      await page.evaluate(() => {
+        window.__audit.settings.setApiKey('fixture')
+        navigator.mediaDevices.getUserMedia = async () => {
+          throw new DOMException('No camera', 'NotFoundError')
+        }
+      })
       const idleHeight = (await page.getByTestId('chat-composer').boundingBox()).height
       const trigger = page.getByRole('button', { name: '添加附件', exact: true })
       await trigger.click()
       const panel = page.getByTestId('option-panel')
       assert.equal(await panel.getByRole('button').count(), 3)
       assert.equal((await page.getByTestId('chat-composer').boundingBox()).height, idleHeight)
-      const chooser = page.waitForEvent('filechooser')
       await panel.getByRole('button', { name: '拍照', exact: true }).click()
-      assert.equal(await (await chooser).element().getAttribute('capture'), 'environment')
       await panel.waitFor({ state: 'hidden' })
-      assert.ok(await trigger.evaluate((el) => document.activeElement === el))
+      const preview = page.getByRole('dialog', { name: '拍照', exact: true })
+      await preview.getByRole('alert').waitFor()
+      await preview.getByRole('button', { name: '取消', exact: true }).click()
+      await preview.waitFor({ state: 'detached' })
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute('aria-label') === '添加附件'
+      )
       await page.setViewportSize({ width: 320, height: 720 })
       await page.evaluate(() => window.__audit.settings.setFontScale(1.25))
       await page.locator('textarea').fill('大字号输入测试')
@@ -500,6 +509,13 @@ export const runImmersiveCases = async ({ run }) => {
         const a = window.__audit
         a.settings.setApiKey('fixture')
         a.settings.setShowModelSwitcher(true)
+        a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          url: 'https://models.example.test/v1',
+          model: 'scope-vision',
+          models: ['scope-vision', 'scope-text', 'scope-pdf'],
+          modelSettings: { 'scope-vision': { vision: true }, 'scope-pdf': { pdf: true } },
+        })
       })
       const root = page.getByTestId('chat-composer'),
         trigger = page.getByTestId('composer-model'),
@@ -516,11 +532,21 @@ export const runImmersiveCases = async ({ run }) => {
       const pro = panel.getByRole('option', { name: /DeepSeek V4 Pro/ })
       assert.ok(await pro.isDisabled())
       assert.match(await pro.textContent(), /不支持图片/)
+      assert.ok(
+        await panel.getByRole('option', { name: /DeepSeek Flash.*文本 · 图片 · PDF/ }).isEnabled()
+      )
+      assert.ok(
+        await panel.getByRole('option', { name: /^scope-vision.*文本 · 图片$/ }).isEnabled()
+      )
+      assert.ok(await panel.getByRole('option', { name: /^scope-pdf.*文本 · PDF/ }).isDisabled())
+      const textOnly = panel.getByRole('option', { name: /^scope-text.*纯文本/ })
+      assert.ok(await textOnly.isDisabled())
       await page.keyboard.press('Escape')
       assert.ok(await root.getByRole('img', { name: 'pixel.png', exact: true }).isVisible())
       await root.getByRole('button', { name: '删除', exact: true }).click()
       await trigger.click()
       assert.ok(await pro.isEnabled())
+      assert.ok(await textOnly.isEnabled())
       await page.keyboard.press('Escape')
       await page.evaluate(async () => {
         const a = window.__audit,
@@ -543,6 +569,7 @@ export const runImmersiveCases = async ({ run }) => {
       })
       await trigger.click()
       assert.ok(await pro.isDisabled())
+      assert.ok(await textOnly.isDisabled())
       await page.evaluate(() =>
         window.__audit.store.useChatStore.setState({
           streaming: { 'image-history': new AbortController() },

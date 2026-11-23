@@ -8,6 +8,9 @@ import styles from './Welcome.module.css'
 const PERIOD = 5600
 const TAU = 2 * Math.PI
 const REPLY_MS = 1140
+const GREETING_DELAY = 75
+const GREETING_TRAVEL = 390
+const GREETING_CYCLE = 620
 const bubbleDelays = [80, 138, 220]
 
 const beat = (age: number, duration: number, peak: number) => {
@@ -24,6 +27,18 @@ const energy = (time: number, taps: number[], delay: number, duration: number, p
   return value / (1 + 0.4 * value)
 }
 
+const greetingOffset = (time: number, taps: number[], delay: number) => {
+  const wave = taps.reduce((sum, tap) => {
+    const phase = (time - tap - delay) / GREETING_CYCLE
+    if (phase <= 0 || phase >= 1) {
+      return sum
+    }
+    const envelope = Math.sin(Math.PI * phase)
+    return sum + Math.sin(TAU * phase) * envelope * envelope
+  }, 0)
+  return -8.8 * Math.tanh(wave * 1.3)
+}
+
 const transform = (el: HTMLElement, x: number, y: number, angle: number) => {
   el.style.transform = `translate3d(${x}px,${y}px,0) rotate(${angle}deg)`
 }
@@ -34,9 +49,8 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
   const respond = useRef<(() => void) | null>(null)
   const clock = useRef({ time: 0, taps: [] as number[] })
   const greeting = t('welcomeMessageChat250808')
-  const boundary = greeting.search(/[，,]/)
-  const hello = boundary > 0 ? greeting.slice(0, boundary) : greeting
-  const rest = boundary > 0 ? greeting.slice(boundary) : ''
+  // Keep Latin words and closing punctuation together when the greeting wraps.
+  const parts = greeting.match(/[A-Za-z0-9]+[,.!?]?|\S[，。！？、]?|\s+/gu) ?? []
 
   useEffect(() => {
     const brand = root.current
@@ -46,8 +60,9 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
     const [leader, follower] = brand.querySelectorAll<HTMLElement>('[data-whale-ride]')
     const [leadReply, followReply] = brand.querySelectorAll<HTMLElement>('[data-whale-reply]')
     const bubbles = brand.querySelectorAll<HTMLElement>('[data-whale-bubble]')
-    const accent = brand.querySelector<HTMLElement>('[data-whale-accent]')
-    if (!leader || !follower || !leadReply || !followReply || !accent) {
+    const heading = brand.querySelector<HTMLElement>('[data-startup-greeting]')
+    const greetingParts = brand.querySelectorAll<HTMLElement>('[data-greeting-part]')
+    if (!leader || !follower || !leadReply || !followReply || !heading) {
       return
     }
 
@@ -55,6 +70,7 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
     const canSplit =
       typeof CSS !== 'undefined' && CSS.supports('clip-path', 'polygon(0 0, 100% 0, 100% 100%)')
     const timeline = clock.current
+    const step = GREETING_TRAVEL / Math.max(1, greetingParts.length - 1)
     let frame = 0,
       last: number | null = null,
       inView = true,
@@ -62,7 +78,8 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
 
     const paint = () => {
       const { time, taps } = timeline
-      const still = reduced.matches || !canSplit || isStartupVisible()
+      const stillText = reduced.matches || isStartupVisible()
+      const still = stillText || !canSplit
       if (still) {
         leader.style.transform = 'none'
         follower.style.transform = 'none'
@@ -106,7 +123,11 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
           bubble.style.transform = `translate3d(${(index + 1) * 3 * phase}px,${-21 * phase}px,0) scale(${0.62 + 0.4 * phase})`
         }
       })
-      accent.style.opacity = String(0.96 * lead)
+      heading.toggleAttribute('data-greeting-feedback', reduced.matches && since < 860)
+      greetingParts.forEach((part, index) => {
+        const offset = stillText ? 0 : greetingOffset(time, taps, GREETING_DELAY + step * index)
+        part.style.transform = offset === 0 ? 'none' : `translate3d(0,${offset}px,0)`
+      })
     }
     const visible = () =>
       active && inView && !isStartupVisible() && document.visibilityState === 'visible'
@@ -148,7 +169,8 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
     }
     respond.current = () => {
       if (visible()) {
-        timeline.taps.push(timeline.time)
+        const sinceFrame = last === null ? 0 : Math.max(0, performance.now() - last)
+        timeline.taps.push(timeline.time + sinceFrame)
         sync()
       }
     }
@@ -173,7 +195,7 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
       document.removeEventListener('visibilitychange', sync)
       window.removeEventListener(startupEndedEvent, sync)
     }
-  }, [active])
+  }, [active, greeting])
 
   return (
     <div className={styles.whales} ref={root}>
@@ -187,15 +209,30 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
         onClick={() => respond.current?.()}
       >
         <span className={styles.whaleArt} aria-hidden="true">
-          <img className={styles.whaleFallback} src={startupMarkUrl} alt="" draggable={false} />
+          <img
+            className={`${styles.whaleFallback} fs-whale-image`}
+            src={startupMarkUrl}
+            alt=""
+            draggable={false}
+          />
           <span className={styles.whaleLeader} data-whale-ride="">
             <span data-whale-reply="">
-              <img className={whaleLogo.large} src={startupMarkUrl} alt="" draggable={false} />
+              <img
+                className={`${whaleLogo.large} fs-whale-image`}
+                src={startupMarkUrl}
+                alt=""
+                draggable={false}
+              />
             </span>
           </span>
           <span className={styles.whaleFollower} data-whale-ride="">
             <span data-whale-reply="">
-              <img className={whaleLogo.small} src={startupMarkUrl} alt="" draggable={false} />
+              <img
+                className={`${whaleLogo.small} fs-whale-image`}
+                src={startupMarkUrl}
+                alt=""
+                draggable={false}
+              />
             </span>
           </span>
           <span data-whale-bubble="" />
@@ -203,18 +240,22 @@ export const WelcomeWhales = ({ active }: { active: boolean }) => {
           <span data-whale-bubble="" />
         </span>
       </button>
-      <div className={styles.greeting} data-startup-greeting="">
-        <span className={styles.hello}>
-          {hello}
-          <span
-            className={styles.helloAccent}
-            data-whale-accent=""
-            data-text={hello}
-            aria-hidden="true"
-          />
-        </span>
-        {rest}
-      </div>
+      <h1 className={styles.greeting} data-startup-greeting="" aria-label={greeting}>
+        {parts.map((part, index) =>
+          part.trim() ? (
+            <span
+              key={index}
+              className={styles.greetingPart}
+              data-greeting-part=""
+              aria-hidden="true"
+            >
+              {part}
+            </span>
+          ) : (
+            part
+          )
+        )}
+      </h1>
     </div>
   )
 }

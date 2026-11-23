@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
-import { rspack, type Configuration } from '@rspack/core'
+import { browserLicensePatterns } from './scripts/browser-license-patterns.mjs'
+import { rspack, type Compiler, type Configuration } from '@rspack/core'
 
 // 以 CLI 子命令判断模式（serve 为开发、build 为生产），避免依赖 shell 设置 NODE_ENV
 const dev = !process.argv.includes('build')
@@ -13,14 +14,17 @@ const { version } = JSON.parse(
 ) as { version: string }
 
 // Bundle only this version's changelog so About works without network access.
-const currentNotes =
-  readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')
+const notesForCurrentVersion = (file: string) =>
+  readFileSync(path.join(root, file), 'utf8')
+    .replace(/\r\n?/g, '\n')
     .split(/^## /m)
     .find((section) => section.split(/\s+/)[0] === 'v' + version)
     ?.split('\n')
     .slice(1)
     .join('\n')
     .trim() ?? ''
+const currentNotes = notesForCurrentVersion('CHANGELOG.md')
+const currentNotesEn = notesForCurrentVersion('CHANGELOG.en.md')
 
 const cssLoader = {
   loader: 'builtin:lightningcss-loader',
@@ -72,6 +76,7 @@ export const createConfig = ({
         test: /\.[cm]?[jt]sx?$/,
         // 依赖包也可能含可选链等新语法；仅排除本身按 ES5 发布的 core-js。
         exclude: /[\\/]core-js[\\/]/,
+        resourceQuery: { not: [/agent-guest/] },
         loader: 'builtin:swc-loader',
         options: {
           jsc: {
@@ -83,6 +88,8 @@ export const createConfig = ({
         },
         type: 'javascript/auto',
       },
+      { resourceQuery: /agent-guest/, type: 'asset/source' },
+      { test: /\.wasm$/, type: 'asset/resource' },
       { test: /\.(woff2?|ttf)$/, type: 'asset/resource' },
       { test: /\.(png|jpe?g|svg|webp)$/, type: 'asset/resource' },
     ],
@@ -95,14 +102,65 @@ export const createConfig = ({
       scriptLoading: 'defer',
       meta: { 'application-version': version },
     }),
+    {
+      apply(compiler: Compiler) {
+        compiler.hooks.thisCompilation.tap('FreeSeekWebVersion', (compilation) => {
+          compilation.hooks.processAssets.tap(
+            {
+              name: 'FreeSeekWebVersion',
+              stage: rspack.Compilation.PROCESS_ASSETS_STAGE_REPORT,
+            },
+            () => {
+              const entry = compilation.entrypoints.get('main')?.getFiles() ?? []
+              const app = compilation
+                .getAssets()
+                .flatMap(({ name }) =>
+                  /^static\/(?:js|css)\/async\/app\.[a-f0-9]+\.(?:js|css)$/.test(name) ? [name] : []
+                )
+              const files = [...new Set([...entry, ...app])].filter((name) =>
+                /\.(?:js|css)$/.test(name)
+              )
+              compilation.emitAsset(
+                'web-version.json',
+                new rspack.sources.RawSource(
+                  JSON.stringify({ version, notes: currentNotes, files })
+                )
+              )
+            }
+          )
+        })
+      },
+    },
     new rspack.DefinePlugin({
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __CURRENT_RELEASE_NOTES__: JSON.stringify(currentNotes),
+      __CURRENT_RELEASE_NOTES_EN__: JSON.stringify(currentNotesEn),
     }),
     new rspack.CopyRspackPlugin({
       patterns: [
         { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },
+        ...browserLicensePatterns(),
+        ...[
+          'cmaps',
+          'iccs',
+          'standard_fonts',
+          'wasm',
+          'legacy/build/pdf.min.mjs',
+          'legacy/build/pdf.worker.min.mjs',
+          'legacy/build/pdf.renderer.min.mjs',
+        ].map((name) => ({
+          from: path.resolve(root, 'node_modules/pdfjs-dist', name),
+          to: 'static/pdfjs/' + path.basename(name),
+          toType: name.endsWith('.mjs') ? ('file' as const) : ('dir' as const),
+        })),
+        {
+          from: path.resolve(root, 'src/services/tasks/pdfRuntime.mjs'),
+          to: 'static/pdfjs/runtime.mjs',
+          toType: 'file',
+        },
         { from: path.resolve(root, 'src/assets/logo.png'), to: 'startup-mark.png', toType: 'file' },
+        // 网页 App（PWA）外壳：manifest、Service Worker 与图标按原样放到站点根目录
+        { from: path.resolve(root, 'src/pwa'), to: '.', toType: 'dir' },
       ],
     }),
   ],

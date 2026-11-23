@@ -209,6 +209,17 @@
 .payFooter {
   width: 100%;
 }
+.desktopActions {
+  display: flex;
+  gap: 8px;
+}
+.desktopActions > button {
+  flex: none;
+}
+.desktopActions > a {
+  box-sizing: border-box;
+  text-decoration: none;
+}
 .scanInstructions {
   margin: 7px 0 0;
   color: var(--rose-copy);

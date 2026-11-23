@@ -2,6 +2,7 @@ import { createId } from '../../utils/id.js'
 import { openDB, type DBSchema } from 'idb'
 import { apiLimitCounts, describeKnownApiError } from '../api/knownErrors.js'
 import { zh } from '../../i18n/zh.js'
+import { flushRetainedClientEvents, retainClientEvent } from './retained.js'
 
 export type LogScope =
   | 'app'
@@ -45,6 +46,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 let writing = Promise.resolve()
 let dbPromise: ReturnType<typeof openDB<LogDB>> | undefined
 let unavailableWrites = 0
+let databaseCreatedThisRun = false
 const db = () =>
   (dbPromise ??= openDB<LogDB>('freeseek-diagnostics', 2, {
     upgrade(database, previous, _version, transaction) {
@@ -54,6 +56,7 @@ const db = () =>
           : transaction.objectStore('events')
       if (previous === 0) {
         store.createIndex('timestamp', 'timestamp')
+        databaseCreatedThisRun = true
       }
       store.createIndex('level', 'level')
     },
@@ -143,6 +146,7 @@ const errorNames = new Set([
   'DataError',
   'ConstraintError',
   'UnknownError',
+  'VersionError',
   'TransactionInactiveError',
   'EncodingError',
   'ApiError',
@@ -341,6 +345,7 @@ export const logEvent = (
   trimLogBuffer(recent)
   pending.push(entry)
   trimLogBuffer(pending)
+  retainClientEvent(entry)
   if (timer === undefined) {
     timer = setTimeout(() => {
       timer = undefined
@@ -417,6 +422,8 @@ export const readDiagnosticLogs = async (): Promise<{
   events: DiagnosticEvent[]
   unavailableWrites: number
   storageAvailable: boolean
+  persistedEvents: number
+  databaseCreatedThisRun: boolean
 }> => {
   let stored: DiagnosticEvent[] = []
   let storageAvailable = false
@@ -463,6 +470,8 @@ export const readDiagnosticLogs = async (): Promise<{
     ),
     unavailableWrites,
     storageAvailable,
+    persistedEvents: stored.length,
+    databaseCreatedThisRun,
   }
 }
 
@@ -505,9 +514,11 @@ export const initDiagnostics = () => {
     logEvent('app', 'visibility', { state: document.visibilityState })
     if (document.visibilityState === 'hidden') {
       void flushDiagnosticLogs()
+      void flushRetainedClientEvents()
     }
   })
   window.addEventListener('pagehide', () => {
     void flushDiagnosticLogs()
+    void flushRetainedClientEvents()
   })
 }

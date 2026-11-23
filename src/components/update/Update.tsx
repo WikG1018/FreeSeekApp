@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { useTranslate } from '../../i18n/index.js'
+import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
+import { useSettings } from '../../services/settings.js'
 import {
   currentVersion,
   isNewer,
@@ -11,7 +13,7 @@ import {
 } from '../../services/update.js'
 import { Button } from '../base/Button.js'
 import { IconUploadOutline14 } from '../base/icons.js'
-import { Modal } from '../base/Modal.js'
+import { closeTopModal, Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import styles from './Update.module.css'
 
@@ -22,7 +24,14 @@ export const runInstall = async () => {
     showToast({ key: 'updateInstallPermission' })
   } else if (!result.installed && result.reason === 'history-unsaved') {
     showToast({ key: 'updateHistoryUnsaved', type: 'error' })
-  } else if (!result.installed && result.reason !== 'web') {
+  } else if (!result.installed && result.reason === 'active-chat') {
+    showToast({
+      key: isWindowsDesktop() ? 'updateWindowsActiveChat' : 'updateWebActiveChat',
+      type: 'error',
+    })
+  } else if (!result.installed && result.reason === 'web-offline') {
+    showToast({ key: 'updateWebOffline', type: 'error' })
+  } else if (!result.installed) {
     showToast({ key: 'updateInstallFailed', type: 'error' })
   }
   return result
@@ -38,7 +47,7 @@ export const SidebarUpdate = () => {
   }
   const detail =
     status === 'ready'
-      ? t('updateDownloaded')
+      ? t(release.webFiles ? 'updateWebPrepared' : 'updateDownloaded')
       : status === 'downloading'
         ? percent >= 0
           ? t('updateDownloadingShort', { percent })
@@ -49,7 +58,7 @@ export const SidebarUpdate = () => {
   const label =
     status === 'downloading'
       ? detail
-      : `${t(status === 'ready' ? 'updateSidebarReady' : 'updateSidebarLabel')} v${release.version}`
+      : `${t(status === 'ready' ? (release.webFiles ? 'updateWebReady' : 'updateSidebarReady') : 'updateSidebarLabel')} v${release.version}`
   return (
     <>
       <button
@@ -88,7 +97,7 @@ export const useUpdateStatusText = (): string => {
     case 'downloading':
       return percent >= 0 ? t('updateDownloadingShort', { percent }) : t('updateDownloading')
     case 'ready':
-      return t('updateReadyShort')
+      return t(release?.webFiles ? 'updateWebPrepared' : 'updateReadyShort')
     case 'available':
       return release ? t('updateAvailable', { version: release.version }) : t('updateLatest')
     case 'latest':
@@ -110,7 +119,14 @@ export const UpdateDialog = ({
 }) => {
   const t = useTranslate()
   const { status, release, percent, error } = useUpdate()
-  const info = installed ? { version: currentVersion(), notes: __CURRENT_RELEASE_NOTES__ } : release
+  const nativeApp = Capacitor.isNativePlatform()
+  const native = nativeApp || isWindowsDesktop()
+  const locale = useSettings((state) => state.locale)
+  const currentNotes =
+    locale === 'en-US' && __CURRENT_RELEASE_NOTES_EN__
+      ? __CURRENT_RELEASE_NOTES_EN__
+      : __CURRENT_RELEASE_NOTES__
+  const info = installed ? { version: currentVersion(), notes: currentNotes } : release
   if (!info || (!installed && !isNewer(info.version, currentVersion()))) {
     return null
   }
@@ -120,25 +136,30 @@ export const UpdateDialog = ({
     <Modal
       title={t('updateNotesTitle', { version })}
       centered
-      closable
+      closable={nativeApp}
       onClose={onClose}
       footer={
-        installed ? undefined : (
+        installed ? (
+          nativeApp ? undefined : (
+            <Button onClick={closeTopModal}>{t('close')}</Button>
+          )
+        ) : (
           <>
             <Button
-              variant={Capacitor.isNativePlatform() ? 'outlined' : 'primary'}
-              onClick={() => void openReleasePage()}
+              variant="outlined"
+              onClick={native ? () => void openReleasePage() : closeTopModal}
             >
-              {t('updateOpenPage')}
+              {t(native ? 'updateOpenPage' : 'close')}
             </Button>
-            {Capacitor.isNativePlatform() &&
-              (status === 'ready' ? (
-                <Button onClick={() => void runInstall()}>{t('updateInstallNow')}</Button>
-              ) : (
-                <Button disabled={status !== 'available'} onClick={() => void downloadUpdate()}>
-                  {t(status === 'downloading' ? 'updateDownloading' : 'updateDownloadNow')}
-                </Button>
-              ))}
+            {status === 'ready' ? (
+              <Button onClick={() => void runInstall()}>
+                {t(native ? 'updateInstallNow' : 'updateWebReload')}
+              </Button>
+            ) : (
+              <Button disabled={status !== 'available'} onClick={() => void downloadUpdate()}>
+                {t(status === 'downloading' ? 'updateDownloading' : 'updateDownloadNow')}
+              </Button>
+            )}
           </>
         )
       }
@@ -146,15 +167,25 @@ export const UpdateDialog = ({
       <div className={styles.notes} data-testid="release-notes">
         {(notes || t('updateNoNotes')).split(/\n\s*\n/).map((paragraph, i) => {
           const lines = paragraph.split(/\r?\n/)
-          return lines.every((line) => /^\s*[-*] /.test(line)) ? (
-            <ul key={i}>
-              {lines.map((line, j) => (
+          // 小节标题后面常常紧跟列表（中间没有空行），标题和内容要在同一个分块里拆开。
+          const heading = /^#{2,4} (\S.*)$/.exec(lines[0].trim())
+          const body = heading ? lines.slice(1) : lines
+          const bullets = body.every((line) => /^\s*[-*] /.test(line))
+          const content = bullets ? (
+            <ul>
+              {body.map((line, j) => (
                 <li key={j}>{line.replace(/^\s*[-*] /, '')}</li>
               ))}
             </ul>
-          ) : (
-            <p key={i}>{paragraph}</p>
-          )
+          ) : body.length ? (
+            <p>{body.join('\n')}</p>
+          ) : null
+          return heading || content ? (
+            <div key={i} className={styles.noteBlock}>
+              {heading ? <h4 className={styles.notesHeading}>{heading[1]}</h4> : null}
+              {content}
+            </div>
+          ) : null
         })}
       </div>
       {!installed && status === 'downloading' && (

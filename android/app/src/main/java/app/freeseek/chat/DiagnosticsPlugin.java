@@ -3,6 +3,7 @@ package app.freeseek.chat;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.provider.DocumentsContract;
 import androidx.activity.result.ActivityResult;
@@ -30,10 +31,74 @@ import org.json.JSONArray;
 @CapacitorPlugin(name = "Diagnostics")
 public class DiagnosticsPlugin extends Plugin {
     private static final ExecutorService deviceWorker = Executors.newSingleThreadExecutor();
+    private static final ExecutorService historyWorker = Executors.newSingleThreadExecutor();
+    private static final String HISTORY_PREFERENCES = "history-presence";
+
+    private static JSObject historyCheckpoint(Context context) {
+        try {
+            SharedPreferences preferences = context.getSharedPreferences(HISTORY_PREFERENCES, Context.MODE_PRIVATE);
+            JSObject result = new JSObject().put("present", preferences.getBoolean("has-conversations", false));
+            if (preferences.contains("verified-count")) {
+                result.put("sessionCount", preferences.getInt("verified-count", 0));
+                result.put("verifiedAt", preferences.getLong("verified-at", 0L));
+            }
+            return result;
+        } catch (Exception error) {
+            return new JSObject().put("present", false).put("readState", "unreadable");
+        }
+    }
+
+    @PluginMethod
+    public void checkHistory(PluginCall call) {
+        // A startup read must not wait for a batch of diagnostic writes.
+        historyWorker.execute(() -> call.resolve(historyCheckpoint(getContext())));
+    }
+
+    @PluginMethod
+    public void recordHistory(PluginCall call) {
+        boolean present = Boolean.TRUE.equals(call.getBoolean("present", false));
+        Integer count = call.getInt("sessionCount");
+        if (count != null && (count < 0 || present != (count > 0))) {
+            call.reject("Invalid history verification");
+            return;
+        }
+        historyWorker.execute(() -> {
+            try {
+                SharedPreferences preferences = getContext().getSharedPreferences(HISTORY_PREFERENCES, Context.MODE_PRIVATE);
+                SharedPreferences.Editor edit = preferences.edit().putBoolean("has-conversations", present);
+                if (count != null) {
+                    edit.putInt("verified-count", count).putLong("verified-at", System.currentTimeMillis());
+                } else if (preferences.getBoolean("has-conversations", false) != present) {
+                    edit.remove("verified-count").remove("verified-at");
+                }
+                if (edit.commit()) call.resolve();
+                else call.reject("Unable to record history presence");
+            } catch (Exception error) {
+                call.reject("Unable to record history presence");
+            }
+        });
+    }
+
+    @PluginMethod
+    public void retainClientEvents(PluginCall call) {
+        JSONArray events = call.getArray("events");
+        if (events == null || events.length() < 1 || events.length() > 16) {
+            call.reject("Invalid diagnostic batch");
+            return;
+        }
+        RetainedClientLog.enqueue(() -> {
+            try {
+                RetainedClientLog.append(getContext(), events);
+                call.resolve();
+            } catch (Exception error) {
+                call.reject("Unable to keep diagnostic evidence");
+            }
+        });
+    }
 
     @PluginMethod
     public void readEvents(PluginCall call) {
-        DiagnosticsLog.afterPending(() -> call.resolve(DiagnosticsLog.snapshot(getContext())));
+        DiagnosticsLog.afterPending(() -> call.resolve(logSnapshot(getContext())));
     }
 
     @PluginMethod
@@ -48,11 +113,14 @@ public class DiagnosticsPlugin extends Plugin {
         }));
     }
 
+    private static JSObject logSnapshot(Context context) {
+        return DiagnosticsLog.snapshot(context)
+            .put("retainedClient", RetainedClientLog.snapshot(context))
+            .put("historyCheckpoint", historyCheckpoint(context));
+    }
+
     private JSObject snapshotNow() {
-        Context context = getContext();
-        JSObject result = DiagnosticsLog.snapshot(context);
-        result.put("environment", DiagnosticDevice.snapshot(context));
-        return result;
+        return logSnapshot(getContext()).put("environment", DiagnosticDevice.snapshot(getContext()));
     }
 
     /** This bridge also works before the application bundle loads. */
@@ -103,7 +171,7 @@ public class DiagnosticsPlugin extends Plugin {
             File file = null;
             try {
                 file = ShareFiles.create(getContext(), "freeseek-native-diagnostics-" + System.currentTimeMillis() + ".zip");
-                writeBasicArchive(new FileOutputStream(file), startupReport(call), "native-fallback");
+                writeBasicArchive(getContext(), new FileOutputStream(file), startupReport(call), "native-fallback");
                 File shared = file;
                 getActivity().runOnUiThread(() -> {
                     try {
@@ -124,19 +192,36 @@ public class DiagnosticsPlugin extends Plugin {
         });
     }
 
-    private void writeBasicArchive(OutputStream output, JSObject report, String mode) throws Exception {
+    static File createStartupShare(Context context, JSObject report) throws Exception {
+        File file = ShareFiles.create(context, "freeseek-startup-diagnostics-" + System.currentTimeMillis() + ".zip");
+        try {
+            writeBasicArchive(context, new FileOutputStream(file), report, "startup");
+            return file;
+        } catch (Exception error) {
+            ShareFiles.discard(file);
+            throw error;
+        }
+    }
+
+    private static void writeBasicArchive(Context context, OutputStream output, JSObject report, String mode) throws Exception {
         try (ZipOutputStream zip = new ZipOutputStream(output)) {
-            JSObject snapshot = snapshotNow();
-            JSObject nativeEnv = snapshot.getJSObject("environment");
+            JSObject snapshot = logSnapshot(context);
+            JSObject nativeEnv = null;
+            try {
+                nativeEnv = DiagnosticDevice.snapshot(context);
+            } catch (Exception error) {
+                DiagnosticsLog.error(context, "diagnostics", "fallback.environment-failed", error);
+            }
             long timestamp = System.currentTimeMillis();
             JSObject manifest = new JSObject();
             manifest.put("diagnostic_format_version", 1);
             manifest.put("diagnostic_mode", mode);
             manifest.put("createdAtEpochMs", timestamp);
             if (nativeEnv != null) manifest.put("version", nativeEnv.optString("version"));
-            JSObject env = new JSObject().put("native", nativeEnv);
+            JSObject env = new JSObject().put("native", nativeEnv == null ? new JSObject().put("unavailable", true) : nativeEnv)
+                .put("historyCheckpoint", snapshot.getJSObject("historyCheckpoint"));
             JSObject summary = new JSObject(report.toString());
-            summary.put("nativeSnapshotAvailable", true);
+            summary.put("nativeSnapshotAvailable", nativeEnv != null);
             summary.put("clientStorageAvailable", false);
             summary.put("unavailableNativeWrites", snapshot.optInt("failedWrites"));
             if (snapshot.has("readFailure")) summary.put("nativeLogReadFailure", snapshot.optString("readFailure"));
@@ -146,6 +231,15 @@ public class DiagnosticsPlugin extends Plugin {
             StringBuilder lines = new StringBuilder();
             for (int i = 0; i < events.length(); i++) {
                 lines.append(events.getJSONObject(i)).append('\n');
+            }
+            JSObject retained = snapshot.getJSObject("retainedClient");
+            JSONArray keptEvents = retained.getJSONArray("events");
+            retained.remove("events");
+            summary.put("retainedClient", retained.put("eventCount", keptEvents.length()));
+            summary.put("recoveredClientEvents", keptEvents.length());
+            StringBuilder clientLines = new StringBuilder();
+            for (int i = 0; i < keptEvents.length(); i++) {
+                clientLines.append(keptEvents.getJSONObject(i)).append('\n');
             }
 
             boolean startup = "startup".equals(mode);
@@ -159,7 +253,7 @@ public class DiagnosticsPlugin extends Plugin {
             zipEntry(zip, "manifest.json", manifest.toString());
             zipEntry(zip, "environment.json", env.toString());
             zipEntry(zip, "summary.json", summary.toString());
-            zipEntry(zip, "client-events.jsonl", client.toString() + "\n");
+            zipEntry(zip, "client-events.jsonl", clientLines.append(client).append('\n').toString());
             zipEntry(zip, "native-events.jsonl", lines.toString());
             zipEntry(zip, "README.txt", "FreeSeek 基础诊断\n包含版本、设备环境和运行记录。\n不含 API Key、聊天正文、附件原件、录音或原始错误消息。\n");
         }
@@ -186,7 +280,7 @@ public class DiagnosticsPlugin extends Plugin {
                 String mode = "fallback".equals(call.getString("mode")) ? "native-fallback" : "startup";
                 OutputStream out = getContext().getContentResolver().openOutputStream(uri, "wt");
                 if (out == null) throw new IllegalStateException("Cannot open document");
-                writeBasicArchive(out, report, mode);
+                writeBasicArchive(getContext(), out, report, mode);
                 DiagnosticsLog.record(getContext(), "diagnostics", "startup-export.saved", report);
                 call.resolve(new JSObject().put("saved", true));
             } catch (Exception error) {

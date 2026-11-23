@@ -12,7 +12,7 @@ import {
 } from '../attachments.js'
 import type { FileAttachment } from './types.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
-import { useProviders } from '../providers.js'
+import { useProviders, type ModelSelection } from '../providers.js'
 
 export type DraftAttachment = {
   /** 本地标识，也是 IndexedDB 原件与上传任务的 key */
@@ -98,8 +98,10 @@ const updateDraft = (sessionId: string | null, update: (draft: Draft) => Draft) 
 export const setDraftText = (sessionId: string | null, text: string) =>
   updateDraft(sessionId, (draft) => ({ ...draft, text }))
 
-const upload = (attachment: DraftAttachment, apiKey: string) => {
-  if (useProviders.getState().selection.providerId !== 'deepseek') {
+type DraftRoute = { selection: ModelSelection; deferUpload: boolean }
+
+const upload = (attachment: DraftAttachment, apiKey: string, local: boolean) => {
+  if (local) {
     markAttachmentLocal(attachment.id)
     return
   }
@@ -117,7 +119,8 @@ const upload = (attachment: DraftAttachment, apiKey: string) => {
 export const addDraftFiles = (
   sessionId: string | null,
   files: File[],
-  apiKey: string
+  apiKey: string,
+  route?: DraftRoute
 ): TranslationMessage | null => {
   if (files.length === 0) {
     return null
@@ -132,9 +135,11 @@ export const addDraftFiles = (
     )
     return error
   }
+  const selection = route?.selection ?? useProviders.getState().selection
+  const local = Boolean(route?.deferUpload || selection.providerId !== 'deepseek')
   if (
-    useProviders.getState().selection.providerId === 'deepseek' &&
-    useProviders.getState().selection.model === 'deepseek-v4-pro' &&
+    selection.providerId === 'deepseek' &&
+    selection.model === 'deepseek-v4-pro' &&
     files.some((file) => isImage(resolveMimeType(file)))
   ) {
     logEvent(
@@ -160,35 +165,44 @@ export const addDraftFiles = (
     count: added.length,
     imageCount: added.filter((attachment) => attachment.isImage).length,
     bytes: files.reduce((total, file) => total + file.size, 0),
-    local: useProviders.getState().selection.providerId !== 'deepseek',
+    local,
   })
-  added.forEach((attachment) => upload(attachment, apiKey))
+  added.forEach((attachment) => upload(attachment, apiKey, local))
   return null
 }
 
 export const retryDraftAttachment = (
   sessionId: string | null,
   attachmentId: string,
-  apiKey: string
+  apiKey: string,
+  deferUpload = false
 ) => {
   const attachment = getDraft(sessionId).attachments.find((item) => item.id === attachmentId)
   if (attachment) {
     logEvent('upload', 'attachment.retry-requested', { sessionId, fileId: attachmentId })
-    upload(attachment, apiKey)
+    upload(
+      attachment,
+      apiKey,
+      deferUpload || useProviders.getState().selection.providerId !== 'deepseek'
+    )
   }
 }
 
 /** 发送按钮和实际提交共用规则：有内容，且全部附件已上传成功。 */
-export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTask>) => {
+export const prepareDraftMessage = (
+  draft: Draft,
+  tasks: Record<string, UploadTask>,
+  route?: DraftRoute
+) => {
   const text = draft.text.trim()
   if (!text && draft.attachments.length === 0) {
     return null
   }
-  const local = useProviders.getState().selection.providerId !== 'deepseek'
+  const local = (route?.selection ?? useProviders.getState().selection).providerId !== 'deepseek'
   const files: (FileAttachment & { blob: Blob })[] = []
   for (const attachment of draft.attachments) {
     const task = tasks[attachment.id]
-    if (!local && (task?.status !== 'done' || !task.serverId)) {
+    if (!local && !route?.deferUpload && (task?.status !== 'done' || !task.serverId)) {
       return null
     }
     files.push({

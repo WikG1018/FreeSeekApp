@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { logEvent } from '../services/diagnostics/log.js'
 import { listenMediaQuery } from '../utils/mediaQuery.js'
 
 /** 窄于 768px 按移动端布局 */
@@ -54,6 +55,7 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
     const viewport = window.visualViewport
     const inputSelector = 'textarea, input:not([type="file"])'
     let animationFrame = 0
+    let invalidViewport = false
     const reset = () => {
       frame.style.removeProperty('--app-viewport-height')
       frame.style.removeProperty('--app-viewport-top')
@@ -70,11 +72,33 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
         reset()
         return
       }
-      frame.style.setProperty(
-        '--app-viewport-height',
-        `${(viewport?.height ?? window.innerHeight) / layoutScale}px`
-      )
-      frame.style.setProperty('--app-viewport-top', `${(viewport?.offsetTop ?? 0) / layoutScale}px`)
+      const height = viewport?.height ?? innerHeight
+      const top = viewport?.offsetTop ?? 0
+      if (
+        !Number.isFinite(height) ||
+        height < 64 ||
+        !Number.isFinite(top) ||
+        top < 0 ||
+        top >= innerHeight
+      ) {
+        if (!invalidViewport) {
+          logEvent(
+            'ui',
+            'viewport.invalid-measurement',
+            { height, viewportHeight: innerHeight, offsetTop: top },
+            'warn'
+          )
+        }
+        invalidViewport = true
+        reset()
+        return
+      }
+      if (invalidViewport) {
+        invalidViewport = false
+        logEvent('ui', 'viewport.measurement-recovered', { height, viewportHeight: innerHeight })
+      }
+      frame.style.setProperty('--app-viewport-height', `${height / layoutScale}px`)
+      frame.style.setProperty('--app-viewport-top', `${top / layoutScale}px`)
       frame.toggleAttribute(
         'data-ime-compact',
         (viewport?.height ?? innerHeight) / layoutScale < 260
@@ -90,6 +114,11 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
       update()
       scheduleFrame()
     }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        schedule()
+      }
+    }
     const onFocusIn = () => {
       if (document.activeElement?.matches(inputSelector)) {
         schedule()
@@ -100,6 +129,9 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
     viewport?.addEventListener('resize', schedule)
     viewport?.addEventListener('scroll', schedule)
     window.addEventListener('resize', schedule)
+    window.addEventListener('pageshow', onVisible)
+    window.addEventListener('freeseek:native-foreground', onVisible)
+    document.addEventListener('visibilitychange', onVisible)
     document.addEventListener('focusin', onFocusIn)
     // 等点击和焦点切换完成，避免按钮移动、或切换输入框时短暂恢复全高。
     document.addEventListener('focusout', scheduleFrame)
@@ -108,6 +140,9 @@ export const useMobileViewport = (enabled: boolean, layoutScale = 1) => {
       viewport?.removeEventListener('resize', schedule)
       viewport?.removeEventListener('scroll', schedule)
       window.removeEventListener('resize', schedule)
+      window.removeEventListener('pageshow', onVisible)
+      window.removeEventListener('freeseek:native-foreground', onVisible)
+      document.removeEventListener('visibilitychange', onVisible)
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', scheduleFrame)
       reset()

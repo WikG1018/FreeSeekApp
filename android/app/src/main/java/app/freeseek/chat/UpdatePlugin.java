@@ -20,36 +20,104 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** 所有缓存、下载和安装均核验长度、摘要、APK 签名、应用身份与版本。 */
 @CapacitorPlugin(name = "Update")
 public class UpdatePlugin extends Plugin {
     private static final String REPO = "WikG1018/FreeSeekApp";
     private static final String[] MIRRORS = {"https://gh-proxy.com/", "https://ghfast.top/", "https://ghproxy.net/"};
+    private static final String CACHE_DIR = "updates";
+    private static final String VERSION = "[0-9]+\\.[0-9]+\\.[0-9]+";
+    private static final Pattern CACHED_PACKAGE = Pattern.compile("freeseek-(" + VERSION + ")\\.apk(\\.part)?");
+    // File operations share a worker, including across overlapping Capacitor activity instances.
+    private static final ExecutorService PACKAGES = Executors.newSingleThreadExecutor();
+    private static final AtomicBoolean DOWNLOADING = new AtomicBoolean();
+    private static String installerFile;
     private volatile boolean cancelled = false;
-    private final java.util.concurrent.atomic.AtomicBoolean downloading = new java.util.concurrent.atomic.AtomicBoolean();
     private volatile HttpURLConnection activeDownload;
     private static final java.util.concurrent.ScheduledExecutorService DEADLINES =
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     private File updateDir() throws Exception {
         // Android 7–9 的外部应用目录可被持有存储权限的其他应用修改，安装包须放内部私有目录。
-        File dir = new File(getContext().getFilesDir(), "updates");
+        File dir = new File(getContext().getFilesDir(), CACHE_DIR);
         if (!dir.isDirectory() && !dir.mkdirs()) { throw new IllegalStateException("cannot create update directory"); }
         return dir;
     }
     private File apkFile(String name) throws Exception {
-        if (!name.matches("freeseek-[0-9]+\\.[0-9]+\\.[0-9]+\\.apk")) {
+        if (!name.matches("freeseek-" + VERSION + "\\.apk")) {
             throw new IllegalArgumentException("invalid package name");
         }
         return new File(updateDir(), name);
     }
+
+    @Override public void load() {
+        Context context = getContext().getApplicationContext();
+        PACKAGES.execute(() -> {
+            try {
+                String installed = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+                pruneCache(new File(context.getFilesDir(), CACHE_DIR), installed, null);
+            } catch (PackageManager.NameNotFoundException error) {
+                DiagnosticsLog.error(context, "update", "cache.cleanup-failed", error);
+            }
+        });
+    }
+
+    private static int compareVersions(String first, String second) {
+        String[] left = first.split("\\.");
+        String[] right = second.split("\\.");
+        for (int i = 0; i < left.length; i++) {
+            int order = new BigInteger(left[i]).compareTo(new BigInteger(right[i]));
+            if (order != 0) return order;
+        }
+        return 0;
+    }
+
+    private void pruneCache(File dir, String throughVersion, String keepName) {
+        try {
+            File[] entries = dir.listFiles();
+            if (entries == null) return;
+            boolean hasVersion = throughVersion != null && throughVersion.matches(VERSION);
+            int removed = 0, failed = 0;
+            long removedBytes = 0;
+            for (File entry : entries) {
+                String name = entry.getName();
+                Matcher match = CACHED_PACKAGE.matcher(name);
+                if (!match.matches() || !entry.isFile() || name.equals(keepName) || name.equals(installerFile)) {
+                    continue;
+                }
+                if (match.group(2) == null && (!hasVersion || compareVersions(match.group(1), throughVersion) > 0)) {
+                    continue;
+                }
+                long bytes = entry.length();
+                if (entry.delete()) {
+                    removed++;
+                    removedBytes += bytes;
+                } else {
+                    failed++;
+                }
+            }
+            if (removed > 0 || failed > 0) {
+                DiagnosticsLog.record(getContext(), "update", "cache.cleaned", new JSObject()
+                    .put("removed", removed).put("failed", failed).put("bytes", removedBytes));
+            }
+        } catch (SecurityException error) {
+            DiagnosticsLog.error(getContext(), "update", "cache.cleanup-failed", error);
+        }
+    }
+
     private URL allowedUrl(String value, boolean metadata) throws Exception {
         String direct = value;
         for (String mirror : MIRRORS) {
@@ -165,7 +233,7 @@ public class UpdatePlugin extends Plugin {
 
     @PluginMethod
     public void hasFile(PluginCall call) {
-        new Thread(() -> {
+        PACKAGES.execute(() -> {
             try {
                 File file = apkFile(call.getString("fileName", ""));
                 boolean exists = false;
@@ -174,76 +242,93 @@ public class UpdatePlugin extends Plugin {
                 catch (Exception invalid) { reason = invalid.toString(); if (file.exists()) {
                     DiagnosticsLog.error(getContext(), "update", "cache.rejected", invalid); file.delete();
                 } }
+                if (exists) pruneCache(file.getParentFile(), call.getString("version"), file.getName());
                 JSObject result = new JSObject(); result.put("exists", exists);
                 result.put("reason", reason);
                 result.put("path", exists ? file.getAbsolutePath() : ""); result.put("size", exists ? file.length() : 0);
                 call.resolve(result);
             } catch (Exception error) { call.reject("invalid update cache", error); }
-        }).start();
+        });
     }
 
     @PluginMethod
     public void download(PluginCall call) {
-        if (!downloading.compareAndSet(false, true)) { call.reject("download already in progress"); return; }
+        if (!DOWNLOADING.compareAndSet(false, true)) { call.reject("download already in progress"); return; }
         DiagnosticsLog.record(getContext(), "update", "download.started", new JSObject());
         cancelled = false;
-        new Thread(() -> {
-            HttpURLConnection connection = null;
-            File temp = null;
-            java.util.concurrent.ScheduledFuture<?> deadline = null;
+        PACKAGES.execute(() -> {
+            JSObject result = null;
+            Exception failure = null;
             try {
-                File target = apkFile(call.getString("fileName", ""));
-                URL url = allowedUrl(call.getString("url", ""), false);
-                if (target.exists()) {
-                    try {
-                        verify(target, call);
-                        JSObject cached = new JSObject(); cached.put("path", target.getAbsolutePath());
-                        cached.put("size", target.length()); cached.put("cached", true); call.resolve(cached); return;
-                    } catch (Exception invalid) { target.delete(); }
-                }
-                temp = new File(target.getAbsolutePath() + ".part");
-                connection = connect(url, 60000);
-                activeDownload = connection;
-                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-                connection.setConnectTimeout(15000);
-                final HttpURLConnection active = connection;
-                deadline = DEADLINES.schedule(active::disconnect, 20, java.util.concurrent.TimeUnit.MINUTES);
-                int status = connection.getResponseCode();
-                if (status != 200 || !"https".equals(connection.getURL().getProtocol())) {
-                    throw new IllegalStateException("download HTTP " + status);
-                }
-                long expected = call.getDouble("expectedSize", -1.0).longValue();
-                long headerSize = connection.getContentLengthLong();
-                if (headerSize > 0 && headerSize != expected) { throw new IllegalStateException("download size mismatch"); }
-                try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(temp)) {
-                    byte[] buffer = new byte[64 * 1024]; long received = 0, last = 0; int read;
-                    while ((read = in.read(buffer)) != -1) {
-                        if (cancelled || received + read > expected) { throw new IllegalStateException("download cancelled or too large"); }
-                        out.write(buffer, 0, read); received += read;
-                        if (received - last > 256 * 1024) {
-                            JSObject progress = new JSObject(); progress.put("received", received); progress.put("total", expected);
-                            notifyListeners("progress", progress); last = received;
-                        }
-                    }
-                    out.getFD().sync();
-                }
-                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-                verify(temp, call);
-                if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-                JSObject verified = new JSObject(); verified.put("bytes", temp.length());
-                verified.put("source", url.getHost()); DiagnosticsLog.record(getContext(), "update", "package.verified", verified);
-                if (!temp.renameTo(target)) { throw new IllegalStateException("cannot publish verified package"); }
-                JSObject result = new JSObject(); result.put("path", target.getAbsolutePath()); result.put("size", target.length());
-                call.resolve(result);
+                result = downloadPackage(call);
             } catch (Exception error) {
                 DiagnosticsLog.error(getContext(), "update", "download.failed", error);
-                if (temp != null) { temp.delete(); }
-                call.reject("package download or verification failed", error);
+                failure = error;
             } finally {
-                if (deadline != null) { deadline.cancel(false); } if (connection != null) { connection.disconnect(); }
-                activeDownload = null; downloading.set(false);
+                DOWNLOADING.set(false);
             }
-        }).start();
+            // JavaScript may already be trying the next mirror once this promise settles.
+            if (failure != null) call.reject("package download or verification failed", failure);
+            else call.resolve(result);
+        });
+    }
+
+    private JSObject downloadPackage(PluginCall call) throws Exception {
+        File target = apkFile(call.getString("fileName", ""));
+        URL url = allowedUrl(call.getString("url", ""), false);
+        String version = call.getString("version");
+        if (target.exists()) {
+            try {
+                verify(target, call);
+                pruneCache(target.getParentFile(), version, target.getName());
+                return new JSObject().put("path", target.getAbsolutePath())
+                    .put("size", target.length()).put("cached", true);
+            } catch (Exception invalid) { target.delete(); }
+        }
+
+        HttpURLConnection connection = null;
+        File temp = new File(target.getAbsolutePath() + ".part");
+        java.util.concurrent.ScheduledFuture<?> deadline = null;
+        try {
+            connection = connect(url, 60000);
+            activeDownload = connection;
+            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
+            connection.setConnectTimeout(15000);
+            final HttpURLConnection active = connection;
+            deadline = DEADLINES.schedule(active::disconnect, 20, java.util.concurrent.TimeUnit.MINUTES);
+            int status = connection.getResponseCode();
+            if (status != 200 || !"https".equals(connection.getURL().getProtocol())) {
+                throw new IllegalStateException("download HTTP " + status);
+            }
+            long expected = call.getDouble("expectedSize", -1.0).longValue();
+            long headerSize = connection.getContentLengthLong();
+            if (headerSize > 0 && headerSize != expected) { throw new IllegalStateException("download size mismatch"); }
+            try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(temp)) {
+                byte[] buffer = new byte[64 * 1024]; long received = 0, last = 0; int read;
+                while ((read = in.read(buffer)) != -1) {
+                    if (cancelled || received + read > expected) { throw new IllegalStateException("download cancelled or too large"); }
+                    out.write(buffer, 0, read); received += read;
+                    if (received - last > 256 * 1024) {
+                        JSObject progress = new JSObject(); progress.put("received", received); progress.put("total", expected);
+                        notifyListeners("progress", progress); last = received;
+                    }
+                }
+                out.getFD().sync();
+            }
+            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
+            verify(temp, call);
+            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
+            JSObject verified = new JSObject(); verified.put("bytes", temp.length());
+            verified.put("source", url.getHost()); DiagnosticsLog.record(getContext(), "update", "package.verified", verified);
+            if (!temp.renameTo(target)) { throw new IllegalStateException("cannot publish verified package"); }
+            pruneCache(target.getParentFile(), version, target.getName());
+            return new JSObject().put("path", target.getAbsolutePath()).put("size", target.length());
+        } finally {
+            if (deadline != null) deadline.cancel(false);
+            if (connection != null) connection.disconnect();
+            activeDownload = null;
+            temp.delete();
+        }
     }
 
     @PluginMethod
@@ -257,7 +342,7 @@ public class UpdatePlugin extends Plugin {
     @PluginMethod
     public void install(PluginCall call) {
         DiagnosticsLog.record(getContext(), "update", "install.started", new JSObject());
-        new Thread(() -> {
+        PACKAGES.execute(() -> {
             try {
                 File file = new File(call.getString("path", ""));
                 if (!file.getCanonicalFile().getParentFile().equals(updateDir().getCanonicalFile())) {
@@ -277,6 +362,7 @@ public class UpdatePlugin extends Plugin {
                 Intent intent = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive");
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 context.startActivity(intent);
+                installerFile = file.getName();
                 DiagnosticsLog.record(getContext(), "update", "installer.launched", new JSObject());
                 JSObject result = new JSObject(); result.put("installed", true); call.resolve(result);
             } catch (Exception error) {
@@ -284,6 +370,6 @@ public class UpdatePlugin extends Plugin {
                 JSObject result = new JSObject(); result.put("installed", false); result.put("reason", "verification-or-install-failed");
                 call.resolve(result);
             }
-        }).start();
+        });
     }
 }

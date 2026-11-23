@@ -2,6 +2,105 @@ import assert from 'node:assert/strict'
 
 export const runAndroidStabilityCases = async ({ run, behavior }) => {
   await run(
+    'Android camera opens its own capture, never opens the photo picker on failure, and releases the photo',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: 'Camera attachment test',
+            url: 'https://camera-test.example/v1',
+            model: 'test-model',
+            apiKey: 'fixture',
+          },
+          true
+        )
+        const canvas = document.createElement('canvas')
+        canvas.width = 120
+        canvas.height = 80
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg'))
+        window.cameraFixture = blob
+        const fetchBefore = window.fetch
+        window.fetch = (url, options) =>
+          String(url).includes('/_capacitor_file_/data/photo-test.jpg')
+            ? Promise.resolve(new Response(blob))
+            : fetchBefore(url, options)
+      })
+      const choose = async (action) => {
+        await page.getByRole('button', { name: '添加附件', exact: true }).click()
+        await page.getByRole('button', { name: action, exact: true }).click()
+      }
+      const opened = []
+      page.on('filechooser', (chooser) => opened.push(chooser))
+      await choose('拍照')
+      await page.waitForFunction(() => window.nativeCameraCalls.take === 1)
+      assert.equal(opened.length, 0)
+      await page.evaluate(() => (window.nativeCameraMode = 'unavailable'))
+      await choose('拍照')
+      await page.getByText('找不到可用的相机应用。可以从相册选图。', { exact: true }).waitFor()
+      assert.equal(opened.length, 0)
+      await page.evaluate(() => (window.nativeCameraMode = 'photo'))
+      await choose('拍照')
+      await page.waitForFunction(
+        () => window.__audit.drafts.getDraft(null).attachments.length === 1
+      )
+      const result = await page.evaluate(() => ({
+        calls: window.nativeCameraCalls,
+        name: window.__audit.drafts.getDraft(null).attachments[0].file.name,
+        bytes: window.__audit.drafts.getDraft(null).attachments[0].file.size,
+        expected: window.cameraFixture.size,
+      }))
+      assert.deepEqual(result.calls, { take: 3, release: 1 })
+      assert.match(result.name, /^照片-\d+\.jpg$/)
+      assert.equal(result.bytes, result.expected)
+      assert.equal(opened.length, 0)
+      const picker = page.waitForEvent('filechooser')
+      await choose('相册')
+      assert.equal(await (await picker).element().getAttribute('capture'), null)
+      assert.equal(await page.evaluate(() => window.nativeCameraCalls.take), 3)
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.CapacitorCustomPlatform = { name: 'android' }
+        window.nativeCameraCalls = { take: 0, release: 0 }
+        window.nativeCameraMode = 'cancel'
+        window.Capacitor = {
+          convertFileSrc: (path) => '/_capacitor_file_' + path,
+          PluginHeaders: [
+            {
+              name: 'App',
+              methods: [
+                { name: 'addListener', rtype: 'callback' },
+                { name: 'removeListener', rtype: 'promise' },
+                { name: 'getState', rtype: 'promise' },
+              ],
+            },
+            {
+              name: 'PhotoCapture',
+              methods: ['take', 'release'].map((name) => ({ name, rtype: 'promise' })),
+            },
+          ],
+          nativeCallback: () => 'camera-test-listener',
+          nativePromise: async (plugin, method) => {
+            if (plugin !== 'PhotoCapture') return { isActive: true }
+            window.nativeCameraCalls[method]++
+            if (method === 'release') return {}
+            if (window.nativeCameraMode === 'unavailable') throw { code: 'camera-unavailable' }
+            if (window.nativeCameraMode === 'photo') {
+              return {
+                id: 'test.jpg',
+                path: '/data/photo-test.jpg',
+                size: window.cameraFixture.size,
+              }
+            }
+            return { cancelled: true }
+          },
+        }
+      })
+    }
+  )
+  await run(
     'chat image preview closes on a second tap or Android Back while the same reply finishes',
     async (page) => {
       const id = await page.evaluate(async () => {
@@ -158,8 +257,25 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       const dialog = page.getByRole('dialog', { name: '竖版照片.png' })
       const stage = dialog.getByRole('button', { name: '关闭图片预览' })
       const img = dialog.getByRole('img', { name: '竖版照片.png' })
+      await page.evaluate(() => {
+        const snapshots = new WeakMap()
+        const animate = Element.prototype.animate
+        Element.prototype.animate = function (...args) {
+          const animation = animate.apply(this, args)
+          if (this instanceof HTMLImageElement) {
+            snapshots.set(this, [...(snapshots.get(this) ?? []), animation.effect.getKeyframes()])
+          }
+          return animation
+        }
+        window.__imageMotion = snapshots
+      })
       const motion = (locator) =>
-        locator.evaluate((element) => element.getAnimations().map((a) => a.effect.getKeyframes()))
+        locator.evaluate((element) => window.__imageMotion.get(element) ?? [])
+      const expectMotion = (count) =>
+        page.waitForFunction((prior) => {
+          const image = document.querySelector('[role="dialog"] img')
+          return (window.__imageMotion.get(image)?.length ?? 0) > prior
+        }, count)
       const settle = () =>
         img.evaluate(async (element) => {
           await Promise.all(element.getAnimations().map((animation) => animation.finished))
@@ -167,6 +283,7 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         })
       await thumb.click()
       await img.waitFor()
+      await expectMotion(0)
       const opening = await motion(img)
       assert.ok(
         opening.some(
@@ -203,9 +320,11 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       assert.ok(await dialog.isVisible())
 
       // An intentional tap after dragging closes, and returns toward the original square crop.
+      const prior = (await motion(img)).length
       await send('touchStart', [contact(3, x, y)])
       await send('touchEnd', [])
-      const closing = await motion(img)
+      await expectMotion(prior)
+      const closing = (await motion(img)).slice(prior)
       assert.ok(
         closing.some(
           ([from, to]) => from.transform !== to.transform && from.clipPath !== to.clipPath

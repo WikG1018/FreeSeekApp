@@ -124,6 +124,10 @@ public final class DiagnosticsLog {
         long timestamp = System.currentTimeMillis();
         io.execute(() -> append(app, scope, event, details, "warn", timestamp));
     }
+    /** Renderer teardown may terminate the app before the background writer runs. */
+    static void warnBeforeRendererExit(Context context, JSObject details) {
+        append(context.getApplicationContext(), "ui", "webview.renderer-exit", details, "warn", System.currentTimeMillis());
+    }
     public static void error(Context context, String scope, String event, Throwable error) {
         JSObject details = new JSObject();
         details.put("exception", error.getClass().getName());

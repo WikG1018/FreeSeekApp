@@ -32,11 +32,11 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 .choice:focus-visible {
-  outline: 2px solid var(--fs-brand);
+  outline: 2px solid var(--fs-accent-fill);
   outline-offset: -2px;
 }
 .icon {
-  color: var(--fs-brand);
+  color: var(--fs-accent-text);
   margin-top: 3px;
 }
 .words {
@@ -80,9 +80,6 @@
   height: 38px;
   object-fit: contain;
 }
-[data-ds-dark-theme] .heading img {
-  filter: brightness(0) invert(0.92);
-}
 .notice section + section {
   margin-top: 15px;
 }
@@ -99,7 +96,7 @@
   line-height: 1.65;
 }
 .panel .primary {
-  background: var(--fs-brand);
+  background: var(--fs-accent-fill);
   color: white;
   min-height: 44px;
 }

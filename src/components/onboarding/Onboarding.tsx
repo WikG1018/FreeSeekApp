@@ -91,7 +91,7 @@ export const Onboarding = ({
         className={styles.panel}
         title={
           <span className={styles.heading} tabIndex={-1} data-modal-initial-focus>
-            <img src={logo} alt="" />
+            <img className="fs-whale-image" src={logo} alt="" />
             {t('noticeTitle')}
           </span>
         }

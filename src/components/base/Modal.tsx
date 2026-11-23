@@ -63,6 +63,7 @@ export const Modal = ({
   dismissible = true,
   centered = false,
   className,
+  titleClassName,
   mainClassName,
   onDismissStart,
   onClose,
@@ -78,6 +79,7 @@ export const Modal = ({
   /** 居中弹窗：危险确认等场景在移动端也保持居中对话框，而不是底部 Sheet */
   centered?: boolean
   className?: string
+  titleClassName?: string
   /** 内容区的 class */
   mainClassName?: string
   /** Called once when dismissal begins, before the visual exit finishes. */
@@ -134,7 +136,12 @@ export const Modal = ({
       const previous = previousFocusRef.current
       previousFocusRef.current = null
       // 等卸载完成再还焦点，避免元素已被移除
-      window.setTimeout(() => previous?.focus?.({ preventScroll: true }), 0)
+      window.setTimeout(() => {
+        const activeDialog = document.activeElement?.closest('[aria-modal="true"]')
+        if (previous && (!activeDialog || activeDialog.contains(previous))) {
+          previous.focus({ preventScroll: true })
+        }
+      }, 0)
     }
   }, [])
 
@@ -204,7 +211,7 @@ export const Modal = ({
         tabIndex={-1}
       >
         <div className={styles.header}>
-          <div id={titleId} className={styles.title}>
+          <div id={titleId} className={clsx(styles.title, titleClassName)}>
             {title}
           </div>
           {closable ? (

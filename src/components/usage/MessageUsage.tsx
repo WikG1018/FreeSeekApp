@@ -1,7 +1,13 @@
 import clsx from 'clsx'
 import { useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
+import {
+  computeReplyUsage,
+  formatCacheHitRate,
+  hasKnownPricing,
+  replyCacheCounts,
+  usePricing,
+} from '../../services/usage.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
 import { useSettings } from '../../services/settings.js'
 import { IconChevronDownOutline14 } from '../base/icons.js'
@@ -22,15 +28,17 @@ const formatCost = (value: number) =>
  */
 export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
   const t = useTranslate()
-  const pricing = usePricing((state) => state.pricing)
+  const pricing = usePricing()
   const [expanded, setExpanded] = useState(false)
   const showUsage = useSettings((state) => state.showUsage)
+  const locale = useSettings((state) => state.locale)
   if (!showUsage || !message.usage) {
     return null
   }
-  const detail = computeReplyUsage(message, pricing)
+  const detail = computeReplyUsage(message, pricing.pricing)
   const input = detail.input + detail.cacheRead + detail.cacheWrite
   const total = input + detail.output
+  const rate = formatCacheHitRate(replyCacheCounts(message), locale)
   const priced = hasKnownPricing(message)
   const cost = priced ? formatCost(detail.costCny) : t('usageUnpriced')
   const full = t('usageMessageInline', {
@@ -44,11 +52,13 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
         type="button"
         className={clsx(styles.summary, expanded && styles.summaryOpen)}
         aria-expanded={expanded}
-        title={full}
+        title={full + ' · ' + t('usageCacheHitRate') + ' ' + rate}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className={styles.summaryText}>
-          {priced ? t('usageMessageCompact', { tokens: compactNumber(total), cost }) : `${compactNumber(total)} tok`}
+          {priced
+            ? t('usageMessageCompact', { tokens: compactNumber(total), cost })
+            : `${compactNumber(total)} tok`}
         </span>
         <span className={clsx(styles.chevron, expanded && styles.chevronOpen)}>
           <IconChevronDownOutline14 />
@@ -56,6 +66,10 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
       </button>
       {expanded ? (
         <div className={styles.details}>
+          <div className={styles.cacheRate} title={t('usageCacheRateHelp')}>
+            <span>{t('usageCacheHitRate')}</span>
+            <strong>{rate}</strong>
+          </div>
           <div className={styles.grid}>
             <div className={styles.cell}>
               <span className={styles.cellLabel}>{t('usageCacheHit')}</span>

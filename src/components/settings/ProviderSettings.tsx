@@ -1,8 +1,11 @@
 import { useId, useState } from 'react'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { modelInputLabel } from '../../i18n/modelInputs.js'
 import { ApiError } from '../../services/api/errorTypes.js'
 import {
   PROVIDER_PRESETS,
+  presetName,
+  presetConnectionName,
   providerAccess,
   type ProviderAccess,
   type ProviderPreset,
@@ -10,6 +13,7 @@ import {
 import {
   activeReasoning,
   emptyProfile,
+  modelInputCapabilities,
   modelLabel,
   modelsInProfile,
   OFFICIAL_MODELS,
@@ -195,6 +199,7 @@ export const ConnectionSelector = () => {
           options={models.map((model) => ({
             value: model,
             label: providerModelLabel(model, profile),
+            detail: modelInputLabel(t, modelInputCapabilities(model, profile)),
           }))}
           onChange={(model) => change(() => selectModel({ providerId: profile.id, model }))}
         />
@@ -214,11 +219,7 @@ export const ConnectionSelector = () => {
               />
               <span>
                 <b>{modelLabel(model)}</b>
-                <small>
-                  {t(
-                    model === 'deepseek-flash' ? 'providerFlashCapability' : 'providerProCapability'
-                  )}
-                </small>
+                <small>{modelInputLabel(t, modelInputCapabilities(model))}</small>
               </span>
             </label>
           ))}
@@ -349,6 +350,7 @@ export const ProviderCatalogPage = ({
   const t = useTranslate()
   const [query, setQuery] = useState('')
   const [region, setRegion] = useState<ProviderPreset['region']>('domestic')
+  const locale = useSettings((state) => state.locale)
   const needle = query.trim().toLocaleLowerCase()
   const describe = (preset: ProviderPreset) => {
     const description = providerPresetDescriptions[preset.id]
@@ -361,9 +363,10 @@ export const ProviderCatalogPage = ({
     needle
       ? [
           item.name,
+          item.nameEn ?? '',
           item.id,
           describe(item),
-          ...item.access.map((access) => access.connectionName ?? ''),
+          ...item.access.map((access) => presetConnectionName(item, access, locale)),
         ].some((value) => value.toLocaleLowerCase().includes(needle))
       : item.region === region
   )
@@ -398,7 +401,7 @@ export const ProviderCatalogPage = ({
           {options.map((item) => (
             <Row
               key={item.id}
-              label={item.name}
+              label={presetName(item, locale)}
               className={styles.providerRow}
               icon={<ProviderMark id={item.id} />}
               prominent
@@ -452,11 +455,7 @@ export const newProviderConnection = (
   url: access.url,
   modelListUrl: access.modelListUrl ?? '',
   protocol: access.protocol,
-  name:
-    access.connectionName ??
-    preset.name + (preset.access.length > 1 && access.id === 'tokenPlan' ? ' · Token Plan' : ''),
-  streamUsage: access.streamUsage ?? false,
-  tokenParameter: access.completionTokens ? 'max_completion_tokens' : 'max_tokens',
+  name: presetConnectionName(preset, access, useSettings.getState().locale),
 })
 
 export const ProviderAccessPage = ({
@@ -468,6 +467,7 @@ export const ProviderAccessPage = ({
 }) => {
   const t = useTranslate()
   const groupId = useId()
+  const locale = useSettings((state) => state.locale)
   const [id, setId] = useState(preset.access[0].id)
   const selected = providerAccess(preset.id, id) ?? preset.access[0]
   return (
@@ -475,7 +475,7 @@ export const ProviderAccessPage = ({
       <div className={styles.providerIdentity}>
         <ProviderMark id={preset.id} />
         <span>
-          <strong>{preset.name}</strong>
+          <strong>{presetName(preset, locale)}</strong>
           <small>{t('providerAccessHint')}</small>
         </span>
       </div>

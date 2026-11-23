@@ -1,7 +1,7 @@
 import { ApiError } from './errorTypes.js'
 import { getContextRounds, getReplyText } from '../chat/reply.js'
 import type { AssistantMessage, Message, UserMessage, FileAttachment } from '../chat/types.js'
-import type { ProviderProfile } from '../providers.js'
+import type { ProviderModelParameters } from '../providers.js'
 import type { MessageParam } from './types.js'
 import { loadFile } from '../chat/db.js'
 import { readArchive, readEntry, skipEntry } from '../chat/history/zipReader.js'
@@ -25,7 +25,7 @@ const base64 = (blob: Blob) =>
     reader.readAsDataURL(blob)
   })
 
-const wordText = (document: Document, paragraph: Element, namespace: string) => {
+export const wordText = (document: Document, paragraph: Element, namespace: string) => {
   const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
       const element = node as Element
@@ -49,7 +49,7 @@ const wordText = (document: Document, paragraph: Element, namespace: string) => 
   return pieces.join('')
 }
 
-const docxText = async (blob: Blob, signal: AbortSignal, plainOnly = false) => {
+export const docxText = async (blob: Blob, signal: AbortSignal, plainOnly = false) => {
   let result: string | undefined,
     total = 0
   for await (const entry of readArchive(new File([blob], 'document.docx'))) {
@@ -114,16 +114,21 @@ const docxText = async (blob: Blob, signal: AbortSignal, plainOnly = false) => {
 const textExtension =
   /\.(?:txt|md|markdown|csv|json|jsonl|ya?ml|xml|html?|log|js|ts|jsx|tsx|py|java|c|cpp|h|css|sql|sh|toml|ini)$/i
 
+export const isLocalOfficeText = (file: FileAttachment) =>
+  !file.isImage &&
+  (file.mimeType.startsWith('text/') || textExtension.test(file.name) || /\.docx$/i.test(file.name))
+
 export const documentTextFallback = async (
   file: FileAttachment,
   blob: Blob,
-  signal: AbortSignal
+  signal: AbortSignal,
+  plainOnly = true
 ): Promise<string | undefined> => {
   if (file.isImage || blob.size > 4 * 1024 * 1024) {
     return undefined
   }
   const raw = /\.docx$/i.test(file.name)
-    ? await docxText(blob, signal, true)
+    ? await docxText(blob, signal, plainOnly)
     : file.mimeType.startsWith('text/') || textExtension.test(file.name)
       ? await blob.text()
       : undefined
@@ -151,22 +156,32 @@ export const inlineDocuments = (messages: MessageParam[], texts: ReadonlyMap<str
 
 /** 第三方附件只从本机原件生成内容，从不提交到 DeepSeek Files API。 */
 export const prepareProviderMessages = async (
-  profile: ProviderProfile,
+  parameters: Pick<ProviderModelParameters, 'vision' | 'pdf'>,
   conversation: ProviderConversation,
   signal: AbortSignal,
-  getOriginal: (id: string) => Promise<Blob | undefined> = loadFile
+  getOriginal: (id: string) => Promise<Blob | undefined> = loadFile,
+  onMissingHistory?: (count: number) => void
 ): Promise<ProviderMessage[]> => {
   let inlineBytes = 0
   const cache = new Map<string, ProviderPart>()
-  const attachment = async (file: FileAttachment): Promise<ProviderPart> => {
+  const missingHistory = new Set<string>()
+  const attachment = async (file: FileAttachment, historical: boolean) => {
     signal.throwIfAborted()
     const cached = cache.get(file.id)
     if (cached) {
       return cached
     }
+    if (historical && missingHistory.has(file.id)) {
+      return undefined
+    }
     const blob = await getOriginal(file.id)
     if (!blob) {
-      throw new ApiError('protocol', { key: 'providerOriginalMissing' })
+      signal.throwIfAborted()
+      if (!historical) {
+        throw new ApiError('protocol', { key: 'providerCurrentOriginalMissing' })
+      }
+      missingHistory.add(file.id)
+      return undefined
     }
     if (blob.size > 16 * 1024 * 1024) {
       throw new ApiError('protocol', { key: 'providerFileTooLarge' })
@@ -174,7 +189,7 @@ export const prepareProviderMessages = async (
     let part: ProviderPart
     const ext = file.name.split('.').at(-1)?.toLowerCase() ?? ''
     if (file.isImage) {
-      if (!profile.vision) {
+      if (!parameters.vision) {
         throw new ApiError('protocol', { key: 'providerVisionDisabled' })
       }
       const normalized = await normalizeImageFile(
@@ -188,7 +203,7 @@ export const prepareProviderMessages = async (
         data: await base64(normalized),
       }
     } else if (ext === 'pdf' || file.mimeType === 'application/pdf') {
-      if (!profile.pdf) {
+      if (!parameters.pdf) {
         throw new ApiError('protocol', { key: 'providerPdfDisabled' })
       }
       part = { type: 'pdf', name: file.name, mime: 'application/pdf', data: await base64(blob) }
@@ -214,10 +229,19 @@ export const prepareProviderMessages = async (
     cache.set(file.id, part)
     return part
   }
-  const user = async (message: UserMessage): Promise<ProviderMessage> => {
+  const user = async (message: UserMessage, historical: boolean): Promise<ProviderMessage> => {
     const content: ProviderPart[] = []
+    let hasUnavailableFile = false
     for (const file of message.files) {
-      content.push(await attachment(file))
+      const part = await attachment(file, historical)
+      if (part) {
+        content.push(part)
+      } else {
+        hasUnavailableFile = true
+      }
+    }
+    if (hasUnavailableFile) {
+      content.push({ type: 'text', text: '[Earlier attachment unavailable on this device.]' })
     }
     if (message.content) {
       content.push({ type: 'text', text: message.content })
@@ -229,12 +253,12 @@ export const prepareProviderMessages = async (
     ...getContextRounds(conversation.inherited?.messages ?? []),
     ...getContextRounds(conversation.history),
   ]) {
-    result.push(await user(question), {
+    result.push(await user(question, true), {
       role: 'assistant',
       content: [{ type: 'text', text: getReplyText(reply) }],
     })
   }
-  result.push(await user(conversation.question))
+  result.push(await user(conversation.question, false))
   if (conversation.prefix && getReplyText(conversation.prefix).trim()) {
     result.push(
       { role: 'assistant', content: [{ type: 'text', text: getReplyText(conversation.prefix) }] },
@@ -250,5 +274,8 @@ export const prepareProviderMessages = async (
     )
   }
   signal.throwIfAborted()
+  if (missingHistory.size > 0) {
+    onMissingHistory?.(missingHistory.size)
+  }
   return result
 }

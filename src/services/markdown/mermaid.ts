@@ -29,12 +29,24 @@ export const renderMermaid = (
     }
 
     const mermaid = await loadMermaid()
+    await document.fonts?.ready
     if (isCancelled()) {
       return null
     }
 
+    const fontFamily =
+      getComputedStyle(document.documentElement).getPropertyValue('--dsw-font-family').trim() ||
+      'system-ui, sans-serif'
     mermaid.initialize({
       theme: dark ? 'dark' : 'default',
+      fontFamily,
+      altFontFamily: fontFamily,
+      themeVariables: { fontFamily },
+      sequence: {
+        actorFontFamily: fontFamily,
+        noteFontFamily: fontFamily,
+        messageFontFamily: fontFamily,
+      },
       securityLevel: 'strict',
       startOnLoad: false,
       suppressErrorRendering: true,

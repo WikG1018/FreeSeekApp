@@ -5,11 +5,23 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="theme-color" content="#ffffff" />
     <title>FreeSeek</title>
+    <link rel="icon" href="./startup-mark.png" />
     <link rel="preload" href="./startup-mark.png" as="image" />
+    <!-- 网页 App（PWA）：iPhone/iPad 添加到主屏幕后全屏打开，图片来源见 src/pwa -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="FreeSeek" />
+    <meta name="format-detection" content="telephone=no" />
     <script>
       (function(){
         var root=document.documentElement,preference;
-        try{preference=localStorage.getItem('freeseek:theme-preference');}catch(ignore){}
+        try{
+          preference=localStorage.getItem('freeseek:theme-preference');
+          if(localStorage.getItem('freeseek:use-system-font')==='true'){root.setAttribute('data-fs-system-font','');}
+        }catch(ignore){}
         var dark=preference==='dark'||(preference!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches);
         root.setAttribute('data-fs-starting','');
         root.setAttribute('data-fs-startup-theme',dark?'dark':'light');
@@ -19,7 +31,7 @@
     <style>
       :root[data-fs-starting]{background:#fff}
       :root[data-fs-starting][data-fs-startup-theme="dark"]{background:#151517}
-      #fs-startup{--startup-rgb:255,255,255;position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;color:#111827;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:auto}
+      #fs-startup{--startup-rgb:255,255,255;position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;color:#111827;font:16px/1.6 system-ui,sans-serif;font-family:var(--dsw-font-family,system-ui,sans-serif);overflow:auto}
       #fs-startup::before{content:"";position:absolute;top:0;left:0;right:0;bottom:0;z-index:-1;background:#fff;background:rgba(var(--startup-rgb),1)}
       #fs-startup>div{max-width:480px;width:100%;margin:auto}
       #fs-startup-mark{display:block;flex:none;max-width:100%;object-fit:contain;transform-origin:center}
@@ -31,7 +43,7 @@
       #fs-startup-actions button:disabled{opacity:.6;cursor:wait}
       #fs-startup-feedback{font-size:14px;color:#4b5563}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup,body[data-ds-dark-theme] #fs-startup{--startup-rgb:21,21,23;color:#f3f5fa}
-      :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-mark,body[data-ds-dark-theme] #fs-startup-mark{filter:brightness(0) invert(.89)}
+      :root[data-fs-startup-theme="dark"] body:not(.light) .fs-whale-image,body[data-ds-dark-theme] .fs-whale-image{filter:url(#fs-whale-dark)}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-version,:root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-feedback{color:#b5bbc6}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-actions button{background:#252e43;color:#adc4ff;border-color:#627fb8}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-actions button:focus{outline-color:#adc4ff}
@@ -42,8 +54,14 @@
     </style>
   </head>
   <body>
+    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+      <filter id="fs-whale-dark" color-interpolation-filters="sRGB">
+        <feFlood flood-color="#adc4ff" />
+        <feComposite in2="SourceAlpha" operator="in" />
+      </filter>
+    </svg>
     <section id="fs-startup" role="status" aria-live="polite">
-      <img id="fs-startup-mark" src="./startup-mark.png" alt="" width="120" height="120" />
+      <img id="fs-startup-mark" class="fs-whale-image" src="./startup-mark.png" alt="" width="120" height="120" />
       <div id="fs-startup-failure" style="display:none">
         <h1 id="fs-startup-title"></h1>
         <p id="fs-startup-description"></p>
@@ -65,7 +83,8 @@
         function label(chinese,english){return zh?chinese:english;}
         document.getElementById('fs-startup-retry').textContent=label('重新启动','Restart');exportButton.textContent=label('导出启动诊断','Export startup diagnostics');
         function revealPage(){
-          panel.style.display='none';panel.removeAttribute('data-handoff');root.removeAttribute('data-fs-startup-home');root.removeAttribute('data-fs-starting');
+          if(state==='failed'||panel.style.display==='none'){return;}clearTimeout(timer);state='ready';
+          panel.style.display='none';panel.style.removeProperty('visibility');panel.removeAttribute('data-handoff');root.removeAttribute('data-fs-startup-home');root.removeAttribute('data-fs-starting');
           if(typeof Event==='function'){window.dispatchEvent(new Event('freeseek:startup-ended'));}
         }
         function markPaintable(){
@@ -82,7 +101,7 @@
           clearTimeout(timer);state='failed';report={phase:phase,errorName:safeNames.indexOf(name)>=0?name:'Error',line:Math.max(0,Math.min(1000000,Number(line)||0)),column:Math.max(0,Math.min(1000000,Number(column)||0))};
           if(resource){var basename=String(resource).split('/').pop().split('?')[0];if(/^[\w-]{1,64}\.[a-f0-9]{8}\.(js|css)$/.test(basename)){report.script=basename;}}
           panel.removeAttribute('data-handoff');root.removeAttribute('data-fs-startup-home');root.setAttribute('data-fs-starting','');
-          panel.style.display='flex';mark.style.display='none';failure.style.display='block';title.textContent=label('FreeSeek 未能启动','FreeSeek could not start');
+          panel.style.display='flex';panel.style.removeProperty('visibility');mark.style.display='none';failure.style.display='block';title.textContent=label(phase==='render'?'FreeSeek 界面显示异常':'FreeSeek 未能启动',phase==='render'?'FreeSeek could not display this screen':'FreeSeek could not start');
           description.textContent=phase==='storage'
             ? label('读取本地聊天记录超时。请重试，或导出启动诊断。','Loading local chats timed out. Restart or export startup diagnostics.')
             : label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
@@ -96,11 +115,12 @@
             timer=setTimeout(function(){fail('storage',{name:'TimeoutError'});},30000);
           },
           ready:function(handoff){
-            if(state==='ready'){return;}
+            if(state==='ready'||state==='handoff'){return;}
             var canAnimate=state!=='failed'&&typeof handoff==='function';
-            clearTimeout(timer);state='ready';
+            clearTimeout(timer);state='handoff';
             if(canAnimate){
-              try{handoff(function(){if(state==='ready'){revealPage();}});return;}catch(ignore){}
+              timer=setTimeout(revealPage,2600);
+              try{handoff(revealPage);return;}catch(ignore){}
             }
             revealPage();
           },
@@ -125,5 +145,121 @@
       }());
     </script>
     <div id="root"></div>
+    <style>
+      /* 网页 App 安装引导：只在 iPhone/iPad 的 Safari、尚未添加到主屏幕时出现一次 */
+      #fs-install-hint{position:fixed;left:0;right:0;bottom:0;z-index:2147482000;display:flex;justify-content:center;padding:0 12px calc(12px + env(safe-area-inset-bottom, 0px));pointer-events:none}
+      #fs-install-hint[hidden]{display:none}
+      #fs-install-card{pointer-events:auto;box-sizing:border-box;width:100%;max-width:440px;padding:16px 18px;border:1px solid rgba(15, 23, 42, .08);border-radius:18px;background:#fff;color:#111827;font:15px/1.55 system-ui, -apple-system, sans-serif;box-shadow:0 12px 32px rgba(15, 23, 42, .18), 0 2px 8px rgba(15, 23, 42, .12);animation:fs-install-in .24s ease-out}
+      #fs-install-card h2{margin:0 0 6px;font-size:16px;line-height:1.4;font-weight:650}
+      #fs-install-card p{margin:0;color:#4b5563}
+      #fs-install-actions{display:flex;justify-content:flex-end;margin-top:10px}
+      #fs-install-dismiss{min-height:40px;padding:8px 14px;border:0;border-radius:12px;background:transparent;color:#254edb;font:inherit;font-weight:600;cursor:pointer}
+      #fs-install-dismiss:focus-visible{outline:2px solid #111827;outline-offset:2px}
+      @media (prefers-color-scheme: dark){
+        #fs-install-card{background:#1c1f27;color:#f3f5fa;border-color:rgba(255, 255, 255, .12)}
+        #fs-install-card p{color:#b5bbc6}
+        #fs-install-dismiss{color:#adc4ff}
+        #fs-install-dismiss:focus-visible{outline-color:#adc4ff}
+      }
+      @keyframes fs-install-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    </style>
+    <section id="fs-install-hint" role="complementary" aria-labelledby="fs-install-title" hidden>
+      <div id="fs-install-card">
+        <h2 id="fs-install-title"></h2>
+        <p id="fs-install-body"></p>
+        <div id="fs-install-actions">
+          <button id="fs-install-dismiss" type="button"></button>
+        </div>
+      </div>
+    </section>
+    <script>
+      // 网页 App 外壳：注册离线 Service Worker，并在 iPhone/iPad 上引导“添加到主屏幕”。
+      // 原生壳（Android/Windows）与 file:// 页面一律跳过，避免缓存住旧安装包。
+      (function(){
+        var HINT_KEY='freeseek:install-hint';
+        var zh=(function(){
+          try{var saved=localStorage.getItem('freeseek:locale');if(saved){return saved==='zh-CN';}}catch(ignore){}
+          return (navigator.language||'zh').toLowerCase().indexOf('zh')===0;
+        }());
+        function label(chinese,english){return zh?chinese:english;}
+        function isNative(){
+          try{return !!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform());}catch(ignore){return false;}
+        }
+        function isStandalone(){
+          if(navigator.standalone===true){return true;}
+          try{return !!(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches);}catch(ignore){return false;}
+        }
+
+        function registerOfflineShell(){
+          try{
+            if(isNative()||location.protocol!=='https:'||!('serviceWorker' in navigator)){return;}
+            window.addEventListener('load',function(){
+              navigator.serviceWorker.register('./sw.js').catch(function(){});
+            });
+          }catch(ignore){}
+        }
+
+        function installHint(){
+          var hint=document.getElementById('fs-install-hint');
+          var title=document.getElementById('fs-install-title');
+          var body=document.getElementById('fs-install-body');
+          var dismiss=document.getElementById('fs-install-dismiss');
+          if(!hint||!title||!body||!dismiss){return;}
+          var ua=navigator.userAgent||'';
+          var ipadOS=/iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+          var safari=/Safari\//.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS|MicroMessenger|DingTalk/i.test(ua);
+          if(!ipadOS||!safari||isStandalone()||isNative()||window.top!==window.self){return;}
+          try{if(localStorage.getItem(HINT_KEY)==='seen'){return;}}catch(ignore){return;}
+
+          title.textContent=label('把 FreeSeek 添加到主屏幕','Add FreeSeek to your Home Screen');
+          body.textContent=label('点 Safari 底部的「分享」，选择「添加到主屏幕」。之后它会像 App 一样全屏打开，本地记录也不容易被系统清理。','Tap Share in Safari, then Add to Home Screen. It then opens full screen like an app, and iOS is less likely to clear local data.');
+          dismiss.textContent=label('知道了','Got it');
+
+          // 首次使用须知等弹窗盖在最上层：引导只在没有弹窗时出现，弹窗打开后再收起，
+          // 避免两块浮层叠在一起（须知关闭后会立刻接下一屏向导，所以按状态持续检查）。
+          var closed=false;
+          var watch=0;
+          var autoClose=0;
+          function modalOpen(){
+            return !!document.querySelector('[aria-modal="true"], dialog[open]');
+          }
+          function close(){
+            if(closed){return;}
+            closed=true;
+            clearInterval(watch);
+            clearTimeout(autoClose);
+            hint.hidden=true;
+            try{localStorage.setItem(HINT_KEY,'seen');}catch(ignore){}
+          }
+          function tick(){
+            if(closed){return;}
+            if(modalOpen()){
+              clearTimeout(autoClose);
+              hint.hidden=true;
+              return;
+            }
+            if(hint.hidden){
+              hint.hidden=false;
+              try{localStorage.setItem(HINT_KEY,'seen');}catch(ignore){}
+              clearTimeout(autoClose);
+              autoClose=setTimeout(close,25000);
+            }
+          }
+          function begin(){
+            tick();
+            watch=setInterval(tick,700);
+          }
+          dismiss.onclick=close;
+          var start=setTimeout(begin,4000);
+          window.addEventListener('freeseek:startup-ended',function(){
+            clearTimeout(start);
+            start=setTimeout(begin,800);
+          },{once:true});
+        }
+
+        registerOfflineShell();
+        installHint();
+      }());
+    </script>
   </body>
 </html>

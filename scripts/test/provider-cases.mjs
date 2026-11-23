@@ -7,6 +7,94 @@ const PRO_REMINDER_REJECTION =
 
 export const runProviderCases = async ({ run }) => {
   await run(
+    'continued custom chats send text and available files when old originals are missing',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const file = (id, name) => ({
+          id,
+          name,
+          size: 22,
+          mimeType: 'text/plain',
+          isImage: false,
+          serverId: null,
+        })
+        const missing = file('missing-old', 'old-file.txt')
+        const available = file('available-old', 'available.txt')
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: '历史附件验收',
+            url: 'https://history-fixture.invalid/v1',
+            apiKey: 'history-test-key',
+            model: 'test-model',
+          },
+          true
+        )
+        const parent = a.fixtures.session({
+          id: 'old-source',
+          messages: [
+            a.fixtures.user('previous-1', '旧对话的第一条文字', { files: [missing, available] }),
+            a.fixtures.assistant('previous-reply-1', '上一轮的回答'),
+            a.fixtures.user('previous-2', '', { files: [missing] }),
+            a.fixtures.assistant('previous-reply-2', '之前整理的文字结果'),
+          ],
+        })
+        await a.seed([parent], [{ id: available.id, blob: new Blob(['可用附件的正文']) }])
+        const requests = []
+        const originalFetch = window.fetch
+        window.fetch = async (url, init) => {
+          if (new URL(url).hostname !== 'history-fixture.invalid') return originalFetch(url, init)
+          requests.push(JSON.parse(init.body).messages)
+          return new Response(
+            'data: {"choices":[{"delta":{"content":"可继续聊天"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+            { headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        }
+        a.store.startInheritSession(parent.id)
+        a.drafts.setDraftText(null, '继续说。')
+        a.store.sendMessage(null)
+        await a.waitIdle()
+        const state = a.store.useChatStore.getState()
+        const branched = state.sessionCache[state.activeId]
+        const fromDisk = await a.db.loadSession(parent.id)
+        let currentError
+        try {
+          await a.providerContent.prepareProviderMessages(
+            { vision: false, pdf: false },
+            {
+              history: [],
+              question: a.fixtures.user('fresh-file', '读这个文件', { files: [missing] }),
+            },
+            new AbortController().signal
+          )
+        } catch (error) {
+          currentError = error.localMessage?.key
+        }
+        return {
+          requests,
+          reply: branched.messages.at(-1).status,
+          inherited: branched.inherited.messages[0].files.length,
+          originalFiles: fromDisk.messages[0].files.length,
+          currentError,
+        }
+      })
+      assert.equal(result.reply, 'done')
+      assert.equal(result.requests.length, 1)
+      const request = JSON.stringify(result.requests[0])
+      assert.match(request, /旧对话的第一条文字/)
+      assert.match(request, /可用附件的正文/)
+      assert.match(request, /Earlier attachment unavailable on this device/)
+      assert.match(request, /之前整理的文字结果/)
+      assert.match(request, /继续说。/)
+      assert.doesNotMatch(request, /old-file\.txt/)
+      assert.equal(result.inherited, 2)
+      assert.equal(result.originalFiles, 2)
+      assert.equal(result.currentError, 'providerCurrentOriginalMissing')
+    }
+  )
+
+  await run(
     'server model aliases and continuation usage retain their respective pricing',
     async (page) => {
       const result = await page.evaluate(() => {
@@ -325,6 +413,51 @@ export const runProviderCases = async ({ run }) => {
       assert.equal(result[0].detail.reason, 'output-limit')
       assert.equal(result[1].detail.limits.contextLimitTokens, 1048576)
       assert.equal(result[1].detail.limits.requestedTokens, 1168000)
+    }
+  )
+  await run(
+    'third-party "user input too long, N tokens exceeds max M tokens" is treated as a context rejection',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        // 第三方网关的真实句式。识别不出来就不会触发压缩与中文提示，
+        // 用户只会看到这段英文原文。
+        const messages = [
+          'user input too long, 159058 tokens exceeds max 32768 tokens (request_id: 7895ec52-4586-4e72-b7c2-84e3e0c4d8fb)',
+          'user input too long, 1,590,580 tokens exceeds max 131,072 tokens',
+          'you requested 500000 tokens, but the max is 128000',
+        ]
+        const output = []
+        for (const message of messages) {
+          window.fetch = async () =>
+            new Response(JSON.stringify({ error: { message } }), { status: 400 })
+          try {
+            await a.client.request('https://api.example.test/messages', {})
+          } catch (error) {
+            output.push({
+              key: error.localMessage?.key,
+              detail: a.diagnostics.diagnosticError(error),
+            })
+          }
+        }
+        return output
+      })
+      assert.deepEqual(
+        result.map((item) => item.key),
+        ['replyContextTooLong', 'replyContextTooLong', 'replyContextTooLong']
+      )
+      assert.deepEqual(result[0].detail.limits, {
+        contextLimitTokens: 32768,
+        requestedTokens: 159058,
+      })
+      assert.deepEqual(result[1].detail.limits, {
+        contextLimitTokens: 131072,
+        requestedTokens: 1590580,
+      })
+      assert.deepEqual(result[2].detail.limits, {
+        contextLimitTokens: 128000,
+        requestedTokens: 500000,
+      })
     }
   )
   await run(
@@ -1061,6 +1194,7 @@ export const runProviderCases = async ({ run }) => {
         assert.equal(result.status, 'done')
         assert.equal(result.text, '你好 🌏')
         assert.deepEqual(result.usage, {
+          cache_counts: { hit: 20, input: 100 },
           input_tokens: 80,
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 20,
@@ -1098,6 +1232,129 @@ export const runProviderCases = async ({ run }) => {
       }
     )
   }
+  await run(
+    'legacy model parameters migrate without changing the connection and apply to outgoing attachments',
+    async (page) => {
+      await page.evaluate(() => {
+        const a = window.__audit
+        const previous = {
+          ...a.providers.emptyProfile(),
+          id: 'custom-legacy-scope',
+          revision: 'previous-revision',
+          url: 'https://model-scope.example.test/v1',
+          model: 'legacy-image',
+          models: ['legacy-image', 'legacy-pdf'],
+          vision: true,
+          pdf: true,
+          maxOutputTokens: 2400,
+          temperature: 0.65,
+          tokenParameter: 'max_completion_tokens',
+          stream: false,
+          streamUsage: false,
+          modelSettings: { 'legacy-pdf': { maxOutputTokens: 768 } },
+        }
+        localStorage.setItem(
+          'freeseek:providers',
+          JSON.stringify({
+            profiles: [previous],
+            selection: { providerId: previous.id, model: previous.model },
+          })
+        )
+      })
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const [migrated] = a.providers.useProviders.getState().profiles
+        const inherited = a.providers.providerModelParameters(migrated, 'legacy-image')
+        const saved = a.providers.saveProvider({
+          ...migrated,
+          models: [...migrated.models, 'new-text'],
+          modelSettings: {
+            ...migrated.modelSettings,
+            'legacy-pdf': {
+              ...migrated.modelSettings['legacy-pdf'],
+              vision: false,
+              temperature: 0,
+              tokenParameter: 'max_tokens',
+              stream: true,
+            },
+          },
+        })
+        const requests = []
+        const original = window.fetch
+        window.fetch = async (url, init) => {
+          if (new URL(url).hostname !== 'model-scope.example.test') return original(url, init)
+          const request = JSON.parse(init.body)
+          requests.push(request)
+          return request.stream
+            ? new Response(
+                'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+                { headers: { 'Content-Type': 'text/event-stream' } }
+              )
+            : Response.json({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] })
+        }
+        const image = Uint8Array.from(
+          atob(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cqGQAAAAASUVORK5CYII='
+          ),
+          (byte) => byte.charCodeAt(0)
+        )
+        const pdf = new File(['%PDF-1.7\n%%EOF'], 'fixture.pdf', { type: 'application/pdf' })
+        const send = async (model, attachment) => {
+          a.providers.selectModel({ providerId: saved.id, model })
+          a.drafts.addDraftFiles(null, [attachment], '')
+          a.drafts.setDraftText(null, 'Review this attachment')
+          a.store.sendMessage(null)
+          await a.waitIdle()
+          const chat = a.store.useChatStore.getState()
+          return chat.sessionCache[chat.activeId].messages.at(-1).status
+        }
+        const imageStatus = await send(
+          'legacy-image',
+          new File([image], 'pixel.png', { type: 'image/png' })
+        )
+        const pdfStatus = await send('legacy-pdf', pdf)
+        const unsupportedStatus = await send('new-text', pdf)
+        await a.providerClient.testProviderModel(saved, new AbortController().signal)
+        return {
+          inherited,
+          inheritedByNewModel: a.providers.providerModelParameters(saved, 'new-text'),
+          revision: saved.revision,
+          rootFields: Object.keys(saved),
+          requests,
+          imageStatus,
+          pdfStatus,
+          unsupportedStatus,
+        }
+      })
+      assert.equal(result.revision, 'previous-revision')
+      assert.equal(result.inherited.vision, true)
+      assert.equal(result.inherited.pdf, true)
+      assert.equal(result.inheritedByNewModel.vision, false)
+      assert.equal(result.inheritedByNewModel.pdf, false)
+      assert.equal(result.inheritedByNewModel.temperature, null)
+      assert.ok(!result.rootFields.includes('maxOutputTokens'))
+      assert.ok(!result.rootFields.includes('vision'))
+      assert.deepEqual(
+        [result.imageStatus, result.pdfStatus, result.unsupportedStatus],
+        ['done', 'done', 'error']
+      )
+      const [image, pdf, testRequest] = result.requests
+      assert.equal(result.requests.length, 3)
+      assert.equal(image.max_completion_tokens, 2400)
+      assert.equal(image.temperature, 0.65)
+      assert.equal(image.stream, false)
+      assert.ok(image.messages.at(-1).content.some((part) => part.type === 'image_url'))
+      assert.equal(pdf.max_tokens, 768)
+      assert.equal(pdf.temperature, 0)
+      assert.equal(pdf.stream, true)
+      assert.equal(pdf.stream_options, undefined)
+      assert.ok(pdf.messages.at(-1).content.some((part) => part.type === 'file'))
+      assert.equal(testRequest.max_completion_tokens, 1024)
+    }
+  )
   await run(
     'custom non-stream response, model discovery and real generation test reject unusable success responses',
     async (page) => {

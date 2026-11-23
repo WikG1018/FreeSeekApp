@@ -314,3 +314,124 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.agentArea {
+  display: grid;
+  gap: 7px;
+  margin: 5px 0 10px;
+}
+.agentThinking {
+  min-width: 0;
+}
+.agentThinkingToggle,
+.agentThinkingStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fs-secondary-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+}
+.agentThinkingToggle {
+  cursor: pointer;
+}
+.agentThinkingToggle:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 1px;
+  border-radius: 5px;
+}
+.agentThinkingToggle > svg,
+.agentThinkingStatus > svg {
+  flex: none;
+}
+.agentThinkingIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.agentThinking[data-live] .agentThinkingToggle {
+  color: var(--fs-accent-text);
+}
+.agentThinking[data-live]:not([data-quiet]) .agentThinkingIcon {
+  animation: thought-icon 1.6s ease-in-out infinite;
+}
+.agentThinking[data-live]:not([data-quiet]) .agentThinkingText {
+  animation: thought-text 1.6s ease-in-out infinite;
+}
+@keyframes thought-icon {
+  50% {
+    transform: rotate(13deg) scale(1.09);
+  }
+}
+@keyframes thought-text {
+  50% {
+    opacity: 0.7;
+    transform: translateY(-1px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agentThinking[data-live]:not([data-quiet]) .agentThinkingIcon,
+  .agentThinking[data-live]:not([data-quiet]) .agentThinkingText {
+    animation: none;
+  }
+}
+.agentThinkingBody {
+  padding-inline-start: 10px;
+  margin-inline-start: 6px;
+  border-inline-start: 1px solid var(--fs-line);
+  color: var(--fs-secondary-text);
+  overflow-wrap: anywhere;
+}
+.activity {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.activityWait {
+  font-size: inherit;
+  color: var(--fs-secondary-text);
+}
+.activityWait:not(:first-child) {
+  margin-inline-start: 8px;
+}
+
+.activityDots {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  margin-inline-end: 7px;
+}
+.activityDots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: activity-wave 1.2s ease-in-out infinite;
+}
+.activityDots i + i {
+  margin-inline-start: 3px;
+  animation-delay: 110ms;
+}
+.activityDots i:last-child {
+  animation-delay: 220ms;
+}
+@keyframes activity-wave {
+  0%,
+  60%,
+  100% {
+    opacity: 0.45;
+    transform: translateY(0);
+  }
+  25% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}

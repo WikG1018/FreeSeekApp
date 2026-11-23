@@ -1,5 +1,14 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { Capacitor } from '@capacitor/core'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react'
 import {
   IconAddOutline16,
   IconCameraOutline16,
@@ -10,8 +19,12 @@ import {
   IconStopFill16,
 } from '../base/icons.js'
 import { useSettings } from '../../services/settings.js'
+import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
+import { WorkspacePicker } from '../session/WorkspacePicker.js'
+import { ToolApproval } from './ToolApproval.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
+import { getVisibleMessages } from '../../services/chat/branches.js'
 import {
   addDraftFiles,
   EMPTY_DRAFT,
@@ -38,32 +51,120 @@ import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
+import { AgentProgressButton } from '../messages/AssistantTask.js'
 import styles from './ChatInput.module.css'
 import { useProviders } from '../../services/providers.js'
+import { logEvent } from '../../services/diagnostics/log.js'
+import { isAndroidCamera, takeAndroidPhoto } from '../../services/photoCapture.js'
 import { ComposerToolbar } from './ComposerToolbar.js'
+import { WebcamDialog } from './WebcamDialog.js'
+import { useChatMode, useSessionAgent } from '../session/SessionAssistant.js'
+import { useAssistantLibrary } from '../../services/assistants/library.js'
+import { isPlanWaitingForUser } from '../../services/tasks/runState.js'
+import assistantStyles from '../settings/AssistantSettings.module.css'
 
 /** 输入框：自适应高度的文本框 + 文件 + 深度思考与智能搜索开关 + 语音输入 + 发送 / 停止 */
-export const ChatInput = memo(function ChatInput({ sessionId }: { sessionId: string | null }) {
+export const ChatInput = memo(function ChatInput({
+  sessionId,
+  editorRef,
+}: {
+  sessionId: string | null
+  editorRef?: RefObject<HTMLTextAreaElement>
+}) {
   // 切换目标时释放录音、转写和 DOM 状态；文字与附件由草稿服务保留。
-  return <Input key={sessionId === null ? 'new' : `session:${sessionId}`} sessionId={sessionId} />
+  return (
+    <Input
+      key={sessionId === null ? 'new' : `session:${sessionId}`}
+      sessionId={sessionId}
+      editorRef={editorRef}
+    />
+  )
 })
 
-const Input = ({ sessionId }: { sessionId: string | null }) => {
+const AgentProgressDock = ({
+  sessionId,
+  editorRef,
+  streaming,
+  busy,
+}: {
+  sessionId: string
+  editorRef: RefObject<HTMLTextAreaElement>
+  streaming: boolean
+  busy: boolean
+}) => {
+  const reply = useChatStore((state) => {
+    const session = state.sessionCache[sessionId]
+    const tail = session && getVisibleMessages(session).at(-1)
+    return tail?.role === 'assistant' && tail.stopReason !== 'refusal' && tail.task
+      ? tail
+      : undefined
+  })
+  return reply?.task && !isWindowsDesktop() ? (
+    <div className={styles.progressRow}>
+      <AgentProgressButton
+        key={reply.id}
+        sessionId={sessionId}
+        replyId={reply.id}
+        task={reply.task}
+        message={reply}
+        current
+        busy={busy}
+        streaming={streaming}
+        editorRef={editorRef}
+      />
+    </div>
+  ) : null
+}
+
+const Input = ({
+  sessionId,
+  editorRef,
+}: {
+  sessionId: string | null
+  editorRef?: RefObject<HTMLTextAreaElement>
+}) => {
   const t = useTranslate()
   const draft = useDrafts((state) => state.drafts.get(sessionId) ?? EMPTY_DRAFT)
   const { text, attachments } = draft
   const setText = (value: string) => setDraftText(sessionId, value)
-  const draftReady = useUploads((state) => prepareDraftMessage(draft, state.tasks) !== null)
+  const agent = useSessionAgent(sessionId)
+  const mode = useChatMode(sessionId)
+  const planStatus = useChatStore((state) => {
+    const session = sessionId !== null ? state.sessionCache[sessionId] : undefined
+    const tail = session?.mode === 'agent' ? getVisibleMessages(session).at(-1) : undefined
+    const run = tail?.role === 'assistant' ? tail.task?.run : undefined
+    return !isWindowsDesktop() && isPlanWaitingForUser(run) ? run.status : undefined
+  })
+  const askMode = useSettings((state) => state.askChatMode)
+  const deferUpload = Boolean(
+    agent || mode === 'agent' || (sessionId === null && mode === null && askMode)
+  )
+  const selectedAgent = useChatStore((state) =>
+    sessionId === null ? state.draftAgent : state.sessionCache[sessionId]?.agent
+  )
+  const selection = useProviders((state) => agent?.model ?? state.selection)
+  const route = deferUpload ? { selection, deferUpload } : undefined
+  const invalidAgent = !isWindowsDesktop() && Boolean(selectedAgent && !agent)
+  const assistantReady = useAssistantLibrary((state) => state.ready)
+  const attachmentToolOff = useSettings((state) => mode === 'agent' && !state.agentTools.attachment)
+  const filesDisabled = agent?.attachments === false || invalidAgent || attachmentToolOff
+  const draftReady = useUploads((state) => prepareDraftMessage(draft, state.tasks, route) !== null)
   const streaming = useChatStore(
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
   )
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
-  const custom = useProviders((state) => state.selection.providerId !== 'deepseek')
+  const enterSends = useSettings((state) => state.composerEnter) === 'send'
+  const custom = selection.providerId !== 'deepseek'
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const cameraBusy = useRef(false)
+  const [webcamOpen, setWebcamOpen] = useState(false)
+  const localEditorRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = editorRef ?? localEditorRef
+  const composing = useRef(false)
+  const keepLineBreak = useRef(false)
   const textareaWrapperRef = useRef<HTMLDivElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
   /** 附件面板展开状态：点 + 展开拍照/相册/文件，选完或点外部收起 */
@@ -72,7 +173,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     kind: 'actions',
     align: 'end',
     editorRef: textareaRef,
-    disabled: importingHistory,
+    disabled: importingHistory || filesDisabled,
   })
   const attachOpen = attachmentPanel.open
 
@@ -93,21 +194,74 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   }, [])
 
   const acceptFiles = (files: File[]) => {
-    if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
+    if (
+      files.length === 0 ||
+      filesDisabled ||
+      useChatStore.getState().importingHistory ||
+      (!agent?.model && !ensureApiKey())
+    ) {
       return
     }
-    const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '')
+    const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '', route)
     if (error) {
       showToast(error)
     }
   }
+  const acceptSelection = (source: 'camera' | 'gallery' | 'files', input: HTMLInputElement) => {
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    if (files.length) {
+      logEvent('upload', 'picker.' + source + '.completed', { count: files.length })
+      acceptFiles(files)
+    }
+  }
+  const capture = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      logEvent('upload', 'picker.camera.started')
+      setWebcamOpen(true)
+      return
+    }
+    if (!isAndroidCamera()) {
+      logEvent('upload', 'picker.camera.started')
+      cameraInputRef.current?.click()
+      return
+    }
+    if (cameraBusy.current) {
+      return
+    }
+    cameraBusy.current = true
+    logEvent('upload', 'picker.camera.started')
+    try {
+      const photo = await takeAndroidPhoto()
+      logEvent('upload', photo ? 'picker.camera.completed' : 'picker.camera.cancelled')
+      if (photo && textareaRef.current) {
+        acceptFiles([photo])
+      }
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      const key =
+        code === 'camera-unavailable'
+          ? 'attachCameraUnavailable'
+          : code === 'camera-too-large'
+            ? 'uploadTooLarge'
+            : 'attachCameraFailed'
+      logEvent('upload', 'picker.camera.failed', { localKey: key }, 'warn')
+      showToast({ key, type: 'error' })
+    } finally {
+      cameraBusy.current = false
+    }
+  }
   const retryFile = useCallback(
     (id: string) => {
-      if (!useChatStore.getState().importingHistory && ensureApiKey()) {
-        retryDraftAttachment(sessionId, id, useSettings.getState().apiKey ?? '')
+      if (
+        !filesDisabled &&
+        !useChatStore.getState().importingHistory &&
+        (agent?.model || ensureApiKey())
+      ) {
+        retryDraftAttachment(sessionId, id, useSettings.getState().apiKey ?? '', deferUpload)
       }
     },
-    [sessionId]
+    [agent, deferUpload, filesDisabled, sessionId]
   )
   const removeFile = useCallback(
     (id: string) => {
@@ -145,6 +299,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       useChatStore.subscribe((state, previous) => {
         if (state.importingHistory && !previous.importingHistory) {
           cancelVoice()
+          setWebcamOpen(false)
         }
       }),
     [cancelVoice]
@@ -154,19 +309,25 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const recording = voice.status === 'recording'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
-  const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const canSend =
+    !importingHistory &&
+    !streaming &&
+    voice.status === 'idle' &&
+    draftReady &&
+    !invalidAgent &&
+    !(filesDisabled && attachments.length)
   const hasDraft = Boolean(text.trim() || attachments.length)
   const send = () => {
     if (
       streaming ||
       useChatStore.getState().importingHistory ||
       voice.status !== 'idle' ||
-      !prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks)
+      !prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, route)
     ) {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
+    if (invalidAgent || (!agent?.model && !ensureApiKey()) || !sendMessage(sessionId)) {
       return
     }
     stopReadAloud()
@@ -176,6 +337,32 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       textareaRef.current?.focus()
     }
   }
+
+  const latestSend = useRef(send)
+  latestSend.current = send
+  useEffect(() => {
+    const input = textareaRef.current
+    if (!enterSends || !input) {
+      return
+    }
+    // Some software keyboards commit a line break directly, without an Enter keydown.
+    const submitLineBreak = (event: InputEvent) => {
+      const isLineBreak =
+        event.inputType === 'insertLineBreak' ||
+        event.inputType === 'insertParagraph' ||
+        (event.inputType === 'insertText' && event.data === '\n')
+      if (!isLineBreak || event.defaultPrevented || !event.cancelable) {
+        return
+      }
+      if (!composing.current && !event.isComposing && !keepLineBreak.current) {
+        event.preventDefault()
+        latestSend.current()
+      }
+      keepLineBreak.current = false
+    }
+    input.addEventListener('beforeinput', submitLineBreak)
+    return () => input.removeEventListener('beforeinput', submitLineBreak)
+  }, [enterSends, textareaRef])
 
   const voiceControl = (
     <VoiceButton
@@ -194,15 +381,47 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   )
   return (
     <div data-testid="chat-composer" className={styles.wrapper}>
+      {mode === 'agent' && sessionId !== null && <ToolApproval sessionId={sessionId} />}
+      {mode === 'agent' && (
+        <div className={styles.agentDockRow}>
+          <WorkspacePicker
+            sessionId={sessionId}
+            busy={importingHistory || streaming}
+            editorRef={textareaRef}
+          />
+          {sessionId !== null && (
+            <AgentProgressDock
+              sessionId={sessionId}
+              busy={importingHistory || streaming}
+              streaming={streaming}
+              editorRef={textareaRef}
+            />
+          )}
+        </div>
+      )}
       <ComposerToolbar
         editorRef={textareaRef}
         sessionId={sessionId}
         draftImage={attachments.some((item) => item.isImage)}
         disabled={importingHistory}
         modelLocked={streaming || voice.status !== 'idle'}
+        planLocked={!!planStatus}
       />
       <div className={styles.surface} data-testid="composer-input-surface">
         <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+        {(invalidAgent || (filesDisabled && attachments.length > 0)) && (
+          <p className={assistantStyles.hint + ' ' + assistantStyles.toolbarNote} role="status">
+            {t(
+              invalidAgent
+                ? assistantReady
+                  ? 'assistantAgentMissing'
+                  : 'assistantLibraryLoading'
+                : attachmentToolOff
+                  ? 'agentAttachmentToolDisabled'
+                  : 'assistantAttachmentsDisabled'
+            )}
+          </p>
+        )}
         <div
           className={styles.inputRow}
           data-testid="composer-input-row"
@@ -217,23 +436,37 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             className={styles.attachTrigger}
             tone="primary"
             icon={attachOpen ? <IconCloseOutline16 /> : <IconAddOutline16 />}
-            tooltip={attachOpen ? t('close') : t('attachPanelLabel')}
+            tooltip={
+              filesDisabled
+                ? t('assistantAttachmentsDisabled')
+                : attachOpen
+                  ? t('close')
+                  : t('attachPanelLabel')
+            }
             buttonRef={attachmentPanel.anchorRef}
             {...attachmentPanel.trigger}
-            disabled={importingHistory}
+            disabled={importingHistory || filesDisabled}
           />
           <div ref={textareaWrapperRef} className={styles.textareaWrapper}>
             <textarea
               ref={textareaRef}
               className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
-              placeholder={t('composerMessage')}
+              placeholder={t(
+                planStatus === 'awaiting-review'
+                  ? 'agentPlanFeedbackPlaceholder'
+                  : planStatus === 'awaiting-input'
+                    ? 'agentPlanQuestionPlaceholder'
+                    : 'composerMessage'
+              )}
               rows={1}
-              enterKeyHint="send"
+              enterKeyHint={enterSends ? 'send' : 'enter'}
               // 移动端不自动聚焦，避免一打开就弹出键盘
               autoFocus={!isMobile}
               disabled={importingHistory}
               value={text}
               onChange={(event) => setText(event.target.value)}
+              onCompositionStart={() => (composing.current = true)}
+              onCompositionEnd={() => (composing.current = false)}
               onMouseDown={(event) => {
                 // 首次点击时手动聚焦，避免 Safari 把整个页面滚到输入框位置。
                 if (
@@ -246,9 +479,14 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
                 }
               }}
               onKeyDown={(event) => {
-                if (
+                keepLineBreak.current =
                   event.key === 'Enter' &&
-                  !event.shiftKey &&
+                  (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey)
+                if (
+                  enterSends &&
+                  event.key === 'Enter' &&
+                  !keepLineBreak.current &&
+                  !composing.current &&
                   !event.nativeEvent.isComposing &&
                   event.nativeEvent.keyCode !== 229
                 ) {
@@ -256,6 +494,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
                   send()
                 }
               }}
+              onKeyUp={() => (keepLineBreak.current = false)}
+              onBlur={() => (keepLineBreak.current = false)}
               onPaste={(event) => {
                 const files = Array.from(event.clipboardData.files)
                 if (files.length > 0) {
@@ -292,6 +532,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
                 type="button"
                 className={styles.sendButton}
                 aria-label={t('send')}
+                data-chat-mode-send
                 disabled={!canSend}
                 onClick={send}
               >
@@ -307,10 +548,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         multiple
         hidden
         accept={ACCEPT}
-        onChange={(event) => {
-          acceptFiles(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
+        onChange={(event) => acceptSelection('files', event.currentTarget)}
       />
       <input
         ref={imageInputRef}
@@ -318,22 +556,16 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         multiple
         hidden
         accept="image/*"
-        onChange={(event) => {
-          acceptFiles(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
+        onChange={(event) => acceptSelection('gallery', event.currentTarget)}
       />
-      {/* 拍照：capture 让 Android 直接打开相机，桌面端退化为选图 */}
+      {/* 只有未实现相机插件的原生端才使用系统文件控件。 */}
       <input
         ref={cameraInputRef}
         type="file"
         hidden
         accept="image/*"
         capture="environment"
-        onChange={(event) => {
-          acceptFiles(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
+        onChange={(event) => acceptSelection('camera', event.currentTarget)}
       />
       {attachmentPanel.render(
         <>
@@ -344,7 +576,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             onClick={() => {
               attachmentPanel.close(true)
               if (ensureApiKey()) {
-                cameraInputRef.current?.click()
+                void capture()
               }
             }}
           >
@@ -358,6 +590,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             onClick={() => {
               attachmentPanel.close(true)
               if (ensureApiKey()) {
+                logEvent('upload', 'picker.gallery.started')
                 imageInputRef.current?.click()
               }
             }}
@@ -372,6 +605,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             onClick={() => {
               attachmentPanel.close(true)
               if (ensureApiKey()) {
+                logEvent('upload', 'picker.files.started')
                 fileInputRef.current?.click()
               }
             }}
@@ -380,6 +614,19 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             <span>{t('attachFiles')}</span>
           </button>
         </>
+      )}
+      {webcamOpen && !importingHistory && (
+        <WebcamDialog
+          onClose={() => setWebcamOpen(false)}
+          onGallery={() => {
+            logEvent('upload', 'picker.gallery.started')
+            imageInputRef.current?.click()
+          }}
+          onPhoto={(photo) => {
+            logEvent('upload', 'picker.camera.completed', { count: 1 })
+            acceptFiles([photo])
+          }}
+        />
       )}
       {dragging ? <DragMask /> : null}
       {voice.permissionBlocked ? (

@@ -4,7 +4,13 @@ import { useImageViewer } from '../components/messages/imageViewerState.js'
 import { Onboarding } from '../components/onboarding/Onboarding.js'
 import { initialOnboardingStep } from '../services/onboarding.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
-import { hasSettingsOpen, useSettingsDialog } from '../components/settings/settingsDialogState.js'
+import { MemoryDialogs } from '../components/settings/MemoryDialogs.js'
+import { refreshAssistantLibrary } from '../services/assistants/library.js'
+import {
+  hasSettingsOpen,
+  openSettings,
+  useSettingsDialog,
+} from '../components/settings/settingsDialogState.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -18,7 +24,13 @@ import {
 import { App as CapacitorApp } from '@capacitor/app'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
+import {
+  onReminderTarget,
+  reminderTarget,
+  workspaceDeviceFiles,
+} from '../services/tasks/workspacePlatform.js'
 import { setScreenTimeChat } from '../services/screenTime.js'
+import { bindNativeGoalActivity, reportViewedConversation } from '../services/tasks/goalBridge.js'
 import { useScreenTimeMilestones } from '../services/screenTimeMilestones.js'
 import { useAutomaticScreenTimeMilestones } from './useScreenTimeMilestones.js'
 import { useTheme } from './theme.js'
@@ -26,8 +38,7 @@ import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport
 import {
   bindChatPersistence,
   initChat,
-  newChat,
-  retrySaveSessions,
+  returnToWelcome,
   selectSession,
   useChatStore,
 } from '../services/chat/store.js'
@@ -36,6 +47,8 @@ import { closeSearchPanel, useSearchPanel } from '../components/search/searchPan
 import { closeTopModal, hasOpenModal } from '../components/base/Modal.js'
 import { closeTransientPanel } from '../components/base/transientPanel.js'
 import { SessionView } from '../components/session/SessionView.js'
+import { ChatModeDialog } from '../components/session/ChatModeDialog.js'
+import { AgentGoalDialog } from '../components/session/AgentGoalDialog.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { onUploadNotice } from '../services/attachments.js'
@@ -50,6 +63,8 @@ import { DonateDialog } from '../components/donate/DonateDialog.js'
 import { UsageMilestoneDialog } from '../components/milestones/UsageMilestone.js'
 import styles from './App.module.css'
 import { hasChatConnection } from '../services/providers.js'
+import { bindEdgeFeedback } from './edgeFeedback.js'
+import { ChatSaveNotice } from './ChatSaveNotice.js'
 
 /** 字体大小原生插件（Android WebView textZoom） */
 const FontScale = registerPlugin<{ setFontScale(options: { scale: number }): Promise<void> }>(
@@ -66,6 +81,25 @@ export const App = () => {
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
+  useEffect(() => {
+    if (!ready || !workspaceDeviceFiles()) {
+      return
+    }
+    let live = true
+    const visit = ({ sessionId }: { sessionId?: string }) => {
+      if (live && sessionId) {
+        selectSession(sessionId)
+      }
+    }
+    void reminderTarget()
+      .then(visit)
+      .catch(() => {})
+    const listener = onReminderTarget(visit)
+    return () => {
+      live = false
+      void listener.then((current) => current.remove()).catch(() => {})
+    }
+  }, [ready])
   // 声明版本和新手指南分别记录。
   const [onboarding, setOnboarding] = useState(() =>
     initialOnboardingStep(Boolean(hasChatConnection() || useSettings.getState().apiKey))
@@ -75,7 +109,9 @@ export const App = () => {
   const openDonation = () => setDonationOpen(true)
   const milestone = useScreenTimeMilestones((state) => state.playing)
   const initError = useChatStore((state) => state.initError)
-  const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
+  const historyMissing = useChatStore((state) => state.historyMissing)
+  const historyMayStartFresh = useChatStore((state) => state.historyMayStartFresh)
+  const saveError = useChatStore((state) => Object.keys(state.sessionSaveErrors).length > 0)
   const importingHistory = useChatStore((state) => state.importingHistory)
   const session = useChatStore((state) =>
     state.activeId !== null && Object.hasOwn(state.sessionCache, state.activeId)
@@ -109,8 +145,11 @@ export const App = () => {
       : null
 
   useLayoutEffect(() => setScreenTimeChat(visibleChat), [visibleChat])
+  useEffect(bindNativeGoalActivity, [])
+  useEffect(() => reportViewedConversation(visibleChat), [visibleChat])
 
   usePreventPageScroll(isMobile || Capacitor.getPlatform() === 'android')
+  useEffect(bindEdgeFeedback, [])
 
   useEffect(() => {
     document.documentElement.lang = locale
@@ -129,6 +168,9 @@ export const App = () => {
   // 文件数、存储空间达到上限时，附件上只显示「上传失败」，原因用 toast 说明
   useEffect(() => onUploadNotice(showToast), [])
   useEffect(bindChatPersistence, [])
+  useEffect(() => {
+    void refreshAssistantLibrary()
+  }, [])
 
   // 搜索结果面板只属于当前会话
   useEffect(closeSearchPanel, [activeId])
@@ -214,7 +256,7 @@ export const App = () => {
       }
       // 2. 在会话页按返回：回到欢迎页（官方 App 行为），而不是退出
       if (useChatStore.getState().activeId !== null) {
-        newChat()
+        returnToWelcome()
         return
       }
       // 3. 已在欢迎页：2 秒内再按一次才退出，避免误触直接回桌面
@@ -233,26 +275,19 @@ export const App = () => {
 
   return (
     <>
-      <div ref={frameRef} className={styles.frame} data-sider-open={siderOpen ? '' : undefined}>
+      <div
+        ref={frameRef}
+        className={styles.frame}
+        data-fs-app-frame=""
+        data-sider-open={siderOpen ? '' : undefined}
+      >
         {isMobile ? (
           <MobileSider donationOpen={donationOpen} onDonate={openDonation} />
         ) : siderCollapsed ? null : (
           <Sider donationOpen={donationOpen} onDonate={openDonation} />
         )}
         <main className={styles.main} aria-hidden={siderOpen || undefined}>
-          {saveError ? (
-            <div className={styles.saveError} role="alert">
-              <span>{t('sessionSaveFailed')}</span>
-              <Button
-                variant="outlined"
-                size="s"
-                disabled={importingHistory}
-                onClick={retrySaveSessions}
-              >
-                {t('retry')}
-              </Button>
-            </div>
-          ) : null}
+          {saveError && <ChatSaveNotice />}
           <div className={styles.content}>
             {siderCollapsed ? <CollapsedSider /> : null}
             {!ready || (activeId !== null && !session) ? (
@@ -261,7 +296,13 @@ export const App = () => {
                 <div className={styles.loadingState} role="status" aria-live="polite">
                   <span>
                     {(!ready ? initError : sessionLoadError)
-                      ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
+                      ? t(
+                          !ready
+                            ? historyMissing
+                              ? 'historyPreviouslySaved'
+                              : 'sessionListLoadFailed'
+                            : 'sessionLoadFailed'
+                        )
                       : t('sessionLoading')}
                   </span>
                   {(!ready ? initError : sessionLoadError) ? (
@@ -279,6 +320,16 @@ export const App = () => {
                       {t('retry')}
                     </Button>
                   ) : null}
+                  {!ready && initError && (
+                    <Button variant="outlined" size="m" onClick={() => openSettings('data')}>
+                      {t('historyOpenBackup')}
+                    </Button>
+                  )}
+                  {!ready && historyMayStartFresh && (
+                    <Button variant="outlined" size="m" onClick={() => void initChat(true)}>
+                      {t('historyStartWithoutRestore')}
+                    </Button>
+                  )}
                 </div>
               </div>
             ) : session ? (
@@ -312,6 +363,9 @@ export const App = () => {
       )}
       <ContextSummaryDialog />
       <SettingsDialog />
+      <MemoryDialogs />
+      <ChatModeDialog />
+      <AgentGoalDialog />
       {onboarding ? (
         <Onboarding
           initial={onboarding}

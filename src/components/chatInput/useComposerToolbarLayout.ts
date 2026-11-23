@@ -34,9 +34,12 @@ export const useComposerToolbarLayout = (ref: RefObject<HTMLDivElement>, content
     }
     const measure = (motion: boolean) => {
       cancel()
+      delete row.dataset.dense
       const label = row.querySelector<HTMLElement>('[data-model-label]')
+      const agent = row.dataset.mode === 'agent'
       const needsSpace = () =>
-        row.scrollWidth > row.clientWidth || (!!label && label.scrollWidth > label.clientWidth)
+        row.scrollWidth > row.clientWidth ||
+        (!!label && Math.min(label.scrollWidth, agent ? 104 : Infinity) > label.clientWidth)
       row.dataset.compact = 'full'
       if (needsSpace()) {
         row.dataset.compact = 'effort'
@@ -46,6 +49,17 @@ export const useComposerToolbarLayout = (ref: RefObject<HTMLDivElement>, content
       }
       if (row.scrollWidth > row.clientWidth) {
         row.dataset.compact = 'tight'
+        row.dataset.dense = ''
+      }
+      if (
+        row.scrollWidth > row.clientWidth ||
+        (agent && label && Math.min(label.scrollWidth, 38) > label.clientWidth)
+      ) {
+        row.dataset.compact = 'icon-search'
+        row.dataset.dense = ''
+      }
+      if (row.scrollWidth > row.clientWidth) {
+        row.dataset.compact = 'stack'
       }
       const frame = {
         width: row.clientWidth,

@@ -77,12 +77,28 @@ const useDiagnosticExport = create(() => ({ busy: false }))
 /** 目录、返回及跨屏布局由 SettingsShell 管理，导入中的文件随弹窗保留。 */
 export const SettingsDialog = () =>
   useSettingsDialog((state) => state.open) ? <SettingsRoot /> : null
+import type { AgentProfile } from '../../services/assistants/library.js'
+import { MemoryActivityPage } from './MemoryActivityPage.js'
+import { AgentDetailsPage, AgentToolsPage } from './AssistantWorkflowPages.js'
+import { AgentExtensionsPage } from './AgentExtensionsPage.js'
+import {
+  AgentEditor,
+  AgentListPage,
+  AssistantSettingsPage,
+  MemoryDetailsPage,
+  MemoryListPage,
+  emptyAgent,
+  type AgentDraft,
+} from './AssistantSettings.js'
 
 const SettingsRoot = () => {
   const [guideOpen, setGuideOpen] = useState(
     () => !useSettings.getState().apiKey || useSettingsDialog.getState().showTutorial
   )
   const [persona, setPersona] = useState<Persona>({ id: '', name: '', prompt: '' })
+  const [agentEditor, setAgentEditor] = useState<{ initial: AgentDraft; previous?: AgentProfile }>(
+    () => ({ initial: emptyAgent() })
+  )
   const historyImport = useHistoryImport(),
     historyDelete = useHistoryDelete()
   const ready = useChatStore((state) => state.ready)
@@ -219,6 +235,31 @@ const SettingsRoot = () => {
               return <PersonaEditor persona={persona} onDone={() => finish()} />
             case 'appearance':
               return <AppearancePage />
+            case 'assistantSettings':
+              return <AssistantSettingsPage open={open} />
+            case 'memoryDetails':
+              return <MemoryDetailsPage />
+            case 'memorySuggestions':
+              return <MemoryActivityPage />
+            case 'agentDetails':
+              return <AgentDetailsPage />
+            case 'agentTools':
+              return <AgentToolsPage open={open} />
+            case 'agentExtensions':
+              return <AgentExtensionsPage />
+            case 'memories':
+              return <MemoryListPage />
+            case 'agents':
+              return (
+                <AgentListPage
+                  edit={(initial, previous) => {
+                    setAgentEditor({ initial, previous })
+                    open('agentEdit')
+                  }}
+                />
+              )
+            case 'agentEdit':
+              return <AgentEditor {...agentEditor} done={finish} />
             case 'data':
               return (
                 <DataPage
@@ -371,7 +412,14 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
         }
       )
       if (saved) {
-        showToast({ key: saved === 'shared' ? 'diagnosticsShareOpened' : 'diagnosticsExported' })
+        showToast({
+          key:
+            saved === 'shared'
+              ? 'diagnosticsShareOpened'
+              : Capacitor.getPlatform() === 'android'
+                ? 'diagnosticsExported'
+                : 'diagnosticsDownloadStarted',
+        })
       }
     } catch (error) {
       logEvent(
@@ -415,7 +463,12 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
   return (
     <>
       <div className={styles.brandBlock}>
-        <img className={styles.brandLogo} src={logo} alt="" draggable={false} />
+        <img
+          className={clsx(styles.brandLogo, 'fs-whale-image')}
+          src={logo}
+          alt=""
+          draggable={false}
+        />
         <div className={styles.brandName}>FreeSeek</div>
         <div className={styles.brandVersion}>
           {t('settingsVersion')} {APP_VERSION}
@@ -497,6 +550,12 @@ const AboutInfoPage = () => {
     <>
       <Section title={t('settingsPrivacyTitle')}>
         <p className={styles.paragraph}>{t('settingsPrivacyText')}</p>
+      </Section>
+      <Section title={t('settingsPrivacyServicesTitle')}>
+        <p className={styles.paragraph}>{t('settingsPrivacyServices')}</p>
+      </Section>
+      <Section title={t('settingsPrivacyReportsTitle')}>
+        <p className={styles.paragraph}>{t('settingsPrivacyReports')}</p>
       </Section>
       <Section title={t('settingsUpstreamTitle')}>
         <p className={styles.paragraph}>{t('settingsUpstreamText')}</p>

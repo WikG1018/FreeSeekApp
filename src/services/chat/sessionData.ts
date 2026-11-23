@@ -1,4 +1,7 @@
-import type { Message, Session } from './types.js'
+import type { FileAttachment, Message, Session } from './types.js'
+
+export const messageFiles = (message: Message): FileAttachment[] =>
+  message.role === 'user' ? message.files : (message.task?.artifacts ?? [])
 
 /** 本会话和继承快照共用附件生命周期与重传规则。 */
 export const allSessionMessages = (session: Session): Message[] => [

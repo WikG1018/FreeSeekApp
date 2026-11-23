@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { Locale } from './settings.js'
 import { createId } from '../utils/id.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from './diagnostics/log.js'
 
@@ -63,6 +64,40 @@ export const BUILTIN_PERSONAS: Persona[] = [
       '你是发散思维搭档，任务是帮用户打开思路。针对问题先快速给出 8-10 个不同角度的想法，从保守到大胆都覆盖，每个一句话讲清价值；再从中挑 2-3 个最有潜力的展开成可执行方向。不急于否定任何想法，先追求多样与数量。',
   },
 ]
+
+const englishPersonas: Record<string, Pick<Persona, 'name' | 'prompt'>> = {
+  'builtin-default': { name: 'Default assistant', prompt: '' },
+  'builtin-writer': {
+    name: 'Writing assistant',
+    prompt:
+      'Help the user polish, rewrite, expand or shorten their writing. Understand the audience and purpose first. Keep the original meaning, produce a complete draft in the requested language and tone, and briefly explain the main edits.',
+  },
+  'builtin-translator': {
+    name: 'Translation expert',
+    prompt:
+      'Translate faithfully and naturally into the requested language. Preserve meaning, tone and terminology. Briefly explain ambiguity or an unusual translation choice. If the target language is unclear, ask the user.',
+  },
+  'builtin-coder': {
+    name: 'Coding assistant',
+    prompt:
+      'Answer as an experienced software engineer. Provide working code or the main conclusion first. Explain the key choices, include required imports and usage, and state the assumed environment and practical limitations.',
+  },
+  'builtin-xiaohongshu': {
+    name: 'Xiaohongshu copywriter',
+    prompt:
+      'Draft an engaging Xiaohongshu post in the requested language. Offer three title options, a strong opening, short paragraphs and a natural invitation to respond. Tailor the angle and tone to the product and audience the user gives.',
+  },
+  'builtin-brainstorm': {
+    name: 'Brainstorming partner',
+    prompt:
+      'Start with eight to ten distinct ideas ranging from practical to bold. Explain the value of each in one sentence, then develop the two or three strongest ideas into actionable directions.',
+  },
+}
+
+export const localizePersona = (persona: Persona, locale: Locale): Persona => {
+  const translation = locale === 'en-US' ? englishPersonas[persona.id] : undefined
+  return translation ? { ...persona, ...translation } : persona
+}
 
 const isPersona = (value: unknown): value is Persona =>
   typeof value === 'object' &&
@@ -230,12 +265,16 @@ export const setDefaultPersona = (id: string): void => {
 }
 
 /** 新会话的人设快照；默认助手（无自定义提示词）返回 null */
-export const activePersona = (): { name: string; prompt: string } | null => {
+export const activePersona = (
+  locale: Locale = 'zh-CN'
+): { name: string; prompt: string } | null => {
   const { personas, defaultId } = usePersonas.getState()
   const persona = personas.find((item) => item.id === defaultId)
-  return persona && persona.prompt.trim() !== ''
-    ? { name: persona.name, prompt: persona.prompt }
-    : null
+  if (!persona?.prompt.trim()) {
+    return null
+  }
+  const { name, prompt } = localizePersona(persona, locale)
+  return { name, prompt }
 }
 
 /** 全量校验后追加，外部 ID 和默认选择不覆盖本机设置。 */
