@@ -4,25 +4,48 @@ import { logEvent } from '../services/diagnostics/log.js'
 /**
  * 网页版/PWA 的系统返回。
  *
- * 原生壳有自己的返回键事件；网页版「返回」就是浏览器的历史后退，若没有可后退的
- * 应用内层级，Android 会直接把 PWA 关掉回到桌面。
+ * 原生壳有自己的返回键事件；网页版「返回」就是浏览器的历史后退。独立窗口（添加到主屏幕）
+ * 里，只要浏览器自己判断「没有可后退的记录」，就会直接关掉应用回桌面——这一步发生在
+ * JavaScript 之前，任何脚本都拦不住。
  *
- * 做法：应用存活期间始终保留一条守卫记录——每次后退事件进来都先补一条新的守卫，
- * 再交给应用内的层级（设置页、弹窗、面板、搜索、侧边栏、会话→欢迎页）。这样任何
- * 一次意外消费都不会让下一次后退直接退出；只有在最外层连续两次后退（2 秒内）才
- * 主动离开。
+ * 实测（Android 17 Chrome）：按下返回到 popstate 真正触发之间有 22–650ms 的空档，这段时间
+ * 页面停在守卫记录上。若只留一条守卫，空档里再按一下，浏览器看到的就是「前面没有记录」，
+ * 直接退出。所以守卫要留两条：当前这条，加上前面一条。空档里多按的那一下落在前面那条
+ * 守卫上，仍是文档内遍历，popstate 照常触发，再补回两条。
+ *
+ * 历史长度因此保持恒定：每次补回都从「少了一条」的位置压一条，不会越压越长。
  */
-const handlers: Array<() => boolean> = []
+type GuardState = { freeseekBackGuard: true; depth: number }
+const GUARD_DEPTH = 2
 const EXIT_WINDOW_MS = 2000
+const handlers: Array<() => boolean> = []
 let installed = false
 let lastEmpty = 0
+// 确认退出后置位：离开过程中的 popstate 不再补守卫，否则会把自己拉回来。
+let exiting = false
 
-const pushGuard = () => {
-  // 当前这条历史记录已经是我们的守卫时不再重复压栈。
-  if ((history.state as { freeseekBackGuard?: boolean } | null)?.freeseekBackGuard) {
+const guardDepth = () => {
+  const state = history.state as Partial<GuardState> | null
+  return state?.freeseekBackGuard && typeof state.depth === 'number' ? state.depth : 0
+}
+
+/** 把守卫补到 GUARD_DEPTH 条：不足就压，超过（旧版本留下的）就改写当前这条的深度。 */
+const rearm = () => {
+  if (exiting) {
     return
   }
-  history.pushState({ freeseekBackGuard: true }, '')
+  let depth = guardDepth()
+  if (depth === 0) {
+    depth = 1
+    history.pushState({ freeseekBackGuard: true, depth } satisfies GuardState, '')
+  } else if (depth > GUARD_DEPTH) {
+    history.replaceState({ freeseekBackGuard: true, depth: GUARD_DEPTH } satisfies GuardState, '')
+    depth = GUARD_DEPTH
+  }
+  while (depth < GUARD_DEPTH) {
+    depth += 1
+    history.pushState({ freeseekBackGuard: true, depth } satisfies GuardState, '')
+  }
 }
 
 /** 注册一个返回处理层级；后注册的先处理（设置页在应用之后挂载）。 */
@@ -41,18 +64,21 @@ export const installWebBack = (onEmpty: () => void) => {
     return
   }
   installed = true
-  pushGuard()
+  rearm()
   // 从缓存恢复或被系统挂起后重新可见时，补回守卫。
   const repair = () => {
     if (document.visibilityState === 'visible') {
-      pushGuard()
+      rearm()
     }
   }
   window.addEventListener('pageshow', repair)
   document.addEventListener('visibilitychange', repair)
   window.addEventListener('popstate', () => {
-    // 先补守卫：即使这一条是被前面某次操作意外消费的，也不会直接退出。
-    pushGuard()
+    if (exiting) {
+      return
+    }
+    // 必须同步补回：下一次按键可能马上就来，不能等下一个任务。
+    rearm()
     for (let index = handlers.length - 1; index >= 0; index--) {
       let handled = false
       try {
@@ -71,7 +97,9 @@ export const installWebBack = (onEmpty: () => void) => {
     if (now - lastEmpty < EXIT_WINDOW_MS) {
       logEvent('app', 'web-back', { handled: -1, exit: true })
       lastEmpty = 0
-      history.go(-2)
+      exiting = true
+      // 跨过全部守卫和文档根记录离开；只跨守卫会停在根上而不是退出。
+      history.go(-(GUARD_DEPTH + 1))
       return
     }
     lastEmpty = now

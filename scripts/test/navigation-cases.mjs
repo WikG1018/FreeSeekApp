@@ -625,4 +625,50 @@ export const runNavigationCases = async ({ run }) => {
       assert.equal(await page.evaluate(() => Boolean(window.__audit)).catch(() => false), false)
     }
   )
+  await run(
+    'web back keeps two guard entries so a second press during the popstate gap cannot leave the app',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const wait = (ms = 400) => new Promise((resolve) => setTimeout(resolve, ms))
+        const guard = () => (history.state?.freeseekBackGuard ? history.state.depth : 0)
+        const steps = { guards: [] }
+        await a.seed([a.fixtures.session({ id: 'gap-chat', messages: [] })])
+        // 安装后应立刻有两条守卫（当前这条 + 前面一条），历史长度固定。
+        steps.guards.push({ at: 'installed', depth: guard(), length: history.length })
+        // 每轮：开一层，再在 popstate 之前的空档里连按两下（实测空档 22–650ms）。
+        // 单守卫时空档里那一下会让浏览器认为「前面没有记录」直接退出；双守卫时仍落在文档内。
+        const rounds = [
+          { name: 'settings', open: () => a.settingsDialog.openSettings('personas'), gap: 0 },
+          { name: 'drawer', open: () => a.mobileSider.openMobileSider(), gap: 20 },
+          { name: 'chat', open: () => a.store.selectSession('gap-chat'), gap: 60 },
+        ]
+        for (const round of rounds) {
+          round.open()
+          await wait()
+          window.history.back()
+          await new Promise((resolve) => setTimeout(resolve, round.gap))
+          window.history.back()
+          await wait(900)
+          steps.guards.push({ at: `rapid x2 on ${round.name} gap ${round.gap}`, depth: guard(), length: history.length })
+        }
+        await wait()
+        steps.alive = Boolean(window.__audit)
+        steps.settings = a.settingsDialog.useSettingsDialog.getState().open
+        steps.sider = a.mobileSider.useMobileSider.getState().open
+        steps.active = a.store.useChatStore.getState().activeId
+        return steps
+      })
+      assert.equal(result.alive, true, 'app must survive rapid double presses')
+      // 每轮的第二下要么关掉下一层，要么落在外层提示上；三轮下来不该退出，层级全部收起。
+      assert.equal(result.settings, false)
+      assert.equal(result.sider, false)
+      assert.equal(result.active, null)
+      for (const entry of result.guards) {
+        assert.equal(entry.depth, 2, `guard depth at ${entry.at}`)
+      }
+      const lengths = new Set(result.guards.map((entry) => entry.length))
+      assert.equal(lengths.size, 1, `history length must stay constant, saw ${[...lengths]}`)
+    }
+  )
 }

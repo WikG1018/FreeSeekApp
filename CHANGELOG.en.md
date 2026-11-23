@@ -1,5 +1,12 @@
 # Release notes
 
+## v3.0.4
+
+### Stability fixes
+- Fixed the web / add-to-home-screen build leaving the app after two quick back presses. Between a back press and the app being notified there is a short gap (22–650 ms measured); with only one guard entry, a second press inside that gap made the browser think there was nothing left to go back to and close the app. Two guard entries are now kept, so the extra press still lands inside the app. Verified on Android 17: presses 0–150 ms apart no longer exit.
+- History length stays constant and no longer grows with use.
+- Confirming "press back again to exit" now really leaves instead of being pulled back in.
+
 ## v3.0.3
 
 ### Stability fixes
