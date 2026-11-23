@@ -611,4 +611,18 @@ export const runNavigationCases = async ({ run }) => {
       assert.equal(await page.evaluate(() => window.__audit.mobileSider.useMobileSider.getState().open), false)
     }
   )
+  await run(
+    'web back at the welcome screen prompts instead of leaving the app',
+    async (page) => {
+      await page.evaluate(() => window.__audit.mobileSider.closeMobileSider())
+      await page.evaluate(() => window.__audit.store.returnToWelcome())
+      await page.waitForTimeout(200)
+      await page.evaluate(() => window.history.back())
+      await page.getByText('再按一次返回退出', { exact: false }).waitFor({ timeout: 3000 })
+      assert.equal(await page.evaluate(() => Boolean(window.__audit)), true)
+      await page.evaluate(() => window.history.back())
+      await page.waitForTimeout(600)
+      assert.equal(await page.evaluate(() => Boolean(window.__audit)).catch(() => false), false)
+    }
+  )
 }

@@ -1,5 +1,11 @@
 # Release notes
 
+## v3.0.3
+
+### Stability fixes
+- Every back press in the web build now re-arms the history guard first, so a consumed entry can no longer make the next press exit; the outermost level asks for one more press before leaving.
+- The guard is also restored when the app returns from the background or the back-forward cache.
+
 ## v3.0.2
 
 ### Stability fixes
