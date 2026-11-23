@@ -565,4 +565,35 @@ export const runNavigationCases = async ({ run }) => {
       assert.equal(result.activeAfterBack, null)
     }
   )
+  await run(
+    'web back from settings opened in the drawer closes the drawer before anything else',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        a.mobileSider.openMobileSider()
+        return true
+      })
+      assert.equal(result, true)
+      await page.getByRole('button', { name: '设置', exact: true }).click()
+      await page.waitForFunction(() => window.__audit.settingsDialog.useSettingsDialog.getState().open)
+      const steps = []
+      const snapshot = async () => {
+        const state = await page.evaluate(() => ({
+          settings: window.__audit.settingsDialog.useSettingsDialog.getState().open,
+          sider: window.__audit.mobileSider.useMobileSider.getState().open,
+          activeId: window.__audit.store.useChatStore.getState().activeId,
+        }))
+        steps.push(state)
+      }
+      await snapshot()
+      await page.evaluate(() => window.history.back())
+      await page.waitForTimeout(500)
+      await snapshot()
+      await page.evaluate(() => window.history.back())
+      await page.waitForTimeout(500)
+      await snapshot()
+      assert.equal(steps[1].settings, false)
+      assert.equal(steps[2].sider, false)
+    }
+  )
 }

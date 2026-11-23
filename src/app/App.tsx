@@ -35,6 +35,7 @@ import { useScreenTimeMilestones } from '../services/screenTimeMilestones.js'
 import { useAutomaticScreenTimeMilestones } from './useScreenTimeMilestones.js'
 import { useTheme } from './theme.js'
 import { installWebBack, registerWebBack } from './webBack.js'
+import { logEvent } from '../services/diagnostics/log.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -280,6 +281,12 @@ export const App = () => {
     }
     installWebBack(() => showToast({ key: 'pressBackAgainToExit' }))
     return registerWebBack(() => {
+      logEvent('app', 'web-back-state', {
+        settings: hasSettingsOpen(),
+        sider: useMobileSider.getState().open,
+        search: useSearchPanel.getState().entry !== null,
+        session: useChatStore.getState().activeId !== null,
+      })
       if (closeTransientPanel() || (hasOpenModal() && closeTopModal())) {
         return true
       }

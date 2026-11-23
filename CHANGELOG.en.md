@@ -4,6 +4,7 @@
 
 ### Stability fixes
 - Fixed the web build and installed PWA closing as soon as the system back gesture was used: back now closes settings pages, dialogs, search and the sidebar in turn, then returns to the welcome screen, and only asks for one more press at the outermost level instead of leaving the app immediately.
+- Back at the outermost level now needs a second press within two seconds, and each back press logs which layer it hit so a stuck sidebar or welcome screen can be diagnosed.
 
 ## v3.0.0
 

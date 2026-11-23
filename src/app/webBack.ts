@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { logEvent } from '../services/diagnostics/log.js'
 
 /**
  * 网页版/PWA 的系统返回。
@@ -9,8 +10,10 @@ import { Capacitor } from '@capacitor/core'
  * 都关完了再按一次才真的离开。
  */
 const handlers: Array<() => boolean> = []
+const EXIT_WINDOW_MS = 2000
 let armed = false
 let installed = false
+let lastEmpty = 0
 
 const pushGuard = () => {
   if (armed) {
@@ -39,16 +42,33 @@ export const installWebBack = (onEmpty: () => void) => {
   pushGuard()
   window.addEventListener('popstate', () => {
     if (!armed) {
+      // 守卫已被消费（例如连按两次返回）：交给浏览器，不再拦截。
       return
     }
     armed = false
     for (let index = handlers.length - 1; index >= 0; index--) {
-      if (handlers[index]()) {
+      let handled = false
+      try {
+        handled = handlers[index]()
+      } catch {
+        handled = false
+      }
+      if (handled) {
         pushGuard()
+        logEvent('app', 'web-back', { handled: index, armed: true })
         return
       }
     }
-    // 已在最外层：提示再按一次退出，下一次后退交给系统关闭 PWA。
+    // 已在最外层：第一次只提示，2 秒内再按一次才真的离开（和原生返回一致）。
+    const now = Date.now()
+    if (now - lastEmpty < EXIT_WINDOW_MS) {
+      logEvent('app', 'web-back', { handled: -1, armed: false })
+      history.back()
+      return
+    }
+    lastEmpty = now
+    logEvent('app', 'web-back', { handled: -1, armed: true })
+    pushGuard()
     onEmpty()
   })
 }
