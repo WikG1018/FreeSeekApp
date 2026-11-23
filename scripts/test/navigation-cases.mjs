@@ -521,4 +521,48 @@ export const runNavigationCases = async ({ run }) => {
       )
     }
   )
+  await run(
+    'web back gesture closes settings pages, the drawer and the open chat before leaving',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const wait = (ms = 400) => new Promise((resolve) => setTimeout(resolve, ms))
+        const settings = () => a.settingsDialog.useSettingsDialog.getState()
+        await a.seed([a.fixtures.session({ id: 'back-chat', messages: [] })])
+        const steps = {}
+        // 设置二级页 → 后退回到一级页，再后退才关闭设置
+        a.settingsDialog.openSettings('personas')
+        await wait()
+        steps.opened = { open: settings().open, page: settings().page }
+        window.history.back()
+        await wait()
+        steps.afterFirstBack = { open: settings().open, page: settings().page }
+        window.history.back()
+        await wait()
+        steps.afterSecondBack = settings().open
+        // 侧边栏抽屉
+        a.mobileSider.openMobileSider()
+        await wait(200)
+        steps.siderOpened = a.mobileSider.useMobileSider.getState().open
+        window.history.back()
+        await wait(300)
+        steps.siderClosed = !a.mobileSider.useMobileSider.getState().open
+        // 会话页 → 后退回到欢迎页，而不是退出应用
+        a.store.selectSession('back-chat')
+        await wait(200)
+        steps.chatOpened = a.store.useChatStore.getState().activeId
+        window.history.back()
+        await wait(300)
+        steps.activeAfterBack = a.store.useChatStore.getState().activeId
+        return steps
+      })
+      assert.deepEqual(result.opened, { open: true, page: 'personas' })
+      assert.deepEqual(result.afterFirstBack, { open: true, page: 'home' })
+      assert.equal(result.afterSecondBack, false)
+      assert.equal(result.siderOpened, true)
+      assert.equal(result.siderClosed, true)
+      assert.equal(result.chatOpened, 'back-chat')
+      assert.equal(result.activeAfterBack, null)
+    }
+  )
 }

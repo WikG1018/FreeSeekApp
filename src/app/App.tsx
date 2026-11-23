@@ -34,6 +34,7 @@ import { bindNativeGoalActivity, reportViewedConversation } from '../services/ta
 import { useScreenTimeMilestones } from '../services/screenTimeMilestones.js'
 import { useAutomaticScreenTimeMilestones } from './useScreenTimeMilestones.js'
 import { useTheme } from './theme.js'
+import { installWebBack, registerWebBack } from './webBack.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
@@ -236,8 +237,7 @@ export const App = () => {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return
-    }
-    let lastBack = 0
+    }    let lastBack = 0
     const subscription = CapacitorApp.addListener('backButton', () => {
       // 1. 设置页打开时交由其内部返回（二级页 → 一级 → 关闭），绝不直接退出
       if (hasSettingsOpen()) {
@@ -271,6 +271,32 @@ export const App = () => {
     return () => {
       void subscription.then((handle) => handle.remove())
     }
+  }, [])
+
+  // 网页版/PWA 的系统返回：浏览器的历史后退先交给应用内的层级，都关完才退出。
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      return
+    }
+    installWebBack(() => showToast({ key: 'pressBackAgainToExit' }))
+    return registerWebBack(() => {
+      if (closeTransientPanel() || (hasOpenModal() && closeTopModal())) {
+        return true
+      }
+      if (useSearchPanel.getState().entry !== null) {
+        closeSearchPanel()
+        return true
+      }
+      if (useMobileSider.getState().open) {
+        closeMobileSider()
+        return true
+      }
+      if (useChatStore.getState().activeId !== null) {
+        returnToWelcome()
+        return true
+      }
+      return false
+    })
   }, [])
 
   return (

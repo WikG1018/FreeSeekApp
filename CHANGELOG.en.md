@@ -1,5 +1,10 @@
 # Release notes
 
+## v3.0.1
+
+### Stability fixes
+- Fixed the web build and installed PWA closing as soon as the system back gesture was used: back now closes settings pages, dialogs, search and the sidebar in turn, then returns to the welcome screen, and only asks for one more press at the outermost level instead of leaving the app immediately.
+
 ## v3.0.0
 
 ### A note from the author

@@ -16,6 +16,7 @@ import { IconChevronLeftOutline16 } from '../base/icons.js'
 import { Button } from '../base/Button.js'
 import { closeTopModal, hasOpenModal } from '../base/Modal.js'
 import { closeTransientPanel, hasTransientPanel } from '../base/transientPanel.js'
+import { registerWebBack } from '../../app/webBack.js'
 import { useDialogFocus } from '../base/useDialogFocus.js'
 import {
   closeSettings,
@@ -134,8 +135,18 @@ export const SettingsShell = ({
           }
         })
       : null
+    // 网页版/PWA：系统返回等同浏览器后退，先关弹层，再逐级返回或关闭设置。
+    const dropWebBack = Capacitor.isNativePlatform()
+      ? undefined
+      : registerWebBack(() => {
+          if (!closeTransientPanel() && !closeTopModal()) {
+            backRef.current()
+          }
+          return true
+        })
     return () => {
       document.removeEventListener('keydown', key)
+      dropWebBack?.()
       void sub?.then((handle) => handle.remove())
     }
   }, [])
