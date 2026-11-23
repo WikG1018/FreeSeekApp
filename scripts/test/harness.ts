@@ -1,3 +1,6 @@
+// 测试入口替代了 src/bootstrap.ts，这里直接引入全套补丁：
+// 生产构建按能力按需加载（见 bootstrap.ts），测试要覆盖「老 WebView 缺 API」的场景。
+import '../../src/polyfills.js'
 import { readNativeBrowser } from '../../src/services/tasks/nativeBrowser.js'
 import '../../src/compatibility.js'
 import { createId } from '../../src/utils/id.js'

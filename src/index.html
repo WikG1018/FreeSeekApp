@@ -31,9 +31,10 @@
     <style>
       :root[data-fs-starting]{background:#fff}
       :root[data-fs-starting][data-fs-startup-theme="dark"]{background:#151517}
-      #fs-startup{--startup-rgb:255,255,255;position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;color:#111827;font:16px/1.6 system-ui,sans-serif;font-family:var(--dsw-font-family,system-ui,sans-serif);overflow:auto}
+      #fs-startup{--startup-rgb:255,255,255;position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;box-sizing:border-box;padding:32px 24px;color:#111827;font:16px/1.6 system-ui,sans-serif;font-family:var(--dsw-font-family,system-ui,sans-serif);overflow:auto}
       #fs-startup::before{content:"";position:absolute;top:0;left:0;right:0;bottom:0;z-index:-1;background:#fff;background:rgba(var(--startup-rgb),1)}
       #fs-startup>div{max-width:480px;width:100%;margin:auto}
+      #fs-startup-hint{display:none;max-width:320px;margin:20px 0 0;text-align:center;font-size:14px;line-height:1.6;color:#6b7280;white-space:pre-line}
       #fs-startup-mark{display:block;flex:none;max-width:100%;object-fit:contain;transform-origin:center}
       #fs-startup h1{margin:0 0 16px;font-size:24px;line-height:1.35;font-weight:650}
       #fs-startup p{margin:12px 0;overflow-wrap:break-word}
@@ -45,6 +46,7 @@
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup,body[data-ds-dark-theme] #fs-startup{--startup-rgb:21,21,23;color:#f3f5fa}
       :root[data-fs-startup-theme="dark"] body:not(.light) .fs-whale-image,body[data-ds-dark-theme] .fs-whale-image{filter:url(#fs-whale-dark)}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-version,:root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-feedback{color:#b5bbc6}
+      :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-hint{color:#b5bbc6}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-actions button{background:#252e43;color:#adc4ff;border-color:#627fb8}
       :root[data-fs-startup-theme="dark"] body:not(.light) #fs-startup-actions button:focus{outline-color:#adc4ff}
       :root[data-fs-startup-home] [data-startup-target]{opacity:0}
@@ -62,6 +64,7 @@
     </svg>
     <section id="fs-startup" role="status" aria-live="polite">
       <img id="fs-startup-mark" class="fs-whale-image" src="./startup-mark.png" alt="" width="120" height="120" />
+      <p id="fs-startup-hint" role="status" aria-live="polite"></p>
       <div id="fs-startup-failure" style="display:none">
         <h1 id="fs-startup-title"></h1>
         <p id="fs-startup-description"></p>
@@ -76,16 +79,25 @@
     <script>
       // 此守卫刻意使用 ES5，主包语法不兼容、加载失败或初始化异常时仍能显示和导出。
       (function(){
-        var root=document.documentElement,panel=document.getElementById('fs-startup'),state='starting',timer,report={phase:'bootstrap',errorName:'Error'};
-        var title=document.getElementById('fs-startup-title'),description=document.getElementById('fs-startup-description'),failure=document.getElementById('fs-startup-failure'),mark=document.getElementById('fs-startup-mark'),feedback=document.getElementById('fs-startup-feedback'),exportButton=document.getElementById('fs-startup-export');
+        var root=document.documentElement,panel=document.getElementById('fs-startup'),state='starting',timer,slowTimer,hardTimer,step='shell',report={phase:'bootstrap',errorName:'Error'};
+        var title=document.getElementById('fs-startup-title'),description=document.getElementById('fs-startup-description'),failure=document.getElementById('fs-startup-failure'),mark=document.getElementById('fs-startup-mark'),feedback=document.getElementById('fs-startup-feedback'),exportButton=document.getElementById('fs-startup-export'),slowHint=document.getElementById('fs-startup-hint');
+        var ios=/iPhone|iPad|iPod/.test(navigator.userAgent||'');
         var zh=(navigator.language||'zh').toLowerCase().indexOf('zh')===0;
         try{var saved=localStorage.getItem('freeseek:locale');if(saved){zh=saved==='zh-CN';}}catch(ignore){}
         function label(chinese,english){return zh?chinese:english;}
         document.getElementById('fs-startup-retry').textContent=label('重新启动','Restart');exportButton.textContent=label('导出启动诊断','Export startup diagnostics');
         function revealPage(){
-          if(state==='failed'||panel.style.display==='none'){return;}clearTimeout(timer);state='ready';
+          if(state==='failed'||panel.style.display==='none'){return;}clearTimeout(timer);clearTimeout(slowTimer);clearTimeout(hardTimer);state='ready';
+          if(slowHint){slowHint.style.display='none';}
           panel.style.display='none';panel.style.removeProperty('visibility');panel.removeAttribute('data-handoff');root.removeAttribute('data-fs-startup-home');root.removeAttribute('data-fs-starting');
           if(typeof Event==='function'){window.dispatchEvent(new Event('freeseek:startup-ended'));}
+        }
+        // 慢不等于坏：网络差时只是要多等一会儿，先把「还在加载」说出来，不判失败。
+        function noteSlow(){
+          if(state!=='starting'&&state!=='loading'){return;}
+          if(!slowHint){return;}
+          slowHint.textContent=label('正在加载…\n网络较慢时可能需要多等一会儿。','Loading…\nThis can take a while on a slow connection.');
+          slowHint.style.display='block';
         }
         function markPaintable(){
           var native=window.Capacitor;
@@ -98,26 +110,33 @@
         function fail(phase,error,resource,line,column){
           var name=error&&error.name;
           var safeNames=['Error','SyntaxError','TypeError','ReferenceError','RangeError','ResourceError','TimeoutError','AbortError','QuotaExceededError','InvalidStateError','SecurityError','NotSupportedError'];
-          clearTimeout(timer);state='failed';report={phase:phase,errorName:safeNames.indexOf(name)>=0?name:'Error',line:Math.max(0,Math.min(1000000,Number(line)||0)),column:Math.max(0,Math.min(1000000,Number(column)||0))};
+          clearTimeout(timer);clearTimeout(slowTimer);clearTimeout(hardTimer);state='failed';report={phase:phase,errorName:safeNames.indexOf(name)>=0?name:'Error',step:step,line:Math.max(0,Math.min(1000000,Number(line)||0)),column:Math.max(0,Math.min(1000000,Number(column)||0))};
+          if(slowHint){slowHint.style.display='none';}
           if(resource){var basename=String(resource).split('/').pop().split('?')[0];if(/^[\w-]{1,64}\.[a-f0-9]{8}\.(js|css)$/.test(basename)){report.script=basename;}}
           panel.removeAttribute('data-handoff');root.removeAttribute('data-fs-startup-home');root.setAttribute('data-fs-starting','');
           panel.style.display='flex';panel.style.removeProperty('visibility');mark.style.display='none';failure.style.display='block';title.textContent=label(phase==='render'?'FreeSeek 界面显示异常':'FreeSeek 未能启动',phase==='render'?'FreeSeek could not display this screen':'FreeSeek could not start');
           description.textContent=phase==='storage'
             ? label('读取本地聊天记录超时。请重试，或导出启动诊断。','Loading local chats timed out. Restart or export startup diagnostics.')
-            : label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
+            : ios
+              ? label('网络较慢或连接中断。请检查网络后点「重新启动」；如果一直打不开，请导出启动诊断反馈。','Slow or interrupted connection. Check your network and retry. If it keeps failing, export startup diagnostics.')
+              : label('请先重试；仍无法打开时，导出诊断包反馈问题，并在系统设置或应用商店更新 Android 系统 WebView 或 Chrome。','Try restarting. If this continues, export diagnostics and update Android System WebView or Chrome through system settings or your app store.');
           var meta=document.querySelector('meta[name="application-version"]'),match=/Chrome\/([\d.]+)/.exec(navigator.userAgent);
           document.getElementById('fs-startup-version').textContent='FreeSeek '+(meta?meta.content:'—')+' · WebView '+(match?match[1]:'—')+' · '+report.errorName;
         }
         window.__FreeSeekStartup={
+          step:function(name){
+            if(state==='failed'||typeof name!=='string'||name.length>40){return;}
+            step=name;
+          },
           mounted:function(){
             if(state!=='starting'){return;}
-            clearTimeout(timer);state='loading';
+            clearTimeout(timer);clearTimeout(slowTimer);clearTimeout(hardTimer);state='loading';
             timer=setTimeout(function(){fail('storage',{name:'TimeoutError'});},30000);
           },
           ready:function(handoff){
             if(state==='ready'||state==='handoff'){return;}
             var canAnimate=state!=='failed'&&typeof handoff==='function';
-            clearTimeout(timer);state='handoff';
+            clearTimeout(timer);clearTimeout(slowTimer);clearTimeout(hardTimer);state='handoff';
             if(canAnimate){
               timer=setTimeout(revealPage,2600);
               try{handoff(revealPage);return;}catch(ignore){}
@@ -139,7 +158,9 @@
             var blob=new Blob([JSON.stringify({diagnostic_mode:'startup',report:report,webview:navigator.userAgent},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='freeseek-startup-diagnostics.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},10000);finished(label('已导出启动诊断','Startup diagnostics exported'));
           }
         };
-        timer=setTimeout(function(){fail('timeout',{name:'TimeoutError'});},10000);
+        // 慢网络下首屏要下主包 + 应用块（约 500 KB），7 秒只提示、不判死；60 秒才认定失败。
+        slowTimer=setTimeout(noteSlow,7000);
+        hardTimer=setTimeout(function(){fail('timeout',{name:'TimeoutError'});},60000);
         if(mark.complete&&mark.naturalWidth){markPaintable();}
         else{mark.addEventListener('load',markPaintable);}
       }());
@@ -193,9 +214,9 @@
         function registerOfflineShell(){
           try{
             if(isNative()||location.protocol!=='https:'||!('serviceWorker' in navigator)){return;}
-            window.addEventListener('load',function(){
-              navigator.serviceWorker.register('./sw.js').catch(function(){});
-            });
+            // 立即注册而不是等 load：慢网络下首屏本就要下 500 KB，越早拿到缓存，
+            // 第二次打开就越快；缓存填不满正是「每次重开都卡在加载」的原因之一。
+            navigator.serviceWorker.register('./sw.js').catch(function(){});
           }catch(ignore){}
         }
 

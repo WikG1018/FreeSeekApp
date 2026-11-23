@@ -607,4 +607,53 @@ export const runCompatibilityCases = async (run) => {
       assert.equal(JSON.parse(text).report.errorName, 'Error')
     }
   )
+  await run(
+    'a slow network keeps waiting instead of failing the startup',
+    async (page) => {
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Network.enable')
+      // 约 80 KB/s：页面在 10 秒时肯定还没就绪，正是国内直连慢网络下的真实情况
+      await cdp.send('Network.emulateNetworkConditions', {
+        offline: false,
+        latency: 300,
+        downloadThroughput: 80 * 1024,
+        uploadThroughput: 80 * 1024,
+      })
+      const slow = page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+      const loadedAt = Date.now()
+      // 7 秒提示「正在加载」，10 秒不得判死（旧行为是 10 秒直接停在错误页，缓存也再填不满）
+      await page.waitForFunction(
+        () => {
+          const hint = document.getElementById('fs-startup-hint')
+          return !!hint && getComputedStyle(hint).display !== 'none'
+        },
+        null,
+        { timeout: 12000 }
+      )
+      // 必须真正越过 10 秒这一关再判断，否则测不出旧行为
+      const elapsed = Date.now() - loadedAt
+      if (elapsed < 11000) {
+        await page.waitForTimeout(11000 - elapsed)
+      }
+      const atEleven = await page.evaluate(() => ({
+        failure:
+          getComputedStyle(document.getElementById('fs-startup-failure')).display !== 'none',
+        starting: document.documentElement.hasAttribute('data-fs-starting'),
+      }))
+      assert.equal(atEleven.failure, false, 'slow load must not fail the startup')
+      assert.equal(atEleven.starting, true, 'still loading after 11s')
+      // 放开限速后应当自己完成，不需要用户手动重试
+      await cdp.send('Network.emulateNetworkConditions', {
+        offline: false,
+        latency: 0,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+      })
+      await slow
+      await page.waitForFunction(() => !!window.__audit?.store.useChatStore.getState().ready, null, {
+        timeout: 60000,
+      })
+      await page.locator('#fs-startup').waitFor({ state: 'hidden', timeout: 30000 })
+    }
+  )
 }

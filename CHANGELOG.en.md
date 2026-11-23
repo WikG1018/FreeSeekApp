@@ -1,5 +1,14 @@
 # Release notes
 
+## v3.0.6
+
+### Stability fixes
+- Fixed the web build never opening on slow networks: it used to give up after 10 seconds and stay on the error screen, which also meant the cache never filled, so every later launch failed too. A slow network now just shows "Loading…" and keeps waiting, up to 60 seconds.
+- Less to download on first load: iPhone and newer Android no longer fetch the full compatibility polyfill set.
+- The offline cache is filled earlier, so the second launch is noticeably faster.
+- Failure messages are device-aware: iPhone no longer tells you to update Android System WebView.
+- Startup diagnostics now record which step it stopped at.
+
 ## v3.0.5
 
 ### Interface

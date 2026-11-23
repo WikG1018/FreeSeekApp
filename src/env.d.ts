@@ -30,6 +30,8 @@ interface Window {
     mounted: () => void
     ready: (handoff?: (reveal: () => void) => void) => void
     fail: (phase: 'bootstrap' | 'render', error: unknown) => void
+    /** 上报启动进行到哪一步，超时诊断里会带上最后一步。 */
+    step: (name: string) => void
   }
 }
 

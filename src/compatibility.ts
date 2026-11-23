@@ -1,6 +1,6 @@
-// 必须在应用和依赖模块求值前执行，覆盖旧 Android WebView 缺少的标准 API。
-import 'core-js/stable'
-import 'abortcontroller-polyfill/dist/polyfill-patch-fetch'
+// 必须在应用和依赖模块求值前执行，覆盖旧浏览器缺少的标准 API。
+// 体积大的 core-js / abortcontroller 补丁已移到 src/polyfills.ts，由 bootstrap 按能力按需加载；
+// 这里的补丁都先判断能力，现代内核上不产生任何实际工作。
 import { ResizeObserver as ResizeObserverPolyfill } from '@juggle/resize-observer'
 
 // idb 8 使用 cursor.request；Chrome/WebView 76 之前缺少它，会让遍历在首条记录后提前结束。
