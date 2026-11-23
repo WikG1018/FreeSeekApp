@@ -62,16 +62,30 @@ export const registerWebBack = (handler: () => boolean) => {
 /**
  * 到达最外层（所有层级都已关完）时怎么办。
  * - exit：第一次提示，2 秒内再按一次才真的离开。适合有返回键的环境（Android、桌面浏览器）。
- * - stay：什么都不做，只补回守卫。适合 iOS 主屏幕 PWA——它没有返回键，只有左边缘右滑手势；
- *   手势到头时若提示「再按一次返回」或退出，用户既没有键可按，也会被莫名其妙地踢出应用。
+ * - stay：什么都不做，只补回守卫。
  */
 export type WebBackOutermost = 'exit' | 'stay'
 
-export const installWebBack = (onEmpty: () => void, outermost: WebBackOutermost = 'exit') => {
+/**
+ * guards=false 时完全不碰历史记录（iOS 主屏幕 PWA 用）。
+ *
+ * iOS 没有返回键，左边缘右滑是 Safari 的历史后退。iOS 在滑动过程中会画出目标历史记录的
+ * 快照，而 pushState 压出来的守卫记录从来没有真正渲染过，画出来就是整片白屏——实测
+ * 「从设置右滑返回」会白一下再恢复。既然没有按键需要拦，就不要制造可后退的历史记录：
+ * 手势无事可做，白屏也就不存在。层级改用设置页的 ‹ 和弹窗的 × 关闭。
+ */
+export const installWebBack = (
+  onEmpty: () => void,
+  outermost: WebBackOutermost = 'exit',
+  guards = true
+) => {
   if (installed || Capacitor.isNativePlatform()) {
     return
   }
   installed = true
+  if (!guards) {
+    return
+  }
   rearm()
   // 从缓存恢复或被系统挂起后重新可见时，补回守卫。
   const repair = () => {

@@ -88,7 +88,8 @@
   padding: calc(var(--fs-safe-top) + 5px) calc(var(--fs-safe-right) + 12px) 5px
     calc(var(--fs-safe-left) + 12px);
 }
-.back {
+.back,
+.close {
   display: inline-flex;
   justify-content: center;
   align-items: center;
@@ -105,7 +106,8 @@
     transform var(--fs-duration-fast) var(--fs-ease-out),
     background-color var(--fs-duration-fast);
 }
-.back:active {
+.back:active,
+.close:active {
   transform: scale(0.94);
   background: var(--dsw-alias-interactive-bg-active);
 }
@@ -251,6 +253,7 @@ button.row:active:not(:disabled),
 }
 .row:focus-visible,
 .back:focus-visible,
+.close:focus-visible,
 .tutorialButton:focus-visible,
 .textButton:focus-visible,
 .quietAction:focus-visible {

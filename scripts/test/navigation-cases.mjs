@@ -672,45 +672,61 @@ export const runNavigationCases = async ({ run }) => {
     }
   )
   await run(
-    'iOS home-screen PWA: swipe closes one layer, swiping on the home screen does nothing and never leaves',
+    'iOS home-screen PWA: no history entries are pushed, so the edge swipe cannot flash a blank page',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit
         const wait = (ms = 400) => new Promise((resolve) => setTimeout(resolve, ms))
-        const steps = {}
-        // 右滑 = 历史后退：有层级时关一层。
+        const before = { length: history.length, state: JSON.stringify(history.state) }
         a.settingsDialog.openSettings('personas')
         await wait()
-        window.history.back()
-        await wait()
-        steps.afterSwipeFromSettings = a.settingsDialog.useSettingsDialog.getState().page
-        window.history.back()
-        await wait()
-        steps.settingsClosed = !a.settingsDialog.useSettingsDialog.getState().open
-        // 到主页后连续右滑三次：不弹「再按一次返回」，不退出，守卫仍在。
-        const guard = () => (history.state?.freeseekBackGuard ? history.state.depth : 0)
-        for (let i = 0; i < 3; i++) {
-          window.history.back()
-          await wait(300)
+        const opened = a.settingsDialog.useSettingsDialog.getState()
+        await wait(600)
+        return {
+          before,
+          length: history.length,
+          guard: history.state?.freeseekBackGuard ?? null,
+          depth: history.state?.depth ?? null,
+          state: JSON.stringify(history.state),
+          settingsOpen: a.settingsDialog.useSettingsDialog.getState().open,
+          page: a.settingsDialog.useSettingsDialog.getState().page,
+          openedPage: opened.page,
+          alive: Boolean(window.__audit),
         }
-        await wait()
-        steps.alive = Boolean(window.__audit)
-        steps.depth = guard()
-        steps.length = history.length
-        steps.toast = Boolean(
-          [...document.querySelectorAll('[role="status"],[role="alert"]')].find((node) =>
-            /再按一次返回/.test(node.textContent ?? '')
-          )
-        )
-        return steps
       })
-      assert.equal(result.afterSwipeFromSettings, 'home')
-      assert.equal(result.settingsClosed, true)
-      assert.equal(result.alive, true, 'home-screen swipe must never leave the app')
-      assert.equal(result.toast, false, 'no "press back again" prompt on iOS')
-      assert.equal(result.depth, 2)
+      // iOS 主屏幕版不压任何历史记录：手势没有可切换的记录，也就不会画白屏快照。
+      assert.equal(result.guard, null, 'iOS must not push guard entries')
+      assert.equal(result.length, result.before.length, 'history length must not grow')
+      assert.equal(result.alive, true)
+      assert.equal(result.openedPage, 'personas')
+      assert.equal(result.settingsOpen, true, 'settings stay open; layers close via the UI buttons')
+      assert.equal(result.page, 'personas')
     },
     // navigator.standalone 仅 iOS Safari 提供，主屏幕 PWA 模式下为 true。
+    async (context) => {
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
+      })
+    }
+  )
+  await run(
+    'iOS home-screen PWA: settings can be closed from the home page',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
+      const close = page.locator('[data-settings-close]')
+      await close.waitFor({ timeout: 5000 })
+      await close.click()
+      await page.waitForFunction(
+        () => !window.__audit.settingsDialog.useSettingsDialog.getState().open,
+        null,
+        { timeout: 5000 }
+      )
+      // 关掉后应用仍然可用，不会因为「进得去出不来」卡在设置页
+      assert.equal(
+        await page.evaluate(() => Boolean(window.__audit)),
+        true
+      )
+    },
     async (context) => {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })

@@ -1,5 +1,12 @@
 # Release notes
 
+## v3.0.8
+
+### Stability fixes
+- Fixed the iPhone home-screen build flashing a blank white screen when swiping back from Settings: the iOS edge swipe is a Safari history traversal, and it paints the previous entry, while guard entries were never actually displayed. The home-screen build no longer creates those entries, so the flash is gone.
+- Settings now has a close button in the top-right corner. The home page used to rely on the back gesture alone, which would have made Settings impossible to leave on iPhone.
+- iPad landscape, Android and desktop back behaviour is unchanged.
+
 ## v3.0.7
 
 ### Interface

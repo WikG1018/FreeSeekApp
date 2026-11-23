@@ -279,12 +279,14 @@ export const App = () => {
     if (Capacitor.isNativePlatform()) {
       return
     }
-    // iOS 主屏幕 PWA 没有返回键，只有左边缘右滑手势：右滑关一层，到主页后再滑什么都不做。
-    // 提示「再按一次返回」或退出都会让用户莫名其妙地被踢出应用。
+    // iOS 主屏幕 PWA 没有返回键，只有左边缘右滑：那是 Safari 的历史后退，滑动时 iOS 会画上
+    // 一条记录的快照，守卫记录没渲染过，画出来就是白屏。所以这类环境完全不压历史记录，
+    // 手势无事可做，层级改用设置页的 ‹ 和弹窗的 × 关闭。
     const homeScreenPwa = (navigator as Navigator & { standalone?: boolean }).standalone === true
     installWebBack(
       () => showToast({ key: 'pressBackAgainToExit' }),
-      homeScreenPwa ? 'stay' : 'exit'
+      homeScreenPwa ? 'stay' : 'exit',
+      !homeScreenPwa
     )
     return registerWebBack(() => {
       logEvent('app', 'web-back-state', {

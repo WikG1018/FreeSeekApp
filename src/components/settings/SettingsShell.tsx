@@ -12,7 +12,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { useSettings } from '../../services/settings.js'
 import { useMobileViewport } from '../../app/viewport.js'
 import { listenMediaQuery } from '../../utils/mediaQuery.js'
-import { IconChevronLeftOutline16 } from '../base/icons.js'
+import { IconChevronLeftOutline16, IconCloseOutline16 } from '../base/icons.js'
 import { Button } from '../base/Button.js'
 import { closeTopModal, hasOpenModal } from '../base/Modal.js'
 import { closeTransientPanel, hasTransientPanel } from '../base/transientPanel.js'
@@ -205,7 +205,8 @@ export const SettingsShell = ({
               data-api-settings={page === 'account' || page.startsWith('provider') || undefined}
             >
               {/*
-                手机版：首页无返回键（靠返回手势/系统返回），二级页显示返回箭头。
+                手机版：首页没有返回键，就给一个关闭键——iPhone 主屏幕版没有系统返回，
+                没有它设置页就是进得去出不来。二级页显示返回箭头。
                 电脑版：不用头部返回键——左栏底部已有「返回对话」，
                 再放一个箭头会造成两个返回入口。
               */}
@@ -217,8 +218,21 @@ export const SettingsShell = ({
               <h1 className={styles.title} ref={title} tabIndex={-1} data-dialog-initial>
                 {t(pageTitles[page])}
               </h1>
-              {/* 仅二级页（有返回键）补右侧占位，保证标题居中；首页标题左对齐 */}
-              {canGoBack && !wideLayout && <span className={styles.backPlaceholder} aria-hidden />}
+              {!wideLayout &&
+                (canGoBack ? (
+                  // 二级页补右侧占位，保证标题居中；首页标题左对齐
+                  <span className={styles.backPlaceholder} aria-hidden />
+                ) : (
+                  <button
+                    className={styles.close}
+                    aria-label={t('close')}
+                    type="button"
+                    data-settings-close=""
+                    onClick={close}
+                  >
+                    <IconCloseOutline16 />
+                  </button>
+                ))}
             </header>
             <div
               ref={scroll}
