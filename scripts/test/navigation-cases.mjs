@@ -596,4 +596,19 @@ export const runNavigationCases = async ({ run }) => {
       assert.equal(steps[2].sider, false)
     }
   )
+  await run(
+    'web back closes a modal dialog before the drawer and the conversation',
+    async (page) => {
+      await page.evaluate(() => window.__audit.mobileSider.openMobileSider())
+      await page.getByRole('button', { name: '感谢开发者', exact: true }).click()
+      const donate = page.getByRole('dialog', { name: '感谢开发者' })
+      await donate.waitFor()
+      await page.evaluate(() => window.history.back())
+      await donate.waitFor({ state: 'hidden' })
+      assert.equal(await page.evaluate(() => window.__audit.mobileSider.useMobileSider.getState().open), true)
+      await page.evaluate(() => window.history.back())
+      await page.waitForFunction(() => !window.__audit.mobileSider.useMobileSider.getState().open)
+      assert.equal(await page.evaluate(() => window.__audit.mobileSider.useMobileSider.getState().open), false)
+    }
+  )
 }

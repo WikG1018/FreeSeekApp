@@ -40,6 +40,15 @@ export const installWebBack = (onEmpty: () => void) => {
   }
   installed = true
   pushGuard()
+  // 页面从缓存恢复或被系统挂起后重新可见时，守卫记录可能已经被消费掉，
+  // 这里补一条，避免下一次返回直接退出。
+  const repair = () => {
+    if (document.visibilityState === 'visible') {
+      pushGuard()
+    }
+  }
+  window.addEventListener('pageshow', repair)
+  document.addEventListener('visibilitychange', repair)
   window.addEventListener('popstate', () => {
     if (!armed) {
       // 守卫已被消费（例如连按两次返回）：交给浏览器，不再拦截。

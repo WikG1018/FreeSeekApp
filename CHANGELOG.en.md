@@ -1,5 +1,11 @@
 # Release notes
 
+## v3.0.2
+
+### Stability fixes
+- The web build now restores its back guard when it returns from the background, from the back-forward cache, or after being suspended, so a single back press can no longer make the next one exit.
+- Back at the outermost level still needs a second press within two seconds; the version shown in Settings → About FreeSeek tells you whether the web build has updated.
+
 ## v3.0.1
 
 ### Stability fixes
