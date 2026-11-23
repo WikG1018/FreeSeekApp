@@ -17,11 +17,15 @@
     <meta name="format-detection" content="telephone=no" />
     <script>
       (function(){
-        var root=document.documentElement,preference;
+        var root=document.documentElement,preference,savedFont=null;
         try{
           preference=localStorage.getItem('freeseek:theme-preference');
-          if(localStorage.getItem('freeseek:use-system-font')==='true'){root.setAttribute('data-fs-system-font','');}
+          savedFont=localStorage.getItem('freeseek:use-system-font');
         }catch(ignore){}
+        // iPhone / iPad 默认用系统字体：中文字体包约 14 MB，国内网络下代价太大。
+        // 与 src/services/settings.ts 的初始值保持一致；用户手动选过就以选择为准。
+        var appleMobile=/iPhone|iPad|iPod/.test(navigator.userAgent||'')||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+        if(savedFont==='true'||(savedFont===null&&appleMobile)){root.setAttribute('data-fs-system-font','');}
         var dark=preference==='dark'||(preference!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches);
         root.setAttribute('data-fs-starting','');
         root.setAttribute('data-fs-startup-theme',dark?'dark':'light');

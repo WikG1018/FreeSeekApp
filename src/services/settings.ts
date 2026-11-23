@@ -152,6 +152,25 @@ const initialThirdPartySearch = (): ThirdPartySearch => {
   return { enabled: false, keySource: 'official', apiKey: '' }
 }
 
+/** iPhone / iPad（含 iPadOS 的桌面 UA）。中文字体包约 14 MB，这些设备默认不下载。 */
+const isAppleMobile = (): boolean => {
+  try {
+    const ua = navigator.userAgent || ''
+    return (
+      /iPhone|iPad|iPod/.test(ua) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    )
+  } catch {
+    return false
+  }
+}
+
+/** 未保存过时：iPhone/iPad 默认系统字体，其余平台保持 MiSans；用户手动选过则以选择为准。 */
+const initialUseSystemFont = (): boolean => {
+  const saved = read(KEYS.useSystemFont)
+  return saved === null ? isAppleMobile() : saved === 'true'
+}
+
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
   locale: initialLocale(),
@@ -191,7 +210,7 @@ export const useSettings = create<Settings>(() => ({
   thirdPartySearch: initialThirdPartySearch(),
   thirdPartySearchOn: read(KEYS.thirdPartySearchOn) === 'true',
   proSearchOn: read(KEYS.proSearchOn) === 'true',
-  useSystemFont: read(KEYS.useSystemFont) === 'true',
+  useSystemFont: initialUseSystemFont(),
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
     return Number.isFinite(value) && value >= 0.85 && value <= 1.25 ? value : 1

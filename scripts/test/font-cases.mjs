@@ -122,4 +122,42 @@ export const runFontCases = async (run) => {
     },
     false
   )
+  await run(
+    'iPhone uses the system font by default and skips the 14 MB webfont',
+    async (page) => {
+      const origin = new URL(page.url()).origin
+      const browser = page.context().browser()
+      const ua =
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Mobile/15E148 Safari/604.1'
+      const ios = await browser.newContext({
+        userAgent: ua,
+        locale: 'zh-CN',
+        viewport: { width: 390, height: 844 },
+      })
+      try {
+        const phone = await ios.newPage()
+        const fonts = []
+        phone.on('request', (request) => {
+          if (/MiSans.*\.woff2$/i.test(request.url())) {
+            fonts.push(request.url())
+          }
+        })
+        await phone.goto(`${origin}/?e2e=1`)
+        await phone.waitForFunction(
+          () => window.__audit?.store.useChatStore.getState().ready,
+          null,
+          { timeout: 30000 }
+        )
+        // 字体是懒加载的，给足时间发起请求再断言「一个都没下」
+        await phone.waitForTimeout(2000)
+        assert.equal(
+          await phone.evaluate(() => document.documentElement.hasAttribute('data-fs-system-font')),
+          true
+        )
+        assert.deepEqual(fonts, [], 'iPhone must not download the MiSans webfont by default')
+      } finally {
+        await ios.close()
+      }
+    }
+  )
 }

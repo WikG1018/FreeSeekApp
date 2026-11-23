@@ -508,6 +508,7 @@ export const zh = {
   settingsFontFamily: '字体选择',
   settingsFontMiSans: '默认 MiSans',
   settingsFontSystem: '系统字体',
+  settingsFontAppleDefault: 'iPhone / iPad 默认使用系统字体，可省掉约 14 MB 的字体下载。',
   settingsFontSaveFailed: '字体设置未能保存，请重试。',
   settingsFontSizeHint: '调整界面文字与控件尺寸，立即生效。',
   fontSmall: '小',

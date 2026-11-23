@@ -43,6 +43,10 @@ export const AppearancePage = () => {
   const { themePreference, fontScale, locale, useSystemFont } = useSettings()
   const [fontSaveFailed, setFontSaveFailed] = useState(false)
   const name = useId()
+  // iPhone / iPad 默认系统字体；用户切回 MiSans 时提示一下流量代价。
+  const appleMobile =
+    /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   return (
     <>
       <Section title={t('avatarMenuSettingsDialogThemeItemLabel')}>
@@ -87,6 +91,9 @@ export const AppearancePage = () => {
           <p className={styles.errorNote} role="alert">
             {t('settingsFontSaveFailed')}
           </p>
+        )}
+        {appleMobile && !useSystemFont && (
+          <p className={styles.paragraph}>{t('settingsFontAppleDefault')}</p>
         )}
         <div className={styles.fontPreview}>{t('settingsFontPreview')}</div>
         <div className={styles.segments} role="radiogroup" aria-label={t('settingsFontSize')}>

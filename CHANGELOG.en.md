@@ -1,5 +1,10 @@
 # Release notes
 
+## v3.0.7
+
+### Interface
+- On iPhone and iPad the interface now uses the system font by default, skipping the ~14 MB Chinese webfont download — it opens faster and uses less data. You can switch back to MiSans in Settings → Appearance → Font; the option notes the data cost.
+
 ## v3.0.6
 
 ### Stability fixes

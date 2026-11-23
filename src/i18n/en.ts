@@ -545,6 +545,8 @@ export const en = {
   settingsFontFamily: 'Font family',
   settingsFontMiSans: 'Default MiSans',
   settingsFontSystem: 'System font',
+  settingsFontAppleDefault:
+    'iPhone and iPad use the system font by default, saving about 14 MB of font downloads.',
   settingsFontSaveFailed: 'Could not save the font setting. Try again.',
   settingsFontSizeHint: 'Adjust text and control sizing across the app. Applies immediately.',
   fontSmall: 'Small',
