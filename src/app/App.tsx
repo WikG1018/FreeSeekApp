@@ -279,7 +279,13 @@ export const App = () => {
     if (Capacitor.isNativePlatform()) {
       return
     }
-    installWebBack(() => showToast({ key: 'pressBackAgainToExit' }))
+    // iOS 主屏幕 PWA 没有返回键，只有左边缘右滑手势：右滑关一层，到主页后再滑什么都不做。
+    // 提示「再按一次返回」或退出都会让用户莫名其妙地被踢出应用。
+    const homeScreenPwa = (navigator as Navigator & { standalone?: boolean }).standalone === true
+    installWebBack(
+      () => showToast({ key: 'pressBackAgainToExit' }),
+      homeScreenPwa ? 'stay' : 'exit'
+    )
     return registerWebBack(() => {
       logEvent('app', 'web-back-state', {
         settings: hasSettingsOpen(),

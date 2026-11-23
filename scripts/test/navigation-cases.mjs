@@ -671,4 +671,50 @@ export const runNavigationCases = async ({ run }) => {
       assert.equal(lengths.size, 1, `history length must stay constant, saw ${[...lengths]}`)
     }
   )
+  await run(
+    'iOS home-screen PWA: swipe closes one layer, swiping on the home screen does nothing and never leaves',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const wait = (ms = 400) => new Promise((resolve) => setTimeout(resolve, ms))
+        const steps = {}
+        // 右滑 = 历史后退：有层级时关一层。
+        a.settingsDialog.openSettings('personas')
+        await wait()
+        window.history.back()
+        await wait()
+        steps.afterSwipeFromSettings = a.settingsDialog.useSettingsDialog.getState().page
+        window.history.back()
+        await wait()
+        steps.settingsClosed = !a.settingsDialog.useSettingsDialog.getState().open
+        // 到主页后连续右滑三次：不弹「再按一次返回」，不退出，守卫仍在。
+        const guard = () => (history.state?.freeseekBackGuard ? history.state.depth : 0)
+        for (let i = 0; i < 3; i++) {
+          window.history.back()
+          await wait(300)
+        }
+        await wait()
+        steps.alive = Boolean(window.__audit)
+        steps.depth = guard()
+        steps.length = history.length
+        steps.toast = Boolean(
+          [...document.querySelectorAll('[role="status"],[role="alert"]')].find((node) =>
+            /再按一次返回/.test(node.textContent ?? '')
+          )
+        )
+        return steps
+      })
+      assert.equal(result.afterSwipeFromSettings, 'home')
+      assert.equal(result.settingsClosed, true)
+      assert.equal(result.alive, true, 'home-screen swipe must never leave the app')
+      assert.equal(result.toast, false, 'no "press back again" prompt on iOS')
+      assert.equal(result.depth, 2)
+    },
+    // navigator.standalone 仅 iOS Safari 提供，主屏幕 PWA 模式下为 true。
+    async (context) => {
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
+      })
+    }
+  )
 }

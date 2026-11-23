@@ -1,5 +1,14 @@
 # Release notes
 
+## v3.0.5
+
+### Interface
+- On the iPhone home-screen build, "back" is an edge swipe, not a button. Swiping now closes the current layer (settings, dialogs, sidebar, chat); once on the home screen another swipe does nothing — no more "press back again to exit" prompt and no more being thrown out of the app.
+- Android and desktop browsers still have a back key, so "press back again on the home screen to exit" stays.
+
+### Stability fixes
+- Some Android browsers (e.g. Xiaomi's built-in browser) close the app themselves when they decide there is nothing left to go back to, before any page code runs. On those, use the Android installer; Chrome's "Add to Home screen" is not affected.
+
 ## v3.0.4
 
 ### Stability fixes

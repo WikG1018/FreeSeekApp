@@ -59,7 +59,15 @@ export const registerWebBack = (handler: () => boolean) => {
   }
 }
 
-export const installWebBack = (onEmpty: () => void) => {
+/**
+ * 到达最外层（所有层级都已关完）时怎么办。
+ * - exit：第一次提示，2 秒内再按一次才真的离开。适合有返回键的环境（Android、桌面浏览器）。
+ * - stay：什么都不做，只补回守卫。适合 iOS 主屏幕 PWA——它没有返回键，只有左边缘右滑手势；
+ *   手势到头时若提示「再按一次返回」或退出，用户既没有键可按，也会被莫名其妙地踢出应用。
+ */
+export type WebBackOutermost = 'exit' | 'stay'
+
+export const installWebBack = (onEmpty: () => void, outermost: WebBackOutermost = 'exit') => {
   if (installed || Capacitor.isNativePlatform()) {
     return
   }
@@ -92,7 +100,12 @@ export const installWebBack = (onEmpty: () => void) => {
         return
       }
     }
-    // 已在最外层：第一次提示，2 秒内再按一次才真的离开。
+    // 已在最外层。
+    if (outermost === 'stay') {
+      logEvent('app', 'web-back', { handled: -1, outermost: 'stay' })
+      return
+    }
+    // 第一次提示，2 秒内再按一次才真的离开。
     const now = Date.now()
     if (now - lastEmpty < EXIT_WINDOW_MS) {
       logEvent('app', 'web-back', { handled: -1, exit: true })
