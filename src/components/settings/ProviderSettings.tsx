@@ -244,16 +244,19 @@ export const ProviderSettingsPage = ({
   add,
   edit,
   search,
+  speech,
   onOfficial,
 }: {
   add: () => void
   edit: (id: string) => void
   search: () => void
+  speech: () => void
   onOfficial: () => void
 }) => {
   const t = useTranslate()
   const { profiles, selection } = useProviders()
   const configured = useSettings((s) => s.thirdPartySearch.enabled)
+  const roleVoice = useSettings((s) => s.roleVoice)
   const officialConfigured = useSettings((s) => Boolean(s.apiKey))
   const [removingId, setRemovingId] = useState<string | null>(null)
   const removing = profiles.find((profile) => profile.id === removingId)
@@ -310,6 +313,20 @@ export const ProviderSettingsPage = ({
           prominent
           onClick={search}
           target="providerSearch"
+        />
+        <Row
+          label={t('providerSpeechTitle')}
+          className={styles.providerRow}
+          description={
+            roleVoice.source === 'custom'
+              ? t('providerSpeechCustom')
+              : t('providerSpeechFollow')
+          }
+          icon={<ProviderMark id="xiaomimimo" />}
+          prominent
+          detail={roleVoice.enabled ? t('providerSpeechOn') : t('providerSpeechOff')}
+          onClick={speech}
+          target="providerSpeech"
         />
       </Section>
       <aside

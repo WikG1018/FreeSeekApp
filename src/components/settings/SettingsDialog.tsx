@@ -57,6 +57,7 @@ import {
   ProviderModelPage,
   ProviderModelsPage,
   ProviderSearchPage,
+  ProviderSpeechPage,
 } from './ProviderEditors.js'
 import { emptyProfile, useProviders } from '../../services/providers.js'
 import { providerPreset, type ProviderPreset } from '../../services/providerPresets.js'
@@ -144,6 +145,7 @@ const SettingsRoot = () => {
                     open('providerModels')
                   }}
                   search={() => open('providerSearch')}
+                  speech={() => open('providerSpeech')}
                   onOfficial={() => finish()}
                 />
               )
@@ -220,6 +222,8 @@ const SettingsRoot = () => {
               )
             case 'providerSearch':
               return <ProviderSearchPage onDone={() => finish()} />
+            case 'providerSpeech':
+              return <ProviderSpeechPage onDone={() => finish()} onSwitch={() => open('chat')} />
             case 'chat':
               return <ChatPreferencesPage />
             case 'personas':
@@ -1028,6 +1032,7 @@ const ExportHistory = ({
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
+  const [skipped, setSkipped] = useState(0)
 
   const onExport = async () => {
     if (disabled || busy || empty) {
@@ -1035,10 +1040,12 @@ const ExportHistory = ({
     }
     setBusy(true)
     setStatus(null)
+    setSkipped(0)
     onBusy?.(true)
     try {
-      const { name, blob } = await exportHistory()
-      await saveBackup(name, blob)
+      const result = await exportHistory()
+      await saveBackup(result.name, result.blob)
+      setSkipped(result.skipped)
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {
@@ -1057,6 +1064,11 @@ const ExportHistory = ({
       />
       {status ? (
         <div className={clsx(styles.rowNote, styles.errorNote)}>{statusText(t, status)}</div>
+      ) : null}
+      {skipped > 0 ? (
+        <div className={clsx(styles.rowNote, styles.warnNote)}>
+          {t('historyExportSkipped', { count: skipped })}
+        </div>
       ) : null}
     </div>
   )

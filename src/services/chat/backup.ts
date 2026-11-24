@@ -52,7 +52,7 @@ const enqueueBackup = <T>(
 const backupFileName = (date: Date) => `freeseek-backup-${formatDate(date)}.zip`
 
 /** 导出完整 FreeSeek 会话备份，可再次导入。 */
-export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
+export const exportHistory = (): Promise<{ name: string; blob: Blob; skipped: number }> =>
   enqueueBackup('export', async () => {
     // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
     flushChatUpdates()
@@ -60,13 +60,16 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     if (!ready) {
       throw new BackupError('sessionListLoadFailed')
     }
+    // 索引里有、正文读不到的会话（数据库被系统清空后内存列表还留着旧条目）跳过而不是整次失败：
+    // 备份剩下的会话远比「一条读不到就什么都导不出」有用。
+    let skipped = 0
     async function* readSessions(): AsyncGenerator<Session> {
       for (const summary of sessions) {
-        const session = Object.hasOwn(sessionCache, summary.id)
-          ? sessionCache[summary.id]
-          : await db.loadSession(summary.id)
+        const cached = Object.hasOwn(sessionCache, summary.id) ? sessionCache[summary.id] : null
+        const session = cached ?? (await db.loadSession(summary.id).catch(() => null))
         if (!session) {
-          throw new Error(`History session disappeared during export: ${summary.id}`)
+          skipped += 1
+          continue
         }
         // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
         yield await snapshotAgentHistory({ ...session, ...summary })
@@ -75,8 +78,16 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     const { exportArchive } = await import('./history/exportArchive.js')
     const now = new Date()
     const blob = await exportArchive(readSessions(), loadBackupFile)
-    logEvent('backup', 'export.archive', { sessionCount: sessions.length, bytes: blob.size })
-    return { name: backupFileName(now), blob }
+    if (skipped && skipped === sessions.length) {
+      // 一条都没读到：与其给用户一个空备份，不如明确报错。
+      throw new BackupError('sessionListLoadFailed')
+    }
+    logEvent('backup', 'export.archive', {
+      sessionCount: sessions.length - skipped,
+      skipped,
+      bytes: blob.size,
+    })
+    return { name: backupFileName(now), blob, skipped }
   })
 
 export const exportRecoveryHistory = () =>

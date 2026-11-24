@@ -123,6 +123,13 @@ import * as update from '../../src/services/update.js'
 import * as client from '../../src/services/api/client.js'
 import * as sse from '../../src/services/api/sse.js'
 import * as readAloud from '../../src/services/speech/readAloud.js'
+import * as roleMarkers from '../../src/services/speech/roleMarkers.js'
+import * as roleTable from '../../src/services/speech/roleTable.js'
+import * as roleVoiceBridge from '../../src/services/speech/roleVoiceBridge.js'
+import * as chatView from '../../src/services/chat/view.js'
+import * as roleVoiceProfile from '../../src/services/speech/roleVoiceProfile.js'
+import * as historyCheckpoint from '../../src/services/chat/historyCheckpoint.js'
+import { readNativeSession } from '../../src/services/chat/history/nativeSchema.js'
 import * as searchPanel from '../../src/components/search/searchPanelState.js'
 import * as mobileSider from '../../src/components/sider/mobileSiderState.js'
 import * as settingsDialog from '../../src/components/settings/settingsDialogState.js'
@@ -160,6 +167,13 @@ Object.assign(window, {
     client,
     sse,
     readAloud,
+    roleMarkers,
+    roleTable,
+    roleVoiceBridge,
+    chatView,
+    roleVoiceProfile,
+    historyCheckpoint,
+    readNativeSession,
     settingsDialog,
     searchPanel,
     mobileSider,

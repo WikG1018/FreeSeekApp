@@ -13,6 +13,7 @@ import { runProviderCases } from './test/provider-cases.mjs'
 import { runImmersiveCases } from './test/immersive-cases.mjs'
 import { runImportCases } from './test/import-cases.mjs'
 import { runNavigationCases } from './test/navigation-cases.mjs'
+import { runRoleVoiceCases } from './test/role-voice-cases.mjs'
 import { runInterfaceCases } from './test/interface-cases.mjs'
 import { runCompressionCases } from './test/compression-cases.mjs'
 import { runDesktopCases } from './test/desktop-cases.mjs'
@@ -185,6 +186,7 @@ try {
   await runImmersiveCases({ run })
   await runImportCases({ run })
   await runNavigationCases({ run })
+  await runRoleVoiceCases(run)
   await runInterfaceCases({ run })
   await runAssistantCases(run)
   await runAgentWorkflowCases(run)

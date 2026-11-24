@@ -1,6 +1,7 @@
 import { readMessageEvent } from '../../api/parseEvent.js'
 import type { MessageUsage } from '../../api/types.js'
 import type { FileAttachment, Message, ReplyBlock, Session } from '../types.js'
+import type { VoiceRole } from '../../speech/roleMarkers.js'
 import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
 import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
@@ -684,6 +685,64 @@ const contextSummary = (value: unknown) => {
   }
 }
 
+const MIMO_PRESETS = ['冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean', 'mimo_default'] as const
+const IMPORTANCES = ['lead', 'supporting', 'extra'] as const
+const MAX_ROLE_NAME = 80
+const MAX_ROLES = 500
+/** 音色描述与性格底色的长度上限：提示词里要带，不能无限长 */
+const MAX_ROLE_TEXT = 400
+
+const voiceRole = (value: unknown): VoiceRole => {
+  const raw = record(value)
+  const name = string(raw.name)
+  const preset = raw.preset === undefined ? undefined : (string(raw.preset) as VoiceRole['preset'])
+  const description = raw.description === undefined ? undefined : string(raw.description)
+  if (
+    !name.trim() ||
+    name.length > MAX_ROLE_NAME ||
+    (preset !== undefined && !(MIMO_PRESETS as readonly string[]).includes(preset)) ||
+    (description !== undefined && description.length > MAX_ROLE_TEXT) ||
+    (preset === undefined && !description?.trim())
+  ) {
+    return invalid()
+  }
+  const importance = string(raw.importance) as VoiceRole['importance']
+  const source = string(raw.source) as VoiceRole['source']
+  if (!(IMPORTANCES as readonly string[]).includes(importance) || (source !== 'model' && source !== 'user')) {
+    return invalid()
+  }
+  const nature = string(raw.nature)
+  if (nature.length > MAX_ROLE_TEXT) {
+    return invalid()
+  }
+  return {
+    id: id(raw.id),
+    name,
+    aliases: list(raw.aliases, (alias) => {
+      const text = string(alias)
+      return text && text.length <= MAX_ROLE_NAME ? text : invalid()
+    }).slice(0, 50),
+    ...(preset !== undefined && { preset }),
+    ...(description !== undefined && { description }),
+    nature,
+    importance,
+    source,
+    createdAt: number(raw.createdAt),
+  }
+}
+
+/** 缺省表示没有角色；存在时必须整表可读，任何一条坏了都不静默丢角色（会让声音悄悄变） */
+const voiceRoles = (value: unknown): VoiceRole[] | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+  const roles = list(value, voiceRole)
+  if (roles.length > MAX_ROLES) {
+    return invalid()
+  }
+  return roles
+}
+
 export const readNativeSession = (value: unknown): Session => {
   const item = record(value)
   const messages = list(item.messages, message)
@@ -768,8 +827,10 @@ export const readNativeSession = (value: unknown): Session => {
           fromTitle: string(inherited.fromTitle),
           contextSummary: optional(inherited.contextSummary, contextSummary),
           messages: list(inherited.messages, message),
+          ...(inherited.voiceRoles !== undefined && { voiceRoles: voiceRoles(inherited.voiceRoles) }),
         }
       : inherited,
     persona: persona ? { name: string(persona.name), prompt: string(persona.prompt) } : persona,
+    ...(item.voiceRoles !== undefined && { voiceRoles: voiceRoles(item.voiceRoles) }),
   }
 }

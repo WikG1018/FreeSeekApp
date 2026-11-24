@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 export const runDiagnosticRetentionCases = async (run) => {
   await run(
-    'Android does not present an unverified empty history when its native checkpoint is delayed',
+    'Android keeps the recovery prompt when its checkpoint says history existed but the native read is delayed',
     async (page) => {
       await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().initError)
       const state = await page.evaluate(() => {
@@ -10,12 +10,17 @@ export const runDiagnosticRetentionCases = async (run) => {
           window.__audit.store.useChatStore.getState()
         return { ready, historyMissing, historyMayStartFresh }
       })
-      assert.deepEqual(state, { ready: false, historyMissing: false, historyMayStartFresh: true })
+      // 本地检查点记着「有过对话」：这时候超时不能当成空库，仍然要给出恢复入口
+      assert.deepEqual(state, { ready: false, historyMissing: true, historyMayStartFresh: true })
       await page.getByRole('button', { name: '暂不恢复，进入首页', exact: true }).click()
       await page.getByTestId('chat-composer').waitFor()
     },
     (context) =>
       context.addInitScript(() => {
+        if (!sessionStorage.getItem('checkpoint-seeded')) {
+          sessionStorage.setItem('checkpoint-seeded', '1')
+          localStorage.setItem('freeseek:history-had-conversations', '1')
+        }
         window.CapacitorCustomPlatform = { name: 'android' }
         window.Capacitor = {
           PluginHeaders: [

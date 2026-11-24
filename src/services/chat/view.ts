@@ -8,6 +8,7 @@ import type {
 } from '../api/types.js'
 import type { AssistantMessage, ThinkingPart } from './types.js'
 import type { TaskStep } from '../tasks/tools.js'
+import { stripRoleMarkers } from '../speech/roleMarkers.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -169,18 +170,21 @@ const joinTextBlocks = (
   let text = ''
   for (const block of blocks) {
     text += block.text
+    // 角色配音的 ⟦…⟧ 标注在前台不显示：剥掉再渲染。流式时未闭合的那截也一起藏起来，
+    // 否则用户会看到半个标记。朗读走的是另一条路（解析器直接读原始文本）。
+    const body = stripRoleMarkers(block.text)
     const indexes = new Set<number>()
     for (const citation of block.citations ?? []) {
       indexes.add(registry.add(citation.url, citation.title, null).index)
     }
-    const body = indexes.size > 0 ? block.text.trimEnd() : block.text
-    markdown += body
+    const trimmed = indexes.size > 0 ? body.trimEnd() : body
+    markdown += trimmed
     for (const index of indexes) {
       markdown += `[citation:${index}]`
     }
-    markdown += block.text.slice(body.length)
+    markdown += body.slice(trimmed.length)
   }
-  return { markdown, text }
+  return { markdown, text: stripRoleMarkers(text) }
 }
 
 export const buildReplyView = (

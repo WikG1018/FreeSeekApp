@@ -4,10 +4,16 @@ import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
-import { newChat } from '../../services/chat/store.js'
+import { newChat, setSessionVoiceRoles } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
 import { useSettings } from '../../services/settings.js'
+import { useProviders } from '../../services/providers.js'
+import { sessionRoles } from '../../services/speech/roleTable.js'
+import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
+import { previewRoleVoice } from '../../services/speech/readAloud.js'
+import { showToast } from '../base/toastState.js'
+import { RoleVoiceButton } from './RoleVoice.js'
 import { conversationRounds, sessionArtifacts } from '../../services/tasks/sessionArtifacts.js'
 import { IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
@@ -52,6 +58,8 @@ export const SessionView = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const showUsage = useSettings((state) => state.showUsage)
+  const roleVoice = useSettings((state) => state.roleVoice)
+  const profiles = useProviders((state) => state.profiles)
   const agent = useSessionAgent(session.id)
   const controls = useAssistantLibrary(
     (state) => state.data.enabled || (!isWindowsDesktop() && state.data.agents.length > 0)
@@ -70,6 +78,39 @@ export const SessionView = ({
   }, [session.messages])
   const artifactsButton = artifacts.length > 0 && (
     <SessionArtifactsButton key={session.id} files={artifacts} sessionId={session.id} />
+  )
+  // 角色配音：开关开且本会话已有角色时才出现，和成果按钮同一槽位
+  const roles = sessionRoles(session)
+  const roleProfile = roleVoiceProfile(profiles, roleVoice)
+  const previewRole = (role: (typeof roles)[number]) => {
+    if (!roleProfile) {
+      showToast(t('settingsRoleVoiceNeedKey'))
+      return
+    }
+    previewRoleVoice(
+      {
+        role,
+        text: t('roleVoicePreviewText', { name: role.name }),
+        messageId: `preview-${role.id}`,
+        profile: roleProfile,
+        extrasShareVoice: roleVoice.extrasShareVoice,
+        extraVoice: roleVoice.extraVoice,
+      },
+      () => showToast(t('roleVoicePreviewFailed'))
+    )
+  }
+  const roleVoiceButton = roles.length > 0 && (
+    <RoleVoiceButton
+      key={session.id}
+      roles={roles}
+      onPreview={previewRole}
+      onSave={(next) =>
+        setSessionVoiceRoles(
+          session.id,
+          roles.map((role) => (role.id === next.id ? next : role))
+        )
+      }
+    />
   )
   const agentName = agent?.name ?? session.agent?.name
   const title =
@@ -137,7 +178,14 @@ export const SessionView = ({
           title={title}
           headerRef={headerRef}
           openAssistant={openAssistant}
-          artifactsButton={artifactsButton}
+          artifactsButton={
+            artifactsButton || roleVoiceButton ? (
+              <>
+                {artifactsButton}
+                {roleVoiceButton}
+              </>
+            ) : undefined
+          }
         />
       ) : (
         <div ref={headerRef} className={styles.header} data-testid="chat-header">
@@ -162,6 +210,7 @@ export const SessionView = ({
           </div>
           <div className={styles.headerActions}>
             {artifactsButton}
+            {roleVoiceButton}
             <button
               type="button"
               className={styles.headerAction}

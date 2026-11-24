@@ -28,11 +28,15 @@ import {
 import { thirdPartySearchKey, useSettings } from '../settings.js'
 import { UnsupportedImageError } from '../image.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
+import { requestPersistentStorage } from '../storagePersistence.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
 import { allSessionMessages, mapSessionMessages } from './sessionData.js'
 import { sumMessageUsage, usageEntries } from './usage.js'
 import { abortReason } from '../../utils/abort.js'
+import { mergeInheritedRoles } from '../speech/roleTable.js'
+import type { VoiceRole } from '../speech/roleMarkers.js'
+import { roleVoicePromptFor, withReplyRoles } from '../speech/roleVoiceBridge.js'
 import {
   clearAllDrafts,
   clearDraft,
@@ -299,6 +303,8 @@ let inheritSequence = 0
 /** 用于只在 activeId 变化时写入 localStorage */
 let lastActiveId: string | null = null
 let initTask: Promise<void> | undefined
+/** 数据库连接中断的监听只挂一次 */
+let terminatedListener = false
 const sessionLoads = new Map<string, { promise: Promise<void> }>()
 
 const touchSession = (id: string) => sessionAccess.set(id, ++accessSequence)
@@ -689,6 +695,29 @@ const settleInterrupted = (session: Session): Session => {
   }
 }
 
+/** 数据库连接被系统中断后重新同步列表：库里真的没了就不要再显示幽灵会话。 */
+const resyncSessions = async () => {
+  if (!get().ready || get().importingHistory) {
+    return
+  }
+  try {
+    const summaries = await db.loadSessionSummaries({ previousSelection: false, allowEmpty: true })
+    logEvent('storage', 'sessions.resynced', { sessionCount: summaries.length })
+    if (!summaries.length) {
+      // 读不到不等于没有：保留现有列表，导出会跳过读不到的条目。
+      logEvent('storage', 'sessions.resync-empty', {}, 'warn')
+      return
+    }
+    const activeId = get().activeId
+    set({
+      sessions: sortSessions(summaries),
+      activeId: summaries.some(({ id }) => id === activeId) ? activeId : null,
+    })
+  } catch (error) {
+    db.reportStorageError('resync conversations')(error)
+  }
+}
+
 export const initChat = (allowEmpty = false): Promise<void> => {
   if (get().ready || get().importingHistory) {
     return Promise.resolve()
@@ -707,6 +736,17 @@ export const initChat = (allowEmpty = false): Promise<void> => {
       })
       await db.recoverStaging().catch(db.reportStorageError('clean interrupted import'))
       logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
+      // 上一次开着时有会话、这次却是空的：多半个库被系统清理了（WebView 数据被回收）。
+      // 只记录不修数据——本地确实没有了，让诊断包里能直接看出来。
+      const known = Number(localStorage.getItem('freeseek:history-count') ?? '0')
+      if (!summaries.length && Number.isFinite(known) && known > 0) {
+        logEvent('storage', 'sessions.lost', { previousCount: known }, 'error')
+      }
+      try {
+        localStorage.setItem('freeseek:history-count', String(summaries.length))
+      } catch {
+        /* 存储不可用时跳过。 */
+      }
       if (epoch === historyEpoch) {
         // 仅在选择恢复上次对话时读取保存的会话 ID。
         const { startupPage } = useSettings.getState()
@@ -719,6 +759,15 @@ export const initChat = (allowEmpty = false): Promise<void> => {
         })
         lastActiveId = restore
         set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
+        // 只挂一次：系统中断数据库连接后把列表拉回真实状态，并顺手申请持久化存储，
+        // 让浏览器别在空间紧张时把本地记录清掉。
+        if (!terminatedListener) {
+          terminatedListener = true
+          window.addEventListener('freeseek:history-terminated', () => {
+            void resyncSessions()
+          })
+        }
+        void requestPersistentStorage()
         const missingModes = summaries.filter(({ mode }) => mode === undefined).map(({ id }) => id)
         if (missingModes.length) {
           void db
@@ -768,6 +817,25 @@ export const initChat = (allowEmpty = false): Promise<void> => {
   return initTask
 }
 
+/** 用户点「重试」：先做一次无损自愈（收敛激活指针、清掉挡路的标记、按实际记录重建列表索引），再重读。 */
+export const retryInitChat = async () => {
+  if (get().ready || get().importingHistory) {
+    return
+  }
+  await initTask?.catch(() => {})
+  try {
+    const repair = await db.repairHistoryStateAndIndex()
+    if (repair.state !== 'consistent') {
+      logEvent('storage', 'history.retry-repaired', { ...repair })
+    }
+  } catch (error) {
+    // 自愈失败不阻断重试：至少让用户拿到最新一次的真实错误，而不是原地打转。
+    logEvent('storage', 'history.retry-repair-failed', diagnosticError(error), 'warn')
+  }
+  initTask = undefined
+  await initChat()
+}
+
 /** 同一会话合并并发读取；切换只改变 activeId，旧请求不会把界面切回去。 */
 const ensureSessionLoaded = (id: string): Promise<void> => {
   if (getSession(id)) {
@@ -793,7 +861,24 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
         return
       }
       if (!stored) {
-        throw new Error(`Session ${id} is missing from local storage`)
+        // 列表里有、正文读不到（孤儿摘要）：这条会话已经不可能打开了。
+        // 剔掉这个条目，别把用户钉在「对话加载失败」上——重试一万次也不会变。
+        logEvent('storage', 'session.orphan-summary', { sessionId: id }, 'warn')
+        await db.deleteSession(id).catch(db.reportStorageError('remove unreadable session'))
+        if (epoch !== historyEpoch) {
+          return
+        }
+        set((state) => ({
+          sessions: state.sessions.filter((item) => item.id !== id),
+          sessionCache: Object.fromEntries(
+            Object.entries(state.sessionCache).filter(([key]) => key !== id)
+          ),
+          sessionLoadErrors: Object.fromEntries(
+            Object.entries(state.sessionLoadErrors).filter(([key]) => key !== id)
+          ),
+          activeId: state.activeId === id ? null : state.activeId,
+        }))
+        return
       }
       const settled = settleInterrupted(normalizeSession(stored))
       // 读取期间可能已在列表重命名，保留最新元数据，不能让旧读取覆盖它。
@@ -812,6 +897,21 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
       void reattachGoalIfNeeded(id)
     } catch (error) {
       if (epoch === historyEpoch && sessionLoads.get(id) === load) {
+        logEvent(
+          'storage',
+          'session.load-failed',
+          {
+            sessionId: id,
+            // 打包的正文解不开，和「记录不存在」是两回事：前者可以保留原样等导出，
+            // 后者只能剔掉摘要。分开记录，诊断包里才分得清。
+            unreadable:
+              error instanceof Error && error.message === 'Invalid stored conversation'
+                ? true
+                : undefined,
+            ...diagnosticError(error),
+          },
+          'error'
+        )
         set((state) => ({ sessionLoadErrors: { ...state.sessionLoadErrors, [id]: true } }))
         db.reportStorageError('read session')(error)
       }
@@ -1021,11 +1121,13 @@ export const startInheritSession = (id: string) => {
       return
     }
     const messages = [...(session.inherited?.messages ?? []), ...getVisibleMessages(session)]
+    const voiceRoles = mergeInheritedRoles(session)
     requestNewChat({
       fromId: summary.id,
       fromTitle: summary.title,
       messages,
       contextSummary: currentContextSummary(session),
+      ...(voiceRoles.length && { voiceRoles }),
     })
     logEvent('chat', 'session.inheritance-prepared', {
       sessionId: id,
@@ -1098,6 +1200,19 @@ export const setSessionPinned = async (id: string, pinned: boolean): Promise<boo
   logEvent('chat', 'session.pin-changed', { sessionId: id, pinned })
   persist(id)
   return true
+}
+
+/** 用户在角色面板里改过某个角色的声音：整表替换并落盘 */
+export const setSessionVoiceRoles = (id: string, voiceRoles: VoiceRole[]) => {
+  if (get().importingHistory || deletingSessions.has(id)) {
+    return
+  }
+  if (!getSession(id)) {
+    return
+  }
+  updateSession(id, (session) => ({ ...session, voiceRoles }))
+  persist(id)
+  logEvent('speech', 'roles.saved', { sessionId: id, total: voiceRoles.length })
 }
 
 export const renameSession = (id: string, title: string) => {
@@ -1363,6 +1478,8 @@ export const sendMessage = (targetSessionId: string | null, goal?: AgentGoalDraf
         ? { inherited: inherit, contextSummary: inherit.contextSummary }
         : null),
       ...(persona ? { persona } : null),
+      // 接续来的角色表直接成为新会话自己的：不依赖 inherited 是否保留，源会话删了也不受影响
+      ...(inherit?.voiceRoles?.length && { voiceRoles: inherit.voiceRoles.map((role) => ({ ...role, aliases: [...role.aliases] })) }),
       ...(reply.agent ? { agent: { id: reply.agent.id, name: reply.agent.name } } : {}),
       ...(get().draftMemoryPaused ? { memoryPaused: true } : {}),
     }
@@ -2372,8 +2489,7 @@ const compressRounds = async (
       after: estimateContextHistory(rounds, generated).tokens,
     }
     if (historyEstimate.after >= historyEstimate.before) {
-      updateSession(id, (session) => ({ ...session, compressionCheckpoint: undefined }))
-      persist(id)
+      // 断点是真实的进度：留着它，下次从这里接着压，不要把已经花掉的额度作废。
       throw new ApiError('protocol', { key: 'compressionFailedNoSavings' })
     }
     const summary = { ...generated, historyEstimate }
@@ -2406,6 +2522,30 @@ const compressRounds = async (
     throw error
   } finally {
     markCompressing(id)
+  }
+}
+
+/**
+ * 压缩按钮的前置评估：算清楚这次能压几轮、压完是否真的省空间。
+ * 对话太短时直接禁用并给提示，别让用户点了、等了、才收到「没省出空间」。
+ */
+export const compressionPreflight = (id: string) => {
+  const session = getSession(id)
+  if (!session) {
+    return { available: false, pendingRounds: 0, saves: false }
+  }
+  try {
+    const connection = activeConnection()
+    const rounds = contextRounds(getVisibleMessages(session), session.inherited)
+    const prior = applicableSummary(session.contextSummary, rounds)
+    const plan = planCompression(rounds, prior, connection)
+    const pendingRounds = Math.max(0, plan.end - plan.start)
+    const before = plan.historyEstimate?.before ?? 0
+    const after = plan.historyEstimate?.after ?? 0
+    return { available: pendingRounds > 0, pendingRounds, saves: after < before }
+  } catch {
+    // 还在渲染层调用：拿不到连接（没配 Key 等）时只禁用按钮，别让面板崩掉。
+    return { available: false, pendingRounds: 0, saves: false }
   }
 }
 
@@ -3180,7 +3320,9 @@ const streamReply = async (
         preparing = false
         const baseSystem =
           (initial.systemPrompt ??
-            replySystemPrompt(request.persona?.prompt, connection.kind === 'deepseek')) + taskPrompt
+            replySystemPrompt(request.persona?.prompt, connection.kind === 'deepseek')) +
+          taskPrompt +
+          roleVoicePromptFor(getSession(sessionId), initial.agent, useSettings.getState().locale)
         const windowTokens = contextLength(connection)
         const library = useAssistantLibrary.getState()
         const availableMemory =
@@ -4223,6 +4365,10 @@ const streamReply = async (
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
     updateReply(sessionId, reply)
+    // 回答结束后把首次出场的角色写回会话；要赶在 persist 之前，角色表才会一起存盘
+    updateSession(sessionId, (session) =>
+      withReplyRoles(session, reply, useSettings.getState().roleVoice)
+    )
     set((state) => ({
       streaming: Object.fromEntries(
         Object.entries(state.streaming).filter(([id]) => id !== sessionId)

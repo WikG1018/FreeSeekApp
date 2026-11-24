@@ -1,6 +1,6 @@
 {
   "name": "freeseek",
-  "version": "3.0.8",
+  "version": "3.1.4",
   "description": "FreeSeek 畅聊：自带 DeepSeek API Key 的安卓聊天客户端，无次数与额度限制。基于官方开源 chat-demo (MIT)。",
   "license": "MIT",
   "private": true,

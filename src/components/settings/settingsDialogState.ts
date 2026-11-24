@@ -13,6 +13,7 @@ export type SettingsPageId =
   | 'providerModels'
   | 'providerModel'
   | 'providerSearch'
+  | 'providerSpeech'
   | 'chat'
   | 'personas'
   | 'personaEdit'
@@ -62,7 +63,7 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   if (page === 'providers') {
     return 'account'
   }
-  if (page === 'providerCatalog' || page === 'providerModels' || page === 'providerSearch') {
+  if (page === 'providerCatalog' || page === 'providerModels' || page === 'providerSearch' || page === 'providerSpeech') {
     return 'providers'
   }
   if (page === 'providerAccess' || page === 'providerConnection') {

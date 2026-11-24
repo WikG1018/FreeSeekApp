@@ -1,5 +1,81 @@
 # Release notes
 
+## v3.1.4
+
+### Stability fixes
+- Fixed the cases where saved chats were not shown and retrying never helped: records sitting in the other storage bank, an index that no longer matches the conversation bodies, a native checkpoint read that times out, and a single unreadable conversation. Retry now repairs first without changing or deleting any conversation record, then reads again. A conversation that cannot be opened can be deleted on its own while the rest stay usable.
+- Fixed context compression failing behind compatible third-party endpoints: a summary that arrives without the standard end event is no longer treated as incomplete, and endpoints that reject thinking or reasoning parameters are retried once without them.
+- Custom models without a configured context window are no longer assumed to be 8192 tokens when compressing, which split the history too finely and capped the summary output at 1024. The default is now 32768.
+- Short conversations no longer make you wait only to learn that compression cannot save space: the button explains that there is too little to compress, and a compression that saves nothing no longer discards its finished progress.
+
+### Character voices
+- The voice list in the prompt is grouped by language, so Chinese-speaking characters are no longer given English voices (four of eight characters in a real ten-turn test).
+- Walk-on characters and the narrator no longer default to the same voice: walk-ons now default to a voice of their own.
+- Only the eight voices that exist in the app are offered, so the model cannot pick a voice the edit dialog cannot show.
+
+## v3.1.3
+
+### Stability fixes
+- Fixed the lead-voice setting doing nothing. It could be switched and saved but was never passed to the model: with "Preset" selected, a lead could still get a described voice and make every line wait for the whole synthesis. "Preset" now keeps every character on preset voices; "Described" has leads described. The setting applies to characters that appear from now on; existing ones are left alone.
+- "Aliases: none" from the model no longer creates an alias called "none".
+- A voice or nature the model adds to an existing character later is no longer dropped when its importance is unchanged and no alias was added.
+- The narrator and walk-on characters are never switched to a described voice.
+
+### Interface
+- Relaxed what counts as a lead: the character with the most lines in a scene. It used to require a character who runs through the whole work, so a two-person exchange had no lead at all and the "Described" setting never applied.
+- Narration-only stories are now tagged reliably. Text with nobody speaking used to count as "no tags", so a story told entirely by the narrator could skip the narrator's voice.
+
+## v3.1.2
+
+### Interface
+- The Character voices switch now appears once, in Chat preferences. The Speech synthesis page shows its state and jumps there, so two switches can no longer disagree.
+- The Speech synthesis page gains the lead-voice setting, which previously lived only in Chat preferences.
+- The prompt now carries a worked example and tighter rules, so the model reliably uses one tag format, always states importance, and picks voices from the preset list.
+
+### Stability fixes
+- Eleven dialogue shapes were tested against the real model (plain Q&A, code, one character, several characters, narration only, walk-on roles, one character with three moods, mixed narration and dialogue, English, eight-turn argument, relaying someone else's words). No tags leak into reply text in any of them.
+- The English interface no longer contains Chinese sample text.
+
+## v3.1.1
+
+### Stability fixes
+- Fixed read-aloud tags leaking into reply text. The prompt asked for one specific bracket pair, but the model writes other brackets or none at all, so tags stayed visible and no character was recognised. Tags are now detected by their structure, independent of brackets.
+- Fixed characters like the narrator getting no voice: the model often names a character without a full declaration, and those were skipped. They are now registered and read like any other character.
+- Fixed the same character being created twice with mismatched voices: the model uses short names (a given name instead of the full name), which are now resolved to the same role.
+- Fixed character importance never updating: a full declaration that arrives later now fills in the role it was guessed from.
+- Multi-segment playback no longer stutters between speakers: the next segment starts synthesizing while the current one plays.
+
+### Interface
+- Shows "Reading: <character>" while a character is being read.
+- The whole row in the character panel opens the editor, not just the small button.
+- The editor gains "have the model rewrite it" for the voice description.
+
+## v3.1.0
+
+### Interface
+- New "Character voices": with it on, each character in a reply is read in a different voice, like a radio play. The switch lives in Settings → Chat preferences; a mask button appears in the conversation header, and opening it shows every character in this work.
+- A character's voice and nature are fixed the first time it appears and kept from then on — chapter one hundred still sounds like the same Daiyu.
+- The tone of each line is performed by the model as the story goes: trembling when hurt, lifting when happy. What you edit in the panel is the voice itself (timbre, aliases, nature); the tone is deliberately not yours to set.
+- If a voice does not fit, open the panel and pick another; save and you hear it immediately.
+- A long novel does not need a voice for every walk-on: shopkeepers and passers-by share one voice by default, folded into a single row in the panel, and the merging can be turned off in settings.
+- Continuing a story into a new conversation carries the characters and their voices across, so nothing needs re-configuring.
+- With the feature off, nothing extra appears in the interface and no tags show in replies.
+
+### Added
+- Xiaomi MiMo-V2.5 TTS: nine preset voices plus one-line voice design. Preset voices stream as they synthesize; designed voices wait for the whole segment.
+- Settings → API services → Advanced custom configuration now has "Speech synthesis": follow the chat model and reuse the configured MiMo, or fill in a separate speech service endpoint and key (for TTS-only services, or to bill separately).
+
+### Other
+- The read-aloud button now reads a tagged reply segment by segment, one voice per character; untagged replies behave exactly as before.
+
+## v3.0.9
+
+### Stability fixes
+- Export no longer fails as a whole when a single conversation cannot be read: it skips those and exports the rest, with a note saying "Skipped N conversations". Previously one unreadable conversation blocked the entire backup.
+- The app now asks for persistent storage at startup, so the system is less likely to clear local records when space runs low.
+- If the database connection is terminated, the conversation list is re-synced instead of showing conversations that no longer exist.
+- If the app had conversations last time but finds none now, diagnostics record a "sessions.lost" event so it is clear whether the system cleared the data.
+
 ## v3.0.8
 
 ### Stability fixes

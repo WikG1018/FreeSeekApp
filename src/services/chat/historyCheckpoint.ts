@@ -43,12 +43,12 @@ export const recordHistoryCheckpoint = (present: boolean, sessionCount?: number)
   }
 }
 
-export const readPreviousHistory = async (): Promise<{
+/** 只读 localStorage 里的检查点：同步、不碰原生，用于每次启动做「数量骤降」对比。 */
+export const readLocalCheckpoint = (): {
   present: boolean
   sessionCount?: number
   verifiedAt?: number
-  timedOut?: boolean
-}> => {
+} => {
   let present = recorded === true
   let local: { sessionCount?: number; verifiedAt?: number } = {}
   try {
@@ -65,33 +65,58 @@ export const readPreviousHistory = async (): Promise<{
   } catch (error) {
     logEvent('storage', 'history.checkpoint-read-failed', diagnosticError(error), 'warn')
   }
+  return { present, ...local }
+}
+
+/** 只在原生桥读取时生效的超时：超时按「读不到」处理，不能当成「历史确实没了」。 */
+export const historyCheckpointTimeoutMs = { value: 4000 }
+
+/**
+ * 测试用接缝：在浏览器里模拟「原生桥很慢/挂住」的情形。
+ * 生产环境永远走 NativeDiagnostics.checkHistory()。
+ */
+export const historyCheckpointReader: {
+  read?: () => Promise<{ present: boolean; sessionCount?: number; verifiedAt?: number }>
+} = {}
+
+export const readPreviousHistory = async (): Promise<{
+  present: boolean
+  sessionCount?: number
+  verifiedAt?: number
+  timedOut?: boolean
+}> => {
+  const local = readLocalCheckpoint()
   if (native()) {
     let timer: ReturnType<typeof setTimeout> | undefined
     let timedOut = false
     try {
       const stored = await Promise.race([
-        pendingWrite.then(() => NativeDiagnostics.checkHistory()),
+        pendingWrite.then(() =>
+          historyCheckpointReader.read
+            ? historyCheckpointReader.read()
+            : NativeDiagnostics.checkHistory()
+        ),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             timedOut = true
             reject(new Error('History checkpoint read timed out'))
-          }, 4000)
+          }, historyCheckpointTimeoutMs.value)
         }),
       ])
       const nativeIsNewer =
         stored.sessionCount !== undefined && (stored.verifiedAt ?? 0) >= (local.verifiedAt ?? 0)
       return {
-        present: present || stored.present,
+        present: local.present || stored.present,
         ...(nativeIsNewer
           ? { sessionCount: stored.sessionCount, verifiedAt: stored.verifiedAt }
           : local),
       }
     } catch (error) {
       logEvent('storage', 'history.native-checkpoint-read-failed', diagnosticError(error), 'warn')
-      return { present, ...local, timedOut }
+      return { ...local, timedOut }
     } finally {
       clearTimeout(timer)
     }
   }
-  return { present, ...local }
+  return local
 }

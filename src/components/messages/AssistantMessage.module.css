@@ -112,6 +112,14 @@
   transition: opacity var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
+/* 角色配音朗读中：正在读谁。13px 三级文字，跟在操作按钮左侧 */
+.speakingRole {
+  margin-right: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 /* 触屏没有 hover：操作按钮常显，否则历史消息无法复制/朗读 */
 @media not all and (min-width: 768px) {
   .actions {

@@ -28,6 +28,7 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   providerModels: 'providerManageModels',
   providerModel: 'providerModelSettings',
   providerSearch: 'thirdPartySearchTitle',
+  providerSpeech: 'providerSpeechTitle',
   chat: 'settingsChatPreferences',
   personas: 'personaManagerTitle',
   personaEdit: 'settingsEditPersona',

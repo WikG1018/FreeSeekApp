@@ -1522,4 +1522,220 @@ export const runCompressionCases = async (run) => {
       })
     }
   )
+
+  await run(
+    'compression accepts a compatible stream that finishes with [DONE] and no finish_reason',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const model = 'compat-stream'
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: 'Compat',
+            model,
+            models: [model],
+            url: 'https://compat.example/v1',
+            stream: true,
+            maxOutputTokens: 512,
+          },
+          true
+        )
+        await a.seed([
+          f.session({
+            id: 'compat',
+            messages: [
+              f.user('u0', '旧记录'.repeat(3000)),
+              f.assistant('a0', '答案'),
+              ...Array.from({ length: 4 }, (_, i) => [
+                f.user('u' + (i + 1), 'recent-' + i),
+                f.assistant('a' + (i + 1), 'reply-' + i),
+              ]).flat(),
+            ],
+          }),
+        ])
+        const ordinary = window.fetch
+        let summaries = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).includes('compat.example/')) return ordinary(url, init)
+          const body = JSON.parse(init.body)
+          if (String(body.messages[0].content).includes('Summarize the conversation')) {
+            summaries += 1
+            // 兼容接口的常见写法：只有正文和 [DONE]，没有 finish_reason，也没有 message_stop
+            const sse =
+              'data: ' +
+              JSON.stringify({ choices: [{ delta: { content: 'Compact notes ' + summaries } }] }) +
+              '\n\ndata: [DONE]\n\n'
+            return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } })
+          }
+          return a.response('ok')
+        }
+        const summary = await a.store.compressSession('compat')
+        return { summaries, text: summary.text }
+      })
+      assert.equal(result.summaries, 1)
+      assert.equal(result.text, 'Compact notes 1', 'the summary is used instead of being rejected')
+    }
+  )
+
+  await run(
+    'a custom model without a configured window compresses a long history in one pass and is honest about short ones',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const model = 'no-window'
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: 'NoWindow',
+            model,
+            models: [model],
+            url: 'https://nowindow.example/v1',
+            stream: false,
+            maxOutputTokens: 512,
+          },
+          true
+        )
+        // 约 15000 字 ≈ 18000 估算 token：按旧的 8192 窗口要切三块，按新的 32768 一块就够
+        await a.seed([
+          f.session({
+            id: 'no-window-long',
+            messages: [
+              f.user('u0', '中'.repeat(15000)),
+              f.assistant('a0', '答案'),
+              ...Array.from({ length: 4 }, (_, i) => [
+                f.user('u' + (i + 1), 'recent-' + i),
+                f.assistant('a' + (i + 1), 'reply-' + i),
+              ]).flat(),
+            ],
+          }),
+          f.session({
+            id: 'no-window-short',
+            messages: [
+              f.user('s0', '很短的一句'),
+              f.assistant('s1', '好'),
+              f.user('s2', '再来一句'),
+              f.assistant('s3', '嗯'),
+            ],
+          }),
+        ])
+        const ordinary = window.fetch
+        let summaryRequests = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).includes('nowindow.example/')) return ordinary(url, init)
+          const body = JSON.parse(init.body)
+          if (String(body.messages[0].content).includes('Summarize the conversation')) {
+            summaryRequests += 1
+            return new Response(
+              JSON.stringify({
+                model,
+                choices: [{ message: { content: 'Compact notes' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 5, completion_tokens: 3 },
+              }),
+              { headers: { 'Content-Type': 'application/json' } }
+            )
+          }
+          return a.response('ok')
+        }
+        const longPreflight = a.store.compressionPreflight('no-window-long')
+        const long = await a.store.compressSession('no-window-long')
+        const summary = a.store.currentContextSummary(
+          a.store.useChatStore.getState().sessionCache['no-window-long']
+        )
+        const shortPreflight = a.store.compressionPreflight('no-window-short')
+        return {
+          summaryRequests,
+          covered: long.coveredRounds,
+          text: summary?.text,
+          shortPreflight,
+          longPreflight,
+        }
+      })
+      assert.equal(result.summaryRequests, 1, 'a 32k default window fits this history in one chunk')
+      assert.equal(result.covered, 1)
+      assert.equal(result.text, 'Compact notes')
+      assert.equal(result.shortPreflight.saves, false, 'a short history is reported as not worth compressing')
+      assert.equal(result.longPreflight.saves, true)
+    }
+  )
+
+  await run(
+    'compression retries without reasoning parameters when a proxy rejects them',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        const model = 'strict-proxy'
+        a.providers.saveProvider(
+          {
+            ...a.providers.emptyProfile(),
+            name: 'Strict',
+            model,
+            models: [model],
+            url: 'https://strict.example/v1',
+            stream: false,
+            maxOutputTokens: 512,
+            // 让这个模型带上 reasoning 控制（thinking: disabled），模拟认识/不认识该参数的代理
+            modelSettings: { [model]: { reasoningAdapter: 'deepseek' } },
+          },
+          true
+        )
+        await a.seed([
+          f.session({
+            id: 'strict',
+            messages: [
+              f.user('u0', '旧记录'.repeat(3000)),
+              f.assistant('a0', '答案'),
+              ...Array.from({ length: 4 }, (_, i) => [
+                f.user('u' + (i + 1), 'recent-' + i),
+                f.assistant('a' + (i + 1), 'reply-' + i),
+              ]).flat(),
+            ],
+          }),
+        ])
+        const ordinary = window.fetch
+        let rejected = 0,
+          accepted = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).includes('strict.example/')) return ordinary(url, init)
+          const body = JSON.parse(init.body)
+          if (!String(body.messages[0].content).includes('Summarize the conversation')) {
+            return a.response('ok')
+          }
+          if (
+            body.thinking ||
+            body.enable_thinking !== undefined ||
+            body.reasoning_effort !== undefined ||
+            body.reasoning !== undefined
+          ) {
+            rejected += 1
+            return new Response(
+              JSON.stringify({ error: { message: 'unknown parameter: thinking' } }),
+              { status: 400 }
+            )
+          }
+          accepted += 1
+          return new Response(
+            JSON.stringify({
+              model,
+              choices: [{ message: { content: 'Compact notes' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 5, completion_tokens: 3 },
+            }),
+            { headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+        const summary = await a.store.compressSession('strict')
+        const logs = (await a.diagnostics.readDiagnosticLogs()).events.some(
+          (event) => event.event === 'compression.reasoning-params-rejected'
+        )
+        return { rejected, accepted, text: summary.text, logs }
+      })
+      assert.equal(result.rejected, 1, 'the first request carries the reasoning controls')
+      assert.equal(result.accepted, 1, 'the retry drops them instead of failing')
+      assert.equal(result.text, 'Compact notes')
+      assert.equal(result.logs, true)
+    }
+  )
 }

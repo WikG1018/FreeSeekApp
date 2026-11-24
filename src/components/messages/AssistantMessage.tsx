@@ -13,7 +13,7 @@ import {
   retryContextReply,
   useChatStore,
 } from '../../services/chat/store.js'
-import { stopReadAloud } from '../../services/speech/readAloud.js'
+import { stopReadAloud, useReadAloud } from '../../services/speech/readAloud.js'
 import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { IconButton } from '../base/IconButton.js'
@@ -68,6 +68,10 @@ export const AssistantMessage = memo(function AssistantMessage({
   const sessionAgent = useChatStore((state) => state.sessionCache[sessionId]?.mode === 'agent')
   const agentMode = sessionAgent || Boolean(message.task)
   const view = useReplyView(message, streaming, agentMode)
+  // 角色配音朗读时显示「正在读：谁」，跟着播放进度变；不是这条在读就为空
+  const speakingRole = useReadAloud((state) =>
+    state.messageId === message.id ? state.speakingRole : null
+  )
   // 新回复（含重新生成）挂载时创建不足 800ms 播放一次入场动画
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
   const panelEntry = useSearchPanel((state) => state.entry)
@@ -288,14 +292,17 @@ export const AssistantMessage = memo(function AssistantMessage({
             </button>
           ) : null}
           <MessageUsage message={message} />
-          <div className={clsx(styles.actions, isLast && styles.alwaysShow)}>
+          <div
+            className={clsx(styles.actions, (isLast || speakingRole) && styles.alwaysShow)}
+          >
+            {speakingRole ? (
+              <span className={styles.speakingRole} role="status">
+                {t('roleVoiceNowReading', { name: speakingRole })}
+              </span>
+            ) : null}
             {copyText ? <CopyButton text={copyText} /> : null}
             {responseText && !refused ? (
-              <ReadAloudButton
-                messageId={message.id}
-                text={responseText}
-                allowed={!message.connection || message.connection.providerId === 'deepseek'}
-              />
+              <ReadAloudButton messageId={message.id} text={responseText} sessionId={sessionId} />
             ) : null}
             <IconButton
               icon={<IconRefreshOutline16 />}

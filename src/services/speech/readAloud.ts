@@ -2,15 +2,19 @@ import { create } from 'zustand'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { ApiError } from '../api/client.js'
 import { classifyApiError } from '../api/errors.js'
-import { synthesize, TTS_SAMPLE_RATE } from '../api/speech.js'
+import { synthesize, synthesizeMiMo, TTS_SAMPLE_RATE } from '../api/speech.js'
 import { useSettings } from '../settings.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
-import { abortableDelay } from '../../utils/abort.js'
+import { playTimeline, type TimelineSegment } from './timeline.js'
+import type { ProviderProfile } from '../providers.js'
+import { styleInstruction, effectiveVoice } from './roleTable.js'
+import type { MiMoPresetVoice, VoiceRole, VoiceSegment } from './roleMarkers.js'
 
 /**
  * 朗读：同一时间只读一条回复。
  * 请求 TTS 的裸 PCM 流，边收边用 AudioContext 按顺序排程播放，首帧到达即出声。
  * 状态：loading（已请求、未出声）→ playing → 结束回到 idle。
+ * 角色配音时一条回复拆成多段，各用各的音色，按顺序排进同一条时间轴。
  */
 export type ReadAloudStatus = 'idle' | 'loading' | 'playing'
 
@@ -18,14 +22,18 @@ type ReadAloudState = {
   /** 正在朗读的回复 id */
   messageId: string | null
   status: ReadAloudStatus
+  /** 角色配音：正在读的角色名，界面显示「正在读：林黛玉」 */
+  speakingRole: string | null
 }
 
-export const useReadAloud = create<ReadAloudState>(() => ({ messageId: null, status: 'idle' }))
+export const useReadAloud = create<ReadAloudState>(() => ({
+  messageId: null,
+  status: 'idle',
+  speakingRole: null,
+}))
 
-/** 首帧前多缓冲一点，减少网络抖动造成的断续 */
-const START_DELAY = 0.1
-/** 播放队列最多领先 5 秒；不将长篇合成音频全部展开进内存。 */
-const BUFFER_AHEAD_SECONDS = 5
+/** 段间停顿：让听感上「换人了」 */
+const ROLE_GAP_SECONDS = 0.22
 
 let current: { controller: AbortController; context: AudioContext } | null = null
 
@@ -35,7 +43,7 @@ const finish = (controller: AbortController, failed = false) => {
   }
   void current.context.close().catch(() => {})
   current = null
-  useReadAloud.setState({ messageId: null, status: 'idle' })
+  useReadAloud.setState({ messageId: null, status: 'idle', speakingRole: null })
   if (!failed) {
     logEvent('speech', 'playback.finished', { cancelled: controller.signal.aborted })
   }
@@ -48,16 +56,6 @@ export const stopReadAloud = () => {
     controller.abort()
     finish(controller)
   }
-}
-
-/** 16-bit 小端 PCM 转成 Float32；奇数字节留到下一段 */
-const toFloat32 = (bytes: Uint8Array) => {
-  const samples = new Float32Array(bytes.length >> 1)
-  const view = new DataView(bytes.buffer, bytes.byteOffset, samples.length * 2)
-  for (let i = 0; i < samples.length; i++) {
-    samples[i] = view.getInt16(i * 2, true) / 0x8000
-  }
-  return samples
 }
 
 export const describeReadAloudError = (error: unknown): TranslationMessage | string => {
@@ -80,6 +78,49 @@ export const describeReadAloudError = (error: unknown): TranslationMessage | str
   }
 }
 
+/** 建播放上下文并登记为当前朗读；失败返回 null */
+const begin = (messageId: string, onError: (error: unknown) => void) => {
+  const controller = new AbortController()
+  let context: AudioContext
+  try {
+    context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
+  } catch (error) {
+    logEvent('speech', 'playback.init-failed', diagnosticError(error), 'error')
+    onError(error)
+    return null
+  }
+  current = { controller, context }
+  useReadAloud.setState({ messageId, status: 'loading', speakingRole: null })
+  return { controller, context }
+}
+
+/** 统一的失败/结束处理 */
+const run = async (
+  controller: AbortController,
+  context: AudioContext,
+  segments: TimelineSegment[],
+  gapSeconds: number,
+  onError: (error: unknown) => void
+) => {
+  try {
+    await playTimeline(context, TTS_SAMPLE_RATE, segments, gapSeconds, controller.signal)
+    if (current?.controller === controller) {
+      finish(controller)
+    }
+  } catch (error) {
+    logEvent(
+      'speech',
+      'playback.failed',
+      diagnosticError(error),
+      controller.signal.aborted ? 'info' : 'error'
+    )
+    if (!controller.signal.aborted) {
+      finish(controller, true)
+      onError(error)
+    }
+  }
+}
+
 /**
  * 开始朗读一条回复的正文；同一条正在朗读时调用等于停止。
  * 必须在点击事件中同步调用：AudioContext 需要用户手势才能出声。
@@ -94,126 +135,135 @@ export const toggleReadAloud = (
   if (reading === messageId) {
     return
   }
-  const controller = new AbortController()
-  let context: AudioContext
-  try {
-    context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
-  } catch (error) {
-    logEvent('speech', 'playback.init-failed', diagnosticError(error), 'error')
-    onError(error)
+  const session = begin(messageId, onError)
+  if (!session) {
     return
   }
-  current = { controller, context }
-  useReadAloud.setState({ messageId, status: 'loading' })
   logEvent('speech', 'playback.requested')
   // 音色在开始朗读时读取，设置中切换后下一次朗读生效
   const { apiKey, ttsVoice } = useSettings.getState()
+  let announced = false
+  void run(session.controller, session.context, [
+    {
+      open: (signal) => synthesize(apiKey ?? '', text, ttsVoice, signal),
+      onStart: () => {
+        if (!announced) {
+          announced = true
+          useReadAloud.setState({ status: 'playing' })
+          logEvent('speech', 'playback.started')
+        }
+      },
+    },
+  ], 0, onError)
+}
 
-  void (async () => {
-    let nextTime = 0
-    let started = false
-    let pendingSources = 0
-    let streamEnded = false
-    let rest = new Uint8Array(0)
-    try {
-      if (context.state === 'suspended') {
-        await context.resume()
-      }
-      const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
-      const reader = stream.getReader()
-      const cancelReader = () => {
-        void reader.cancel().catch(() => {})
-      }
-      controller.signal.addEventListener('abort', cancelReader, { once: true })
-      if (controller.signal.aborted) {
-        cancelReader()
-      }
-      let watchdog: ReturnType<typeof setTimeout> | undefined
-      const resetWatchdog = () => {
-        clearTimeout(watchdog)
-        watchdog = setTimeout(() => {
-          logEvent('speech', 'playback.timeout', {}, 'error')
-          controller.abort()
-          finish(controller, true)
-          onError(new ApiError('network', 'TTS idle timeout'))
-        }, 120_000)
-      }
-      try {
-        resetWatchdog()
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (controller.signal.aborted) {
-            break
-          }
-          clearTimeout(watchdog)
-          if (done) {
-            break
-          }
-          const bytes = new Uint8Array(rest.length + value.length)
-          bytes.set(rest)
-          bytes.set(value, rest.length)
-          const samples = toFloat32(bytes)
-          rest = bytes.slice(samples.length * 2)
-          if (samples.length === 0) {
-            resetWatchdog()
-            continue
-          }
-          for (let offset = 0; offset < samples.length; offset += TTS_SAMPLE_RATE) {
-            while (nextTime - context.currentTime > BUFFER_AHEAD_SECONDS) {
-              if (context.state === 'suspended') {
-                throw new ApiError('network', 'Audio playback suspended')
-              }
-              await abortableDelay(100, controller.signal)
-            }
-            controller.signal.throwIfAborted()
-            const segment = samples.subarray(offset, offset + TTS_SAMPLE_RATE)
-            const buffer = context.createBuffer(1, segment.length, TTS_SAMPLE_RATE)
-            buffer.copyToChannel(segment, 0)
-            const source = context.createBufferSource()
-            pendingSources += 1
-            source.onended = () => {
-              source.disconnect()
-              source.buffer = null
-              pendingSources -= 1
-              if (streamEnded && pendingSources === 0) {
-                finish(controller)
-              }
-            }
-            source.buffer = buffer
-            source.connect(context.destination)
-            // 网络慢于播放时从当前时间续上，不补播过去的时间
-            nextTime = Math.max(nextTime, context.currentTime + (started ? 0 : START_DELAY))
-            source.start(nextTime)
-            nextTime += buffer.duration
-            started = true
-            if (useReadAloud.getState().status === 'loading') {
-              useReadAloud.setState({ status: 'playing' })
-              logEvent('speech', 'playback.started')
-            }
-          }
-          resetWatchdog()
+export type RoleReadAloudInput = {
+  messageId: string
+  segments: VoiceSegment[]
+  roles: ReadonlyArray<VoiceRole>
+  profile: ProviderProfile
+  extrasShareVoice: boolean
+  extraVoice: MiMoPresetVoice
+}
+
+/**
+ * 角色配音朗读：一条回复按角色拆成多段，各用各的音色，按顺序排进同一条时间轴。
+ * 必须在点击事件中同步调用：AudioContext 需要用户手势才能出声。
+ */
+export const toggleRoleReadAloud = (
+  input: RoleReadAloudInput,
+  onError: (error: unknown) => void
+) => {
+  const { messageId } = input
+  const reading = useReadAloud.getState().messageId
+  stopReadAloud()
+  if (reading === messageId) {
+    return
+  }
+  const byId = new Map(input.roles.map((role) => [role.id, role]))
+  const session = begin(messageId, onError)
+  if (!session) {
+    return
+  }
+  logEvent('speech', 'playback.requested', { roles: true, segments: input.segments.length })
+  let announced = false
+  const timeline: TimelineSegment[] = input.segments.map((piece) => {
+    const role = byId.get(piece.roleId)
+    const voice = role
+      ? effectiveVoice(role, { extrasShareVoice: input.extrasShareVoice, extraVoice: input.extraVoice })
+      : { preset: input.extraVoice }
+    const style = styleInstruction(role, piece.tone)
+    return {
+      open: (signal) =>
+        synthesizeMiMo({
+          profile: input.profile,
+          text: piece.text,
+          ...(voice.preset && { preset: voice.preset }),
+          ...(voice.description && { description: voice.description }),
+          style,
+          signal,
+        }),
+      onStart: () => {
+        if (!announced) {
+          announced = true
+          logEvent('speech', 'playback.started')
         }
-        streamEnded = true
-        if (pendingSources === 0) {
-          finish(controller)
-        }
-      } finally {
-        clearTimeout(watchdog)
-        controller.signal.removeEventListener('abort', cancelReader)
-        await reader.cancel().catch(() => {})
-        reader.releaseLock()
-      }
-    } catch (error) {
-      logEvent(
-        'speech',
-        'playback.failed',
-        diagnosticError(error),
-        controller.signal.aborted ? 'info' : 'error'
-      )
-      if (!controller.signal.aborted) {
-        finish(controller, true)
-        onError(error)
-      }
+        useReadAloud.setState({ status: 'playing', speakingRole: role?.name ?? null })
+      },
     }
-  })()
+  })
+  void run(session.controller, session.context, timeline, ROLE_GAP_SECONDS, onError)
+}
+
+/**
+ * 试听一个角色的声音：用固定示例读一句。
+ * 编辑弹窗点「保存并试听」和面板里点 ▶ 都走这里。
+ */
+export const previewRoleVoice = (
+  input: {
+    role: VoiceRole
+    text: string
+    messageId: string
+    profile: ProviderProfile
+    extrasShareVoice: boolean
+    extraVoice: MiMoPresetVoice
+  },
+  onError: (error: unknown) => void
+) => {
+  const { role } = input
+  const reading = useReadAloud.getState().messageId
+  stopReadAloud()
+  if (reading === input.messageId) {
+    return
+  }
+  const voice = effectiveVoice(role, {
+    extrasShareVoice: input.extrasShareVoice,
+    extraVoice: input.extraVoice,
+  })
+  const session = begin(input.messageId, onError)
+  if (!session) {
+    return
+  }
+  logEvent('speech', 'playback.preview', { preset: voice.preset, described: Boolean(voice.description) })
+  void run(
+    session.controller,
+    session.context,
+    [
+      {
+        open: (signal) =>
+          synthesizeMiMo({
+            profile: input.profile,
+            text: input.text,
+            ...(voice.preset && { preset: voice.preset }),
+            ...(voice.description && { description: voice.description }),
+            // 试听不演示语气，只演示声音本身
+            style: role.nature,
+            signal,
+          }),
+        onStart: () => useReadAloud.setState({ status: 'playing', speakingRole: role.name }),
+      },
+    ],
+    0,
+    onError
+  )
 }

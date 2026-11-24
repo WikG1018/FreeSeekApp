@@ -37,6 +37,16 @@ const MAX_SEGMENT_WINDOW = 64 * 1024
 const MAX_SEGMENT_MS = 180_000
 const MAX_READ_RETRIES = 2
 const MAX_PASS_MS = 300_000
+/** 自定义模型没配上下文窗口时的保守假设。8192 太小：摘要分块会过度切分、输出额度被压到 1024。 */
+const DEFAULT_CUSTOM_WINDOW = 32 * 1024
+
+/**
+ * 判断这次失败值不值得「剥掉 reasoning 参数再试一次」。
+ * 不靠错误文案：中转站普遍把它包成通用的 HTTP 400，服务端原文未必透传。
+ * 带过 reasoning 控制的请求收到 400/422，就按「不认这个参数」处理，重试一次代价很小。
+ */
+const rejectsReasoningParams = (error: unknown) =>
+  error instanceof ApiError && (error.status === 400 || error.status === 422)
 export const contextRounds = (history: Message[], inherited?: { messages: Message[] } | null) => [
   ...getContextRounds(inherited?.messages ?? []),
   ...getContextRounds(history),
@@ -201,7 +211,7 @@ export const planRecoveryCompression = (
 ): SummaryPlan => {
   const start = summary?.coveredRounds ?? 0
   const limit = Number(rejection?.contextLimitTokens) || contextLength(connection)
-  const window = limit ?? 8192
+  const window = limit ?? DEFAULT_CUSTOM_WINDOW
   const { sizes, tokens } = estimateContextHistory(rounds, summary)
   const overflow = limit ? Math.max(0, (Number(rejection?.requestedTokens) || limit) - limit) : 0
   const padding = Math.min(24_576, Math.max(512, Math.floor(window / 32)))
@@ -255,7 +265,7 @@ export const planCompression = (
   reportedLimit?: number
 ) => {
   const limit = reportedLimit || contextLength(connection)
-  const budget = limit ?? 8192
+  const budget = limit ?? DEFAULT_CUSTOM_WINDOW
   const fixed =
     contextReplyReserve(connection) +
     estimatedSystemTokens(current?.system ?? '') +
@@ -360,7 +370,12 @@ async function summarizeChunk(
     timedOut = true
     controller.abort()
   }, timeoutMs)
-  const events =
+  const reasoning =
+    connection.kind === 'custom'
+      ? disabledReasoning(customReasoning(connection.profile, connection.model))
+      : undefined
+  /** 中转站/代理常见不认 reasoning / thinking 参数，直接 400。剥掉参数重试一次，别宣告无法压缩。 */
+  const startStream = (withReasoning: boolean) =>
     connection.kind === 'custom'
       ? streamProviderMessage(
           connection.profile,
@@ -368,7 +383,7 @@ async function summarizeChunk(
           [{ role: 'user', content: [{ type: 'text', text: input }] }],
           system,
           controller.signal,
-          disabledReasoning(customReasoning(connection.profile, connection.model)),
+          withReasoning ? reasoning : undefined,
           { requestId, sessionId, maxOutputTokens: maxTokens }
         )
       : streamMessage(
@@ -377,8 +392,10 @@ async function summarizeChunk(
             model: connection.model,
             system,
             max_tokens: maxTokens,
-            thinking: { type: 'disabled' },
+            // 安全审核和普通对话保持一致：产品上所有请求都走扩展模式。
             safety_check: { level: 'high' },
+            // 摘要不需要推理，关掉能省输出额度。
+            thinking: { type: 'disabled' },
             messages: [{ role: 'user', content: input }],
           },
           controller.signal,
@@ -391,26 +408,46 @@ async function summarizeChunk(
     model = connection.model
   const createdAt = Date.now()
   try {
-    for await (const event of events) {
-      signal.throwIfAborted()
-      if (event.type === 'message_start') {
-        usage = event.message.usage
-        model = event.message.model || model
-      } else if (event.type === 'content_block_start' && event.content_block.type === 'text') {
-        summary += event.content_block.text
-      } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        summary += event.delta.text
-      } else if (event.type === 'message_delta') {
-        reason = event.delta.stop_reason
-        usage = event.usage ?? usage
-      } else if (event.type === 'message_stop') {
-        complete = true
-      }
-      if (summary.length > MAX_SUMMARY_CHARS) {
-        throw new ApiError('protocol', {
-          key: 'compressionFailedOutput',
-          params: { summarySizeLimit: 1 },
-        })
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        for await (const event of startStream(attempt === 0)) {
+          signal.throwIfAborted()
+          if (event.type === 'message_start') {
+            usage = event.message.usage
+            model = event.message.model || model
+          } else if (event.type === 'content_block_start' && event.content_block.type === 'text') {
+            summary += event.content_block.text
+          } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            summary += event.delta.text
+          } else if (event.type === 'message_delta') {
+            reason = event.delta.stop_reason
+            usage = event.usage ?? usage
+          } else if (event.type === 'message_stop') {
+            complete = true
+          }
+          if (summary.length > MAX_SUMMARY_CHARS) {
+            throw new ApiError('protocol', {
+              key: 'compressionFailedOutput',
+              params: { summarySizeLimit: 1 },
+            })
+          }
+        }
+        break
+      } catch (error) {
+        if (attempt === 0 && reasoning && rejectsReasoningParams(error)) {
+          logEvent(
+            'chat',
+            'compression.reasoning-params-rejected',
+            { requestId, ...diagnosticError(error) },
+            'warn'
+          )
+          summary = ''
+          reason = undefined
+          complete = false
+          usage = undefined
+          continue
+        }
+        throw error
       }
     }
     signal.throwIfAborted()
@@ -420,11 +457,18 @@ async function summarizeChunk(
     if (reason === 'max_tokens') {
       throw new ApiError('protocol', { key: 'compressionFailedOutput' })
     }
-    if (!complete || reason !== 'end_turn') {
-      throw new ApiError('interrupted', { key: 'compressionFailedIncomplete' })
-    }
     if (!summary.trim()) {
       throw new ApiError('protocol', { key: 'compressionFailedEmpty' })
+    }
+    // 第三方兼容接口不一定给标准的结束事件（有的只给 stop、有的什么也不给就正常关了连接）。
+    // 正文和摘要都已收到、传输也没有报错，就按成功处理；记一条告警，诊断包里能看出是哪一种。
+    if (!complete || reason !== 'end_turn') {
+      logEvent(
+        'chat',
+        'compression.non-standard-finish',
+        { requestId, summaryComplete: complete, stopReason: reason, summaryChars: summary.length },
+        'warn'
+      )
     }
     return summary.trim()
   } catch (error) {
@@ -540,7 +584,7 @@ export async function generateContextSummary(
     signature = prefixSignature(rounds, end)
     scope = scopeFor(end, signature)
   }
-  let windowTokens = Math.min(plan.limit ?? 8192, MAX_SEGMENT_WINDOW)
+  let windowTokens = Math.min(plan.limit ?? DEFAULT_CUSTOM_WINDOW, MAX_SEGMENT_WINDOW)
   let outputTokens = Math.min(2048, summaryOutputBudget(connection, windowTokens))
   let segmentLimit = MAX_SEGMENT_CHARS
   let offset = 0
@@ -647,6 +691,8 @@ export async function generateContextSummary(
               windowTokens = Math.min(windowTokens, reported)
               outputTokens = Math.min(outputTokens, summaryOutputBudget(connection, windowTokens))
             }
+            // 没报限制时不额外折 windowTokens：超长本来就会走下面的分块减半重试，
+            // 而折窗口会把输出额度上限一起压小，让 max_tokens 的自适应失效。
           } else {
             throw error
           }

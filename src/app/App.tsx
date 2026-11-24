@@ -40,6 +40,8 @@ import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport
 import {
   bindChatPersistence,
   initChat,
+  removeSession,
+  retryInitChat,
   returnToWelcome,
   selectSession,
   useChatStore,
@@ -347,19 +349,30 @@ export const App = () => {
                       : t('sessionLoading')}
                   </span>
                   {(!ready ? initError : sessionLoadError) ? (
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      onClick={() => {
-                        if (!ready) {
-                          void initChat()
-                        } else if (activeId !== null) {
-                          selectSession(activeId)
-                        }
-                      }}
-                    >
-                      {t('retry')}
-                    </Button>
+                    <>
+                      <Button
+                        variant="outlined"
+                        size="m"
+                        onClick={() => {
+                          if (!ready) {
+                            void retryInitChat()
+                          } else if (activeId !== null) {
+                            selectSession(activeId)
+                          }
+                        }}
+                      >
+                        {t('retry')}
+                      </Button>
+                      {ready && activeId !== null && sessionLoadError ? (
+                        <Button
+                          variant="outlined"
+                          size="m"
+                          onClick={() => void removeSession(activeId)}
+                        >
+                          {t('sessionLoadDelete')}
+                        </Button>
+                      ) : null}
+                    </>
                   ) : null}
                   {!ready && initError && (
                     <Button variant="outlined" size="m" onClick={() => openSettings('data')}>

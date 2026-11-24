@@ -344,6 +344,10 @@ button.row:active:not(:disabled),
 .error {
   color: var(--dsw-alias-state-error-primary);
 }
+/* 备份部分成功：不是错误，但要让用户知道漏了东西 */
+.warnNote {
+  color: var(--dsw-static-amber-600);
+}
 .rowNote {
   padding: 0 16px 12px;
 }

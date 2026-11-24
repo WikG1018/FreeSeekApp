@@ -10,6 +10,30 @@ export const IconPinOutline16 = () => (
   </svg>
 )
 
+/** 角色配音：一对戏曲面具（喜剧／悲剧），与 IconShareOutline16 同规格 */
+export const IconMasksOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M4 4.5c2.4.6 4.4.6 6.8 0v5.2c0 2.6-1.5 4.6-3.4 4.6S4 12.3 4 9.7V4.5Z"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M5.6 8.4h.01M9.2 8.4h.01" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    <path d="M5.9 11c1 .9 2 .9 3 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    <path
+      d="M13.2 8.4c2.4.6 4.4.6 6.8 0v5.2c0 2.6-1.5 4.6-3.4 4.6s-3.4-2-3.4-4.6V8.4Z"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M14.8 12.3h.01M18.4 12.3h.01" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    <path d="M15.1 16c1-.9 2-.9 3 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+)
+
 export const IconBookOutline16 = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path

@@ -5,6 +5,7 @@ import type { AgentProfile, AgentRef } from '../assistants/library.js'
 import type { MemoryUse } from '../assistants/memory.js'
 import type { TaskProgress } from '../tasks/tools.js'
 import type { ConnectionRef } from '../providers.js'
+import type { VoiceRole } from '../speech/roleMarkers.js'
 import type { ReasoningChoice } from '../reasoning.js'
 import type {
   ChatModel,
@@ -138,6 +139,8 @@ export type InheritedContext = {
   fromTitle: string
   contextSummary?: ContextSummary
   messages: Message[]
+  /** 接续时带上源会话的角色配音表快照，新会话以此为初始角色表 */
+  voiceRoles?: VoiceRole[]
 }
 
 export type ContextSummary = {
@@ -191,6 +194,8 @@ export type Session = {
   inherited?: InheritedContext | null
   /** 创建会话时的人设快照：prompt 覆盖默认 system 提示词；null 表示默认助手身份。 */
   persona?: { name: string; prompt: string } | null
+  /** 角色配音表：回答里首次出场的角色及其音色；缺省表示本会话没有角色。 */
+  voiceRoles?: VoiceRole[]
   agent?: AgentRef | null
   memoryPaused?: boolean
 }

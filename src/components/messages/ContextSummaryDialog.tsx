@@ -11,6 +11,7 @@ import {
 } from '../../services/chat/contextCompression.js'
 import {
   compressSession,
+  compressionPreflight,
   editContextSummary,
   stopReply,
   useChatStore,
@@ -44,7 +45,10 @@ function SummaryEditor({ session }: { session: Session }) {
   const busy = useChatStore((s) => Boolean(s.streaming[session.id]) || s.importingHistory)
   const compressing = useChatStore((s) => s.compressing[session.id])
   const text = edit && edit.original === summary ? edit.text : (summary?.text ?? '')
-  const canCompress = rounds.length > (summary?.coveredRounds ?? 0)
+  // 先算清楚这次能压几轮、压完是否真的省空间：太短的对话不该让用户点了才知道没意义。
+  const preflight = useMemo(() => compressionPreflight(session.id), [session])
+  const canCompress = rounds.length > (summary?.coveredRounds ?? 0) && preflight.available
+  const noSavings = canCompress && !preflight.saves
   const editing = edit !== null && edit.original === summary
   const generate = async () => {
     setError(null)
@@ -92,7 +96,7 @@ function SummaryEditor({ session }: { session: Session }) {
               {canCompress && (
                 <Button
                   variant={summary ? 'outlined' : 'primary'}
-                  disabled={busy}
+                  disabled={busy || noSavings}
                   onClick={() => void generate()}
                 >
                   {t(summary ? 'compressionMore' : 'compressionGenerate')}
@@ -151,7 +155,9 @@ function SummaryEditor({ session }: { session: Session }) {
             ? t(error.key, error.params)
             : !summary && !canCompress
               ? t('compressionUnavailable')
-              : null}
+              : noSavings
+                ? t('compressionShortHistory')
+                : null}
       </div>
     </Modal>
   )

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { diagnosticError, logEvent, registerLogSecret } from './diagnostics/log.js'
 import type { TtsVoice } from './api/speech.js'
+import { DEFAULT_EXTRA_VOICE, DEFAULT_NARRATOR_VOICE, MIMO_PRESET_VOICES, type MiMoPresetVoice } from './speech/roleMarkers.js'
 import { defaultAgentTools, type AgentTool, type AgentToolPolicy } from './tasks/policy.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -15,6 +16,29 @@ export type ThirdPartySearch = {
   enabled: boolean
   keySource: 'official' | 'separate'
   apiKey: string
+}
+
+/**
+ * 角色配音：回答里不同角色用不同声音朗读。
+ * 存成一个 JSON 对象，避免散成六个 key。
+ * 主角默认音色：preset（预置，出声快）或 description（描述，更贴合但每段要等整段合成完）。
+ */
+export type RoleVoiceSettings = {
+  enabled: boolean
+  /**
+   * 朗读用哪套语音服务：
+   * - follow：跟随所选供应商里的小米 MiMo 配置（同一个 Key 能聊天也能朗读）
+   * - custom：单独填写语音服务地址与 Key，用于只提供 TTS 的服务或想分开计费
+   */
+  source: 'follow' | 'custom'
+  /** source=follow 时可选指定某个已配置的供应商；null 表示自动找 MiMo */
+  providerId: string | null
+  /** source=custom 时的语音服务 */
+  custom: { url: string; apiKey: string; model: string }
+  leadVoice: 'preset' | 'description'
+  narratorVoice: MiMoPresetVoice
+  extraVoice: MiMoPresetVoice
+  extrasShareVoice: boolean
 }
 
 /** 本机设置，存 localStorage：API Key、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
@@ -44,6 +68,7 @@ type Settings = {
   thirdPartySearch: ThirdPartySearch
   thirdPartySearchOn: boolean
   proSearchOn: boolean
+  roleVoice: RoleVoiceSettings
 }
 
 const KEYS = {
@@ -69,6 +94,7 @@ const KEYS = {
   thirdPartySearch: 'freeseek:third-party-search',
   thirdPartySearchOn: 'freeseek:third-party-search-on',
   proSearchOn: 'freeseek:pro-search-on',
+  roleVoice: 'freeseek:role-voice',
 } as const
 
 const read = (key: string) => {
@@ -152,6 +178,48 @@ const initialThirdPartySearch = (): ThirdPartySearch => {
   return { enabled: false, keySource: 'official', apiKey: '' }
 }
 
+const DEFAULT_ROLE_VOICE: RoleVoiceSettings = {
+  enabled: false,
+  source: 'follow',
+  providerId: null,
+  custom: { url: '', apiKey: '', model: '' },
+  leadVoice: 'preset',
+  narratorVoice: DEFAULT_NARRATOR_VOICE,
+  extraVoice: DEFAULT_EXTRA_VOICE,
+  extrasShareVoice: true,
+}
+const isPresetVoice = (value: unknown): value is MiMoPresetVoice =>
+  typeof value === 'string' && MIMO_PRESET_VOICES.some((voice) => voice.id === value)
+const initialRoleVoice = (): RoleVoiceSettings => {
+  try {
+    const value = JSON.parse(read(KEYS.roleVoice) ?? 'null') as Partial<RoleVoiceSettings> | null
+    if (value && typeof value === 'object') {
+      const custom = (value.custom ?? {}) as Partial<RoleVoiceSettings['custom']>
+      const apiKey = typeof custom.apiKey === 'string' ? custom.apiKey : ''
+      if (apiKey) {
+        registerLogSecret(apiKey)
+      }
+      return {
+        enabled: value.enabled === true,
+        source: value.source === 'custom' ? 'custom' : 'follow',
+        providerId: typeof value.providerId === 'string' && value.providerId ? value.providerId : null,
+        custom: {
+          url: typeof custom.url === 'string' ? custom.url : '',
+          apiKey,
+          model: typeof custom.model === 'string' ? custom.model : '',
+        },
+        leadVoice: value.leadVoice === 'description' ? 'description' : 'preset',
+        narratorVoice: isPresetVoice(value.narratorVoice) ? value.narratorVoice : DEFAULT_ROLE_VOICE.narratorVoice,
+        extraVoice: isPresetVoice(value.extraVoice) ? value.extraVoice : DEFAULT_ROLE_VOICE.extraVoice,
+        extrasShareVoice: value.extrasShareVoice !== false,
+      }
+    }
+  } catch {
+    /* Invalid local preferences are treated as defaults. */
+  }
+  return DEFAULT_ROLE_VOICE
+}
+
 /** iPhone / iPad（含 iPadOS 的桌面 UA）。中文字体包约 14 MB，这些设备默认不下载。 */
 const isAppleMobile = (): boolean => {
   try {
@@ -210,6 +278,7 @@ export const useSettings = create<Settings>(() => ({
   thirdPartySearch: initialThirdPartySearch(),
   thirdPartySearchOn: read(KEYS.thirdPartySearchOn) === 'true',
   proSearchOn: read(KEYS.proSearchOn) === 'true',
+  roleVoice: initialRoleVoice(),
   useSystemFont: initialUseSystemFont(),
   fontScale: (() => {
     const value = Number(read(KEYS.fontScale))
@@ -338,6 +407,16 @@ export const setThirdPartySearchOn = (thirdPartySearchOn: boolean) => {
 export const setProSearchOn = (proSearchOn: boolean) => {
   write(KEYS.proSearchOn, String(proSearchOn))
   useSettings.setState({ proSearchOn })
+}
+
+/** 改角色配音的一项设置；返回是否写入成功 */
+export const setRoleVoice = (patch: Partial<RoleVoiceSettings>): boolean => {
+  const roleVoice = { ...useSettings.getState().roleVoice, ...patch }
+  if (!write(KEYS.roleVoice, JSON.stringify(roleVoice))) {
+    return false
+  }
+  useSettings.setState({ roleVoice })
+  return true
 }
 
 export const setFontScale = (fontScale: number) => {

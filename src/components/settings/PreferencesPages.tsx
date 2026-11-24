@@ -18,9 +18,14 @@ import {
   setThemePreference,
   setTtsVoice,
   setUseSystemFont,
+  setRoleVoice,
   useSettings,
   type ThemePreference,
 } from '../../services/settings.js'
+import { MIMO_PRESET_VOICES } from '../../services/speech/roleMarkers.js'
+import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
+import { useProviders } from '../../services/providers.js'
+import { openSettings } from './settingsDialogState.js'
 import { IconCheckOutline16 } from '../base/icons.js'
 import { Select } from '../base/Select.js'
 import { Row, Section, SwitchRow } from './SettingsRows.js'
@@ -295,6 +300,94 @@ export const ChatPreferencesPage = () => {
           />
         </div>
       </Section>
+      <RoleVoiceSettings />
     </>
+  )
+}
+
+/** 角色配音：开关 + 朗读模型 + 主角/旁白/路人音色。只在开关打开时展开下面几项。 */
+const RoleVoiceSettings = () => {
+  const t = useTranslate()
+  const name = useId()
+  const roleVoice = useSettings((s) => s.roleVoice)
+  const profiles = useProviders((s) => s.profiles)
+  const [saveFailed, setSaveFailed] = useState(false)
+  const save = (patch: Parameters<typeof setRoleVoice>[0]) => setSaveFailed(!setRoleVoice(patch))
+  const profile = roleVoiceProfile(profiles, roleVoice)
+  // 菜单里显示「名字 · 听感」，行内右值只显示名字（shortLabel），保持单行
+  const voiceOptions = MIMO_PRESET_VOICES.map((voice) => ({
+    value: voice.id,
+    label: t('settingsRoleVoicePresetOption', { name: voice.id, kind: voice.label }),
+    shortLabel: voice.id,
+  }))
+  return (
+    <Section title={t('settingsRoleVoice')}>
+      <SwitchRow
+        label={t('settingsRoleVoice')}
+        checked={roleVoice.enabled}
+        change={(enabled) => save({ enabled })}
+      />
+      <p className={styles.paragraph}>{t('settingsRoleVoiceHint')}</p>
+      {saveFailed && (
+        <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
+          {t('settingsRoleVoiceSaveFailed')}
+        </p>
+      )}
+      {roleVoice.enabled && (
+        <>
+          <p className={styles.paragraph}>
+            {t('settingsRoleVoiceModel')}：{profile ? t('settingsRoleVoiceModelReuse') : t('settingsRoleVoiceModelMissing')}
+          </p>
+          {!profile && (
+            <p className={styles.paragraph}>
+              {t('settingsRoleVoiceNeedKey')}{' '}
+              <button type="button" className={styles.textButton} onClick={() => openSettings('providers')}>
+                {t('settingsRoleVoiceModelGo')}
+              </button>
+            </p>
+          )}
+          <p className={styles.paragraph}>{t('settingsRoleVoiceLead')}</p>
+          <div role="radiogroup" aria-label={t('settingsRoleVoiceLead')}>
+            <Choice
+              name={`${name}-lead`}
+              label={t('settingsRoleVoiceLeadPreset')}
+              checked={roleVoice.leadVoice === 'preset'}
+              change={() => save({ leadVoice: 'preset' })}
+            />
+            <Choice
+              name={`${name}-lead`}
+              label={t('settingsRoleVoiceLeadDescription')}
+              checked={roleVoice.leadVoice === 'description'}
+              change={() => save({ leadVoice: 'description' })}
+            />
+          </div>
+          {roleVoice.leadVoice === 'description' && (
+            <p className={styles.paragraph}>{t('settingsRoleVoiceLeadHint')}</p>
+          )}
+          <Select
+            ariaLabel={t('settingsRoleVoiceNarrator')}
+            settingRow="value"
+            compactMenu
+            value={roleVoice.narratorVoice}
+            options={voiceOptions}
+            onChange={(value) => save({ narratorVoice: value as typeof roleVoice.narratorVoice })}
+          />
+          <Select
+            ariaLabel={t('settingsRoleVoiceExtra')}
+            settingRow="value"
+            compactMenu
+            value={roleVoice.extraVoice}
+            options={voiceOptions}
+            onChange={(value) => save({ extraVoice: value as typeof roleVoice.extraVoice })}
+          />
+          <SwitchRow
+            label={t('settingsRoleVoiceShare')}
+            checked={roleVoice.extrasShareVoice}
+            change={(extrasShareVoice) => save({ extrasShareVoice })}
+          />
+          <p className={styles.paragraph}>{t('settingsRoleVoiceShareHint')}</p>
+        </>
+      )}
+    </Section>
   )
 }

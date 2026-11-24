@@ -12,7 +12,7 @@ import {
   type DiskOriginal,
 } from './historyFiles.js'
 import { BackupError } from './history/errors.js'
-import { readPreviousHistory, recordHistoryCheckpoint } from './historyCheckpoint.js'
+import { readLocalCheckpoint, readPreviousHistory, recordHistoryCheckpoint } from './historyCheckpoint.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
 const DB_VERSION = 15
@@ -169,6 +169,13 @@ const openHistory = () => {
         dbPromise = null
       }
       logEvent('storage', 'history.connection-terminated', {}, 'warn')
+      // 连接被系统中断后，内存里的会话列表可能已经与库对不上（库被清空时会只剩幽灵条目）。
+      // 通知上层重新读一次列表，别让用户对着已经不存在的会话点来点去。
+      try {
+        window.dispatchEvent(new Event('freeseek:history-terminated'))
+      } catch {
+        /* 非浏览器环境忽略。 */
+      }
     },
     upgrade(db, oldVersion, _newVersion, tx) {
       previousVersion = oldVersion
@@ -301,7 +308,7 @@ const confirmHistorySelection = (view: WritableHistoryView, usingStaging = view.
     view.state.put(usingStaging, COMMITTED_HISTORY_KEY),
   ])
 
-const inspectHistoryIndex = async (view: HistoryView) => {
+const inspectHistoryIndex = async (view: HistoryView, { tolerant = false } = {}) => {
   const [stored, indexCount, ids, activeCount, alternateCount, confirmedEmpty, interruptedImport] =
     await Promise.all([
       view.summaries.getAll(),
@@ -326,7 +333,10 @@ const inspectHistoryIndex = async (view: HistoryView) => {
       },
       'error'
     )
-    throw new Error('Incomplete conversation list read')
+    // 容错模式：把计数不一致交给上层重建，而不是把整个历史列表挡在报错页。
+    if (!tolerant) {
+      throw new Error('Incomplete conversation list read')
+    }
   }
   const matches = (keys: string[]) => {
     const known = new Set(keys)
@@ -358,8 +368,17 @@ export const loadSessionSummaries = async ({
   SessionSummary[]
 > => {
   const view = await historyTransaction('readonly')
-  const index = await inspectHistoryIndex(view)
+  let index: Awaited<ReturnType<typeof inspectHistoryIndex>> | undefined
+  try {
+    index = await inspectHistoryIndex(view)
+  } catch (error) {
+    // 摘要表与主表的计数在同一只读事务里对不上：索引坏了，不阻断启动，直接走重建。
+    logEvent('storage', 'history.index-repair-needed', diagnosticError(error), 'warn')
+  }
   await view.tx.done
+  if (!index) {
+    return reconstructHistoryIndex()
+  }
   logEvent('storage', 'history.index-checked', {
     sessionCount: index.activeCount,
     indexCount: index.indexCount,
@@ -371,6 +390,23 @@ export const loadSessionSummaries = async ({
     selectionConflict: view.selectionConflict,
     interruptedImport: index.interruptedImport,
   })
+  // 数量骤降要留证据：下面的守卫只处理「变成 0」，而库被系统清空后往往只剩被回写的一两条，
+  // 从 205 掉到 1 反而一声不响地通过（线上真的发生过）。这里只记录，不动任何数据。
+  const previousLocal = readLocalCheckpoint()
+  const currentTotal = index.activeCount + index.alternateCount
+  if (
+    previousLocal.sessionCount !== undefined &&
+    previousLocal.sessionCount > currentTotal &&
+    previousLocal.sessionCount - currentTotal >= 5
+  ) {
+    const dropped = previousLocal.sessionCount - currentTotal
+    logEvent(
+      'storage',
+      'history.shrank',
+      { previousCount: previousLocal.sessionCount, sessionCount: currentTotal, dropped },
+      dropped >= 10 ? 'error' : 'warn'
+    )
+  }
   if (forReplacement && index.activeCount === 0 && index.alternateCount === 0) {
     // A verified replacement can proceed even if only old index entries survived. That
     // index is left intact until the replacement has been validated and is ready to commit.
@@ -401,9 +437,10 @@ export const loadSessionSummaries = async ({
     const previous = await readPreviousHistory()
     const expected = previousSelection || previous.present
     const canStartFresh = index.indexCount === 0 && index.alternateCount === 0
-    // A late native reply is not evidence that an existing installation is empty.
+    // 原生桥读检查点超时 ≠ 历史确实没了：本地库既然读得出来，就采信本地、记一条告警继续启动。
+    // 抛错会把用户挡在「既没有列表、也没有恢复入口」的报错页，而重试又会 100% 命中同一分支。
     if (!expected && previous.timedOut && !allowEmpty) {
-      throw new HistoryMissingError(canStartFresh, false)
+      logEvent('storage', 'history.checkpoint-read-timed-out', { canStartFresh }, 'warn')
     }
     // An incomplete import can also leave data in the other store. Only switch stores when
     // every session ID matches the committed index, and keep ambiguous records intact.
@@ -432,10 +469,18 @@ export const loadSessionSummaries = async ({
     return index.stored.map(toSessionSummary)
   }
 
+  return reconstructHistoryIndex(index.indexCount)
+}
+
+/**
+ * 按实际记录重建会话列表：读到坏的索引、或索引与实体对不上时走这里。
+ * 能在两个库之间切就切；只有确实一条记录都没有时才报 HistoryMissingError。
+ */
+const reconstructHistoryIndex = async (previousCount = 0): Promise<SessionSummary[]> => {
   const history = await historyTransaction('readwrite')
   const rebuilt: SessionSummary[] = []
   try {
-    const latest = await inspectHistoryIndex(history)
+    const latest = await inspectHistoryIndex(history, { tolerant: true })
     if (latest.current) {
       if (latest.activeCount > 0 && !history.selectionConfirmed) {
         await confirmHistorySelection(history)
@@ -490,12 +535,108 @@ export const loadSessionSummaries = async ({
     'storage',
     'history.index-rebuilt',
     {
-      previousCount: index.indexCount,
+      previousCount,
       restoredCount: rebuilt.length,
     },
     'warn'
   )
   return rebuilt
+}
+
+export type HistoryRepair = {
+  activeCount: number
+  alternateCount: number
+  indexCount: number
+  /** 修复后激活库里的记录数 */
+  sessionCount: number
+  switched: boolean
+  /** one-store：只有一个库有记录；conflict：两个都有；both-empty：都没有；consistent：本来不需要修 */
+  state: 'one-store' | 'conflict' | 'both-empty' | 'consistent'
+}
+
+/**
+ * 启动失败后的无损自愈。只做三件事，不删任何会话记录：
+ *   1. 把激活指针收敛到一个有记录的库；两个库都有记录时选记录更多的一侧（并列保持当前选择）；
+ *   2. 清掉会挡住启动的 confirmedEmpty / incompleteStaging 标记；
+ *   3. 按该库的实际记录全量重建 sessionSummaries。
+ * 没被选中的那个库保持原样留在暂存位置——导出和后续修复仍然读得到。
+ */
+export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
+  const view = await historyTransaction('readwrite')
+  try {
+    const index = await inspectHistoryIndex(view, { tolerant: true })
+    const bothEmpty = index.activeCount === 0 && index.alternateCount === 0
+    const switched = index.alternateCount > index.activeCount
+    const target = switched ? !view.useStagingStores : view.useStagingStores
+    const source = switched ? view.stagingSessions : view.sessions
+    const sessionCount = switched ? index.alternateCount : index.activeCount
+    const consistent =
+      !switched &&
+      index.current &&
+      index.indexCount === index.activeCount &&
+      view.selectionConfirmed
+    if (consistent) {
+      await view.tx.done
+      return {
+        activeCount: index.activeCount,
+        alternateCount: index.alternateCount,
+        indexCount: index.indexCount,
+        sessionCount,
+        switched: false,
+        state: 'consistent',
+      }
+    }
+    await confirmHistorySelection(view, target)
+    // 修复后激活库就是选中的那个：暂存标记必须清掉，否则启动后的 recoverStaging 会把
+    // 另一个库里的记录当「中断的导入」清掉——那才是真正的数据丢失。
+    await view.state.delete(INCOMPLETE_STAGING_KEY)
+    if (sessionCount > 0) {
+      await view.state.delete(CONFIRMED_EMPTY_KEY)
+    }
+    await view.summaries.clear()
+    const rebuilt: SessionSummary[] = []
+    for (let cursor = await source.openCursor(); cursor; cursor = await cursor.continue()) {
+      const summary = recordSummary(cursor.value)
+      await view.summaries.put(summary)
+      rebuilt.push(toSessionSummary(summary))
+    }
+    if (rebuilt.length !== sessionCount || (await view.summaries.count()) !== sessionCount) {
+      throw new Error('Incomplete history repair')
+    }
+    await view.tx.done
+    const state: HistoryRepair['state'] = bothEmpty
+      ? 'both-empty'
+      : index.activeCount > 0 && index.alternateCount > 0
+        ? 'conflict'
+        : 'one-store'
+    if (!bothEmpty) {
+      recordHistoryCheckpoint(rebuilt.length > 0, rebuilt.length)
+    }
+    logEvent(
+      'storage',
+      'history.repaired',
+      {
+        state,
+        sessionCount: rebuilt.length,
+        activeCount: index.activeCount,
+        alternateCount: index.alternateCount,
+        indexCount: index.indexCount,
+        switched,
+      },
+      bothEmpty ? 'warn' : 'info'
+    )
+    return {
+      activeCount: index.activeCount,
+      alternateCount: index.alternateCount,
+      indexCount: index.indexCount,
+      sessionCount: rebuilt.length,
+      switched,
+      state,
+    }
+  } catch (error) {
+    abortTransaction(view.tx)
+    throw error
+  }
 }
 
 /** Repair old list metadata in small batches after history has opened. */
