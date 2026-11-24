@@ -1,48 +1,41 @@
-/*
- * FreeSeek 网页 App（PWA）的离线外壳。
- * 只在网页端注册：Android/Windows 原生壳由 src/index.html 拦截，不会注册本文件。
- *
- * 策略：
- * - 外壳（index.html、manifest、启动图标）安装时预缓存，弱网也能起得来；
- * - 静态产物（static/ 下的 js、css、字体、图片、wasm）缓存优先、后台更新；
- * - 导航请求联网优先，断网时回落到缓存的外壳；
- * - web-version.json 永不缓存，页面内的更新检查必须拿到最新版本；
- * - 带 Range 的请求（PDF 分片阅读）不接管，避免返回整份内容破坏断点读取。
- */
-const CACHE = 'freeseek-shell-v1'
-const SHELL = ['./', './manifest.webmanifest', './startup-mark.png', './icons/icon-192.png']
-const NETWORK_ONLY = /\/web-version\.json$/
-const STATIC_ASSET = /\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|wasm|mjs|json)$/
+/* Offline shell for the web app. Each deployment path has its own cache. */
+const BUILD = '__FREESEEK_WEB_BUILD__'
+const STARTUP_FILES = /* FreeSeek startup assets */ []
+const scope = new URL(self.registration.scope)
+const prefix = 'freeseek-shell-v2:' + scope.href + '|'
+const cacheName = prefix + BUILD
+const shell = scope.href
+const icons = ['./manifest.webmanifest', './startup-mark.png', './icons/icon-192.png']
+const optional = new Set(icons.map((path) => new URL(path, scope).pathname))
+const assetPath = scope.pathname + 'static/'
+const staticAsset = /\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|wasm|mjs|json)$/
 
-/** 只缓存完整的同源响应；206 分片、跨域 opaque 一律不碰。 */
-const cachePut = async (request, response) => {
-  if (!response || response.status !== 200 || response.type !== 'basic') {
-    return
-  }
-  try {
-    const cache = await caches.open(CACHE)
-    await cache.put(request, response)
-  } catch (error) {
-    // 配额不足等情况不影响页面本身
-  }
-}
+const stagedRequest = (path) =>
+  new Request(new URL(path, scope), { cache: 'reload', credentials: 'omit' })
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      const cache = await caches.open(CACHE)
-      // 单个文件失败（例如首访时刚好断网）不阻断安装
-      await Promise.all(SHELL.map((url) => cache.add(url).catch(() => undefined)))
+      const cache = await caches.open(cacheName)
+      // Leave the previous worker active if a deployment is still missing a startup file.
+      await cache.addAll(['./', ...STARTUP_FILES].map(stagedRequest))
+      await Promise.all(icons.map((path) => cache.add(stagedRequest(path)).catch(() => undefined)))
       await self.skipWaiting()
     })()
   )
 })
 
+const previousCaches = async () =>
+  (await caches.keys().catch(() => [])).filter(
+    (name) => name !== cacheName && name.startsWith(prefix)
+  )
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys()
-      await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))
+      // Keep the last build's hashed assets for tabs that are still running its code.
+      const outdated = (await previousCaches()).slice(0, -1)
+      await Promise.all(outdated.map((name) => caches.delete(name)))
       await self.clients.claim()
     })()
   )
@@ -50,60 +43,90 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') {
-    self.skipWaiting()
+    event.waitUntil(self.skipWaiting())
   }
 })
 
+const cacheable = (response) =>
+  response.status === 200 &&
+  response.type === 'basic' &&
+  !response.redirected &&
+  !/\b(?:no-store|private)\b/i.test(response.headers.get('cache-control') || '')
+
+const save = async (request, response) => {
+  try {
+    await (await caches.open(cacheName)).put(request, response)
+  } catch {
+    // Quota or private browsing restrictions should leave the network response usable.
+  }
+}
+
+const lookup = (request, name = cacheName) =>
+  caches
+    .open(name)
+    .then((cache) => cache.match(request))
+    .catch(() => undefined)
+
+const network = async (request) => {
+  const response = await fetch(request)
+  return {
+    response,
+    saved: cacheable(response) ? save(request, response.clone()) : undefined,
+  }
+}
+
+const navigate = async (request) => {
+  try {
+    const response = await fetch(request)
+    // The offline HTML only changes when its matching scripts were staged at install.
+    return { response: response.status < 500 ? response : (await lookup(shell)) || response }
+  } catch {
+    return { response: (await lookup(shell)) || Response.error() }
+  }
+}
+
+const loadAsset = async (request) => {
+  const cached = await lookup(request)
+  if (cached) {
+    return { response: cached }
+  }
+  // Current requests can still reference an immutable chunk from the preceding build.
+  if (/\.[a-f0-9]{8}\.[^./]+$/i.test(new URL(request.url).pathname)) {
+    const previous = (await previousCaches()).slice(-1)[0]
+    if (previous) {
+      const old = await lookup(request, previous)
+      if (old) {
+        return { response: old }
+      }
+    }
+  }
+  return network(request).catch(() => ({ response: Response.error() }))
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request
-  if (request.method !== 'GET') {
+  if (
+    request.method !== 'GET' ||
+    request.headers.has('range') ||
+    request.headers.has('authorization')
+  ) {
     return
   }
-
-  let url
-  try {
-    url = new URL(request.url)
-  } catch (error) {
+  const url = new URL(request.url)
+  if (url.origin !== scope.origin || !url.pathname.startsWith(scope.pathname)) {
     return
   }
-  // 模型接口等跨域请求直接交给浏览器，避免缓存干扰流式响应
-  if (url.origin !== self.location.origin) {
+  const navigation = request.mode === 'navigate'
+  const isShell = url.pathname === scope.pathname || url.pathname === scope.pathname + 'index.html'
+  const asset =
+    optional.has(url.pathname) ||
+    (url.pathname.startsWith(assetPath) && staticAsset.test(url.pathname))
+  if (
+    navigation ? !isShell : !asset || request.cache === 'no-store' || request.cache === 'reload'
+  ) {
     return
   }
-  if (NETWORK_ONLY.test(url.pathname)) {
-    return
-  }
-  if (request.headers.has('range')) {
-    return
-  }
-
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          cachePut(request, response.clone())
-          return response
-        })
-        .catch(async () => {
-          const cached = (await caches.match(request)) || (await caches.match('./'))
-          return cached || Response.error()
-        })
-    )
-    return
-  }
-
-  if (STATIC_ASSET.test(url.pathname)) {
-    event.respondWith(
-      (async () => {
-        const cached = await caches.match(request)
-        const network = fetch(request)
-          .then((response) => {
-            cachePut(request, response.clone())
-            return response
-          })
-          .catch(() => cached)
-        return cached || (await network) || Response.error()
-      })()
-    )
-  }
+  const result = navigation ? navigate(request) : loadAsset(request)
+  event.respondWith(result.then(({ response }) => response))
+  event.waitUntil(result.then(({ saved }) => saved).catch(() => undefined))
 })

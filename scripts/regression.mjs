@@ -290,6 +290,7 @@ try {
         }
         a.personas.removePersona(personaId)
         a.usage.setPricing(a.usage.DEFAULT_PRICING)
+        await a.backup.clearHistory()
         await a.backup.importHistory(file)
         const restored = await a.db.loadSession(session.id)
         return {

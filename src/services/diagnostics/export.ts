@@ -15,6 +15,7 @@ import {
   LOG_LIMIT,
 } from './log.js'
 import { getStorageSummary } from '../chat/db.js'
+import { readLocalCheckpoint } from '../chat/historyCheckpoint.js'
 import { useChatStore } from '../chat/store.js'
 import { useSettings } from '../settings.js'
 import { useUploads } from '../attachments.js'
@@ -103,6 +104,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     settings = useSettings.getState()
   registerLogSecret(settings.apiKey)
   registerLogSecret(settings.thirdPartySearch.apiKey)
+  registerLogSecret(settings.roleVoice.custom.apiKey)
   const providers = useProviders.getState()
   providers.profiles.forEach((profile) => {
     registerLogSecret(profile.apiKey)
@@ -187,6 +189,11 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       fontScale: settings.fontScale,
       useSystemFont: settings.useSystemFont,
       showUsage: settings.showUsage,
+      roleVoiceEnabled: settings.roleVoice.enabled,
+      roleVoiceSource: settings.roleVoice.source,
+      roleVoiceCustomConfigured: Boolean(
+        settings.roleVoice.custom.url && settings.roleVoice.custom.apiKey
+      ),
       showModelSwitcher: settings.showModelSwitcher,
       composerEnter: settings.composerEnter,
       showReasoningPicker: settings.showReasoningPicker,
@@ -214,6 +221,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     state: {
       ready: state.ready,
       initError: state.initError,
+      historyUpgradeBlocked: state.historyUpgradeBlocked,
       historyMissing: state.historyMissing,
       importing: state.importingHistory,
       sessionCount: state.sessions.length,
@@ -241,6 +249,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       lastCheckedAt: update.lastCheckedAt,
     },
     storage: storage.value ?? unavailable,
+    localHistoryCheckpoint: readLocalCheckpoint(),
     historyCheckpoint: nativeLog.value?.historyCheckpoint,
     browserStorage: browserStorage.value ?? unavailable,
     native: native.value?.environment ?? unavailable,

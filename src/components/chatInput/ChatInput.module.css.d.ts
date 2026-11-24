@@ -17,6 +17,13 @@ declare const styles: {
   readonly textarea: string
   readonly mirror: string
   readonly textareaHidden: string
+  readonly voiceInline: string
+  readonly voiceState: string
+  readonly voiceClock: string
+  readonly voiceWave: string
+  readonly voiceDiscard: string
+  readonly voiceFeedback: string
+  readonly voiceRecovery: string
   readonly sendButton: string
   readonly attachments: string
   readonly attachment: string

@@ -12,7 +12,7 @@ import type {
   Session,
   UserMessage,
 } from '../types.js'
-import { fail } from './errors.js'
+import { BackupError, fail } from './errors.js'
 import type { ChatMessage, FileEntry, Fragment, SessionFile } from './format.js'
 import { sessionFilesDir } from './paths.js'
 
@@ -20,6 +20,15 @@ export type LocalSession = {
   session: Session
   /** 本会话目录下应存在的图片：ZIP 条目名 → 文件 ID */
   images: Map<string, string>
+  recoveredSelection: boolean
+}
+
+export class BranchImportError extends BackupError {
+  constructor(
+    readonly reason: 'duplicateId' | 'invalidRoot' | 'missingParent' | 'sameRole' | 'cycle'
+  ) {
+    super('backupInvalidBranches')
+  }
 }
 
 const time = (value: string) => Date.parse(value)
@@ -239,47 +248,74 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
   }
 }
 
-/**
- * 按 id 排序还原消息树：父消息的 id 必须更小、角色交替、根为提问。
- * current_message_id 到根的路径为当前分支；其余节点默认选中 id 最大的子消息。
- */
-const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId'> => {
+/** 根据父节点引用还原消息树。编号只用于分支排序和选择默认版本。 */
+const buildTree = (file: SessionFile) => {
   const sorted = file.messages.toSorted((a, b) => a.id - b.id)
   const byId = new Map<number, Message>()
   const messages = sorted.map((message) => {
     const { id, parent_id } = message
-    const parent = parent_id === null ? undefined : byId.get(parent_id)
-    if (
-      byId.has(id) ||
-      (parent_id === null ? message.role !== 'USER' : !parent) ||
-      (parent && parent.role === (message.role === 'USER' ? 'user' : 'assistant'))
-    ) {
-      fail('backupInvalidBranches')
+    if (byId.has(id)) {
+      throw new BranchImportError('duplicateId')
     }
     const local = message.role === 'USER' ? toUser(message) : toAssistant(message)
-    local.parentId = parent ? parent.id : null
-    if (parent) {
-      parent.selectedChildId = local.id
-    }
+    local.parentId = parent_id === null ? null : String(parent_id)
     byId.set(id, local)
     return local
   })
   if (messages.length === 0) {
-    return { messages, rootMessageId: null }
+    return { messages, rootMessageId: null, recoveredSelection: false }
   }
-  let current = byId.get(file.current_message_id) ?? fail('backupInvalidBranches')
-  // 当前消息就是用户停留的位置，后面即使还有消息也不继续展开。
-  current.selectedChildId = undefined
-  while (current.parentId) {
-    const parent = byId.get(Number(current.parentId)) ?? fail('backupInvalidBranches')
-    parent.selectedChildId = current.id
-    current = parent
+
+  const parentOf = (message: Message) =>
+    message.parentId == null ? undefined : byId.get(Number(message.parentId))
+  for (const message of messages) {
+    const parent = parentOf(message)
+    if (!parent) {
+      if (message.parentId !== null) {
+        throw new BranchImportError('missingParent')
+      }
+      if (message.role !== 'user') {
+        throw new BranchImportError('invalidRoot')
+      }
+      continue
+    }
+    if (parent.role === message.role) {
+      throw new BranchImportError('sameRole')
+    }
+    parent.selectedChildId = message.id
   }
-  return { messages, rootMessageId: current.id }
+
+  // 每节点只沿父引用检查一次，避免超长分支递归过深，也检查未选中的分支。
+  const checkedFrom = new Map<Message, Message>()
+  for (const start of messages) {
+    let message: Message | undefined = start
+    while (message && !checkedFrom.has(message)) {
+      checkedFrom.set(message, start)
+      message = parentOf(message)
+    }
+    if (message && checkedFrom.get(message) === start) {
+      throw new BranchImportError('cycle')
+    }
+  }
+
+  const selected = file.current_message_id === null ? undefined : byId.get(file.current_message_id)
+  // 停留位置失效时选择编号最大的叶节点；只改变打开位置，保留所有分支。
+  const active = selected ?? messages.findLast((message) => message.selectedChildId === undefined)
+  if (!active) {
+    throw new BranchImportError('cycle')
+  }
+  active.selectedChildId = undefined
+  let root = active
+  for (let parent = parentOf(root); parent; parent = parentOf(root)) {
+    parent.selectedChildId = root.id
+    root = parent
+  }
+  return { messages, rootMessageId: root.id, recoveredSelection: !selected }
 }
 
 /** 转换单个会话，并列出本会话目录下需要从 ZIP 读取的图片。 */
 export const toLocalSession = (file: SessionFile): LocalSession => {
+  const { messages, rootMessageId, recoveredSelection } = buildTree(file)
   const session: Session = {
     id: file.id,
     // 空标题按「新对话」显示，导出时还原为 null。
@@ -287,7 +323,8 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
     pinned: file.pinned,
     createdAt: time(file.inserted_at),
     updatedAt: time(file.updated_at),
-    ...buildTree(file),
+    messages,
+    rootMessageId,
   }
   const images = new Map<string, string>()
   for (const message of file.messages) {
@@ -315,5 +352,5 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
       }
     }
   }
-  return { session, images }
+  return { session, images, recoveredSelection }
 }

@@ -13,10 +13,12 @@ import {
 } from './historyFiles.js'
 import { BackupError } from './history/errors.js'
 import { readLocalCheckpoint, readPreviousHistory, recordHistoryCheckpoint } from './historyCheckpoint.js'
+import { createId } from '../../utils/id.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
 const DB_VERSION = 15
 const BLOB_SESSION_THRESHOLD = 32 * 1024 * 1024
+const UPGRADE_BLOCKED_TIMEOUT_MS = 2_000
 
 /** 文件原件按附件的本地 id 存储，所有引用同一 id 的消息共用一份；用于缩略图、打开查看，以及没有 serverId 时补传。 */
 export type StoredFile = {
@@ -26,7 +28,11 @@ export type StoredFile = {
 type ArchivedFile = StoredFile | { id: string; disk: DiskOriginal }
 
 /** 文件引用留在摘要中，删除会话时通过索引判断原件是否仍被引用。 */
-type StoredSessionSummary = SessionSummary & { fileIds: string[]; goalRunIds?: string[] }
+type StoredSessionSummary = SessionSummary & {
+  fileIds: string[]
+  goalRunIds?: string[]
+  revision?: string
+}
 
 // Large conversations can exceed WebView's single IndexedDB value limit. Store their text in a
 // Blob with the list metadata alongside it, so copying and renaming don't deserialize the text.
@@ -59,6 +65,7 @@ const ACTIVE_HISTORY_KEY = 'useStagingStores'
 const COMMITTED_HISTORY_KEY = 'committedUseStagingStores'
 const CONFIRMED_EMPTY_KEY = 'confirmedEmpty'
 const INCOMPLETE_STAGING_KEY = 'incompleteStaging'
+const INCOMPLETE_FILE_REFERENCES_KEY = 'incompleteFileReferences'
 
 export class HistoryMissingError extends Error {
   constructor(
@@ -66,6 +73,13 @@ export class HistoryMissingError extends Error {
     readonly previousHistoryKnown = true
   ) {
     super('Previously saved conversations could not be found')
+  }
+}
+
+export class HistoryUpgradeBlockedError extends Error {
+  constructor() {
+    super('An older window is blocking the history upgrade')
+    this.name = 'HistoryUpgradeBlockedError'
   }
 }
 
@@ -112,8 +126,57 @@ const sessionRecord = (session: Session, summary?: StoredSessionSummary): Stored
 const recordSummary = (value: StoredSession) =>
   isPacked(value) ? value.summary : storedSummary(value)
 
+const validSummary = (value: StoredSessionSummary | undefined) =>
+  value &&
+  typeof value.id === 'string' &&
+  typeof value.title === 'string' &&
+  Number.isFinite(value.createdAt) &&
+  Number.isFinite(value.updatedAt) &&
+  Array.isArray(value.fileIds) &&
+  value.fileIds.every((id) => typeof id === 'string')
+
+const recoverSummary = (
+  id: string,
+  value: StoredSession,
+  previous: StoredSessionSummary | undefined
+): { summary: StoredSessionSummary; incomplete: boolean } => {
+  try {
+    const summary = recordSummary(value)
+    if (validSummary(summary) && summary.id === id) {
+      return {
+        summary: previous?.revision ? { ...summary, revision: previous.revision } : summary,
+        incomplete: false,
+      }
+    }
+  } catch {
+    // Retain a partial row so a malformed conversation cannot block other chats.
+  }
+  const header = isPacked(value) ? value.summary : value
+  const prior = validSummary(previous) ? previous : undefined
+  const title = typeof header?.title === 'string' ? header.title : (prior?.title ?? '')
+  const createdAt = Number.isFinite(header?.createdAt) ? header.createdAt : (prior?.createdAt ?? 0)
+  return {
+    summary: {
+      id,
+      title,
+      createdAt,
+      updatedAt: Number.isFinite(header?.updatedAt) ? header.updatedAt : (prior?.updatedAt ?? createdAt),
+      pinned: header?.pinned === true,
+      mode: header?.mode === 'agent' ? 'agent' : 'chat',
+      fileIds: Array.isArray(previous?.fileIds)
+        ? previous.fileIds.filter((id) => typeof id === 'string')
+        : [],
+      revision: previous?.revision,
+    },
+    incomplete: true,
+  }
+}
+
 const unpackSession = async (value: StoredSession): Promise<Session> => {
   if (!isPacked(value)) {
+    if (!Array.isArray(value.messages)) {
+      throw new Error('Invalid stored conversation')
+    }
     return value
   }
   const { readJsonEntry } = await import('./history/readJson.js')
@@ -130,7 +193,10 @@ const unpackSession = async (value: StoredSession): Promise<Session> => {
   if (!session || session.id !== value.id || !Array.isArray(session.messages)) {
     throw new Error('Invalid stored conversation')
   }
-  return { ...session, title: value.summary.title }
+  return {
+    ...session,
+    title: typeof value.summary?.title === 'string' ? value.summary.title : session.title,
+  }
 }
 
 const abortTransaction = (tx: { abort(): void }) => {
@@ -144,8 +210,14 @@ const abortTransaction = (tx: { abort(): void }) => {
 // 每个操作拿到连接后立即创建事务；IndexedDB 按创建顺序执行范围重叠的事务，读取总能看到之前发起的写入。
 const openHistory = () => {
   let previousVersion: number | undefined
+  let blockedTimer: ReturnType<typeof setTimeout> | undefined
+  let abandoned = false
+  let rejectBlocked: (error: HistoryUpgradeBlockedError) => void = () => {}
+  const blocked = new Promise<never>((_, reject) => {
+    rejectBlocked = reject
+  })
   logEvent('storage', 'history.db-open-started', { requestedVersion: DB_VERSION })
-  const opening = openDB<ChatDB>('freeseek', DB_VERSION, {
+  const request = openDB<ChatDB>('freeseek', DB_VERSION, {
     blocked(currentVersion, blockedVersion) {
       logEvent(
         'storage',
@@ -156,6 +228,10 @@ const openHistory = () => {
         },
         'warn'
       )
+      blockedTimer ??= setTimeout(() => {
+        abandoned = true
+        rejectBlocked(new HistoryUpgradeBlockedError())
+      }, UPGRADE_BLOCKED_TIMEOUT_MS)
     },
     blocking(_current, _blocked, event) {
       const database = event.target as IDBDatabase
@@ -178,6 +254,7 @@ const openHistory = () => {
       }
     },
     upgrade(db, oldVersion, _newVersion, tx) {
+      clearTimeout(blockedTimer)
       previousVersion = oldVersion
       logEvent('storage', 'history.db-upgrade-started', {
         previousVersion,
@@ -201,19 +278,39 @@ const openHistory = () => {
       if (oldVersion < 13) {
         void (async () => {
           try {
-            const staged = (await tx.objectStore('historyState').get(ACTIVE_HISTORY_KEY)) === true
+            const state = tx.objectStore('historyState')
+            const staged = (await state.get(ACTIVE_HISTORY_KEY)) === true
             const sessions = tx.objectStore(staged ? 'sessionsStaging' : 'sessions')
             const expected = await sessions.count()
+            const previous = new Map(
+              (await summaries.getAll()).map((summary) => [summary.id, summary])
+            )
+            let incomplete = 0
             await summaries.clear()
             for (
               let cursor = await sessions.openCursor();
               cursor;
               cursor = await cursor.continue()
             ) {
-              await summaries.put(recordSummary(cursor.value))
+              const { summary, incomplete: partial } = recoverSummary(
+                cursor.primaryKey,
+                cursor.value,
+                previous.get(cursor.primaryKey)
+              )
+              await summaries.put(summary)
+              incomplete += Number(partial)
             }
             if ((await summaries.count()) !== expected) {
               throw new Error('Incomplete session index migration')
+            }
+            await state.put(incomplete > 0, INCOMPLETE_FILE_REFERENCES_KEY)
+            if (incomplete) {
+              logEvent(
+                'storage',
+                'history.index-recovery-records-unreadable',
+                { count: incomplete },
+                'warn'
+              )
             }
           } catch (error) {
             logEvent(
@@ -228,6 +325,13 @@ const openHistory = () => {
       }
     },
   })
+  // IndexedDB cannot cancel a blocked open request. Close its handle if it opens after the timeout.
+  void request.then((database) => {
+    if (abandoned) {
+      database.close()
+    }
+  }, () => {})
+  const opening = Promise.race([request, blocked])
     .then((database) => {
       logEvent('storage', 'history.db-opened', {
         databaseVersion: database.version,
@@ -236,6 +340,7 @@ const openHistory = () => {
       })
       return database
     })
+    .finally(() => clearTimeout(blockedTimer))
     .catch((error: unknown) => {
       // 打开失败后允许界面重试，避免一直复用已拒绝的 Promise。
       if (dbPromise === opening) {
@@ -338,16 +443,19 @@ const inspectHistoryIndex = async (view: HistoryView, { tolerant = false } = {})
       throw new Error('Incomplete conversation list read')
     }
   }
-  const matches = (keys: string[]) => {
+  const matches = (keys: string[], count: number) => {
+    if (count !== indexCount || keys.length !== count || stored.length !== indexCount) {
+      return false
+    }
     const known = new Set(keys)
-    return stored.length === keys.length && stored.every(({ id }) => known.has(id))
+    return stored.every((summary) => validSummary(summary) && known.has(summary.id))
   }
-  const current = matches(ids)
+  const current = matches(ids, activeCount)
   const alternate =
     !current &&
     indexCount > 0 &&
     indexCount === alternateCount &&
-    matches(await view.stagingSessions.getAllKeys())
+    matches(await view.stagingSessions.getAllKeys(), alternateCount)
   return {
     stored,
     indexCount,
@@ -360,13 +468,83 @@ const inspectHistoryIndex = async (view: HistoryView, { tolerant = false } = {})
   }
 }
 
-export const loadSessionSummaries = async ({
-  previousSelection = false,
-  allowEmpty = false,
-  forReplacement = false,
-}: { previousSelection?: boolean; allowEmpty?: boolean; forReplacement?: boolean } = {}): Promise<
-  SessionSummary[]
-> => {
+const canRestoreOtherBank = (
+  view: HistoryView,
+  index: Awaited<ReturnType<typeof inspectHistoryIndex>>
+) =>
+  !index.interruptedImport &&
+  !index.confirmedEmpty &&
+  ((index.alternate && (!view.selectionConfirmed || index.activeCount === 0)) ||
+    (view.selectionConflict && index.activeCount === 0 && index.alternateCount > 0))
+
+const historySelectionUnresolved = (
+  view: HistoryView,
+  index: Awaited<ReturnType<typeof inspectHistoryIndex>>
+) =>
+  !view.selectionConfirmed &&
+  (view.selectionConflict || (index.alternateCount > 0 && !index.interruptedImport))
+
+type HistoryLoadOptions = {
+  previousSelection?: boolean
+  allowEmpty?: boolean
+  forReplacement?: boolean
+}
+
+const checkEmptyHistory = async (
+  view: HistoryView,
+  index: Awaited<ReturnType<typeof inspectHistoryIndex>>,
+  { previousSelection = false, allowEmpty = false, forReplacement = false }: HistoryLoadOptions
+) => {
+  if (index.confirmedEmpty || (forReplacement && index.alternateCount === 0)) {
+    return
+  }
+  if (allowEmpty && index.current && index.alternateCount === 0) {
+    logEvent('storage', 'history.started-without-restore')
+    return
+  }
+  if (index.alternateCount > 0 && (!index.interruptedImport || view.selectionConflict)) {
+    logEvent(
+      'storage',
+      'history.selection-uncertain',
+      {
+        indexCount: index.indexCount,
+        alternateCount: index.alternateCount,
+        selectorPresent: view.selectorPresent,
+        committedSelectorPresent: view.committedSelectorPresent,
+        selectionConflict: view.selectionConflict,
+      },
+      'warn'
+    )
+    throw new HistoryMissingError()
+  }
+  const previous = await readPreviousHistory()
+  const expected = previousSelection || previous.present
+  const canStartFresh = index.indexCount === 0 && index.alternateCount === 0
+  if (!expected && previous.timedOut && !allowEmpty) {
+    logEvent('storage', 'history.checkpoint-read-timed-out', { canStartFresh }, 'warn')
+  }
+  if (index.indexCount > 0 || (expected && (!allowEmpty || index.alternateCount > 0))) {
+    logEvent(
+      'storage',
+      'history.unexpected-empty',
+      {
+        indexCount: index.indexCount,
+        alternateCount: index.alternateCount,
+        previousSelection,
+        expected,
+        previousSessionCount: previous.sessionCount,
+        verifiedAt: previous.verifiedAt,
+        checkpointPresent: previous.present,
+      },
+      'warn'
+    )
+    throw new HistoryMissingError(canStartFresh)
+  }
+}
+
+export const loadSessionSummaries = async (
+  options: HistoryLoadOptions = {}
+): Promise<SessionSummary[]> => {
   const view = await historyTransaction('readonly')
   let index: Awaited<ReturnType<typeof inspectHistoryIndex>> | undefined
   try {
@@ -377,7 +555,7 @@ export const loadSessionSummaries = async ({
   }
   await view.tx.done
   if (!index) {
-    return reconstructHistoryIndex()
+    return reconstructHistoryIndex(options)
   }
   logEvent('storage', 'history.index-checked', {
     sessionCount: index.activeCount,
@@ -393,95 +571,86 @@ export const loadSessionSummaries = async ({
   // 数量骤降要留证据：下面的守卫只处理「变成 0」，而库被系统清空后往往只剩被回写的一两条，
   // 从 205 掉到 1 反而一声不响地通过（线上真的发生过）。这里只记录，不动任何数据。
   const previousLocal = readLocalCheckpoint()
-  const currentTotal = index.activeCount + index.alternateCount
+  const restoreOtherBank = canRestoreOtherBank(view, index)
+  const committedCount = restoreOtherBank ? index.alternateCount : index.activeCount
   if (
     previousLocal.sessionCount !== undefined &&
-    previousLocal.sessionCount > currentTotal &&
-    previousLocal.sessionCount - currentTotal >= 5
+    previousLocal.sessionCount > committedCount &&
+    previousLocal.sessionCount - committedCount >= 5
   ) {
-    const dropped = previousLocal.sessionCount - currentTotal
+    const dropped = previousLocal.sessionCount - committedCount
     logEvent(
       'storage',
       'history.shrank',
-      { previousCount: previousLocal.sessionCount, sessionCount: currentTotal, dropped },
+      {
+        previousCount: previousLocal.sessionCount,
+        sessionCount: committedCount,
+        alternateCount: index.alternateCount,
+        dropped,
+      },
       dropped >= 10 ? 'error' : 'warn'
     )
   }
-  if (forReplacement && index.activeCount === 0 && index.alternateCount === 0) {
-    // A verified replacement can proceed even if only old index entries survived. That
-    // index is left intact until the replacement has been validated and is ready to commit.
+  if (!index.activeCount && !restoreOtherBank) {
+    await checkEmptyHistory(view, index, options)
     return []
   }
-  if (allowEmpty && index.current && index.activeCount === 0 && index.alternateCount === 0) {
-    logEvent('storage', 'history.started-without-restore')
-    return []
-  }
-  if (!index.activeCount && !index.alternate && !index.confirmedEmpty) {
-    if (index.alternateCount > 0 && (!index.interruptedImport || view.selectionConflict)) {
-      // An old import could have left either committed records or incomplete staging here.
-      // Without an index or a recorded commit, neither exposing nor deleting them is safe.
-      logEvent(
-        'storage',
-        'history.selection-uncertain',
-        {
-          indexCount: index.indexCount,
-          alternateCount: index.alternateCount,
-          selectorPresent: view.selectorPresent,
-          committedSelectorPresent: view.committedSelectorPresent,
-          selectionConflict: view.selectionConflict,
-        },
-        'warn'
-      )
-      throw new HistoryMissingError()
-    }
-    const previous = await readPreviousHistory()
-    const expected = previousSelection || previous.present
-    const canStartFresh = index.indexCount === 0 && index.alternateCount === 0
-    // 原生桥读检查点超时 ≠ 历史确实没了：本地库既然读得出来，就采信本地、记一条告警继续启动。
-    // 抛错会把用户挡在「既没有列表、也没有恢复入口」的报错页，而重试又会 100% 命中同一分支。
-    if (!expected && previous.timedOut && !allowEmpty) {
-      logEvent('storage', 'history.checkpoint-read-timed-out', { canStartFresh }, 'warn')
-    }
-    // An incomplete import can also leave data in the other store. Only switch stores when
-    // every session ID matches the committed index, and keep ambiguous records intact.
-    if (index.indexCount > 0 || (expected && (!allowEmpty || index.alternateCount > 0))) {
-      logEvent(
-        'storage',
-        'history.unexpected-empty',
-        {
-          indexCount: index.indexCount,
-          alternateCount: index.alternateCount,
-          previousSelection,
-          expected,
-          previousSessionCount: previous.sessionCount,
-          verifiedAt: previous.verifiedAt,
-          checkpointPresent: previous.present,
-        },
-        'warn'
-      )
-      throw new HistoryMissingError(canStartFresh)
-    }
-  }
-  if (index.current && (view.selectionConfirmed || index.activeCount === 0)) {
+  if (!restoreOtherBank && index.current && (view.selectionConfirmed || index.activeCount === 0)) {
     if (index.activeCount > 0) {
       recordHistoryCheckpoint(true, index.activeCount)
     }
     return index.stored.map(toSessionSummary)
   }
 
-  return reconstructHistoryIndex(index.indexCount)
+  return reconstructHistoryIndex(options, index.indexCount)
 }
 
-/**
- * 按实际记录重建会话列表：读到坏的索引、或索引与实体对不上时走这里。
- * 能在两个库之间切就切；只有确实一条记录都没有时才报 HistoryMissingError。
- */
-const reconstructHistoryIndex = async (previousCount = 0): Promise<SessionSummary[]> => {
-  const history = await historyTransaction('readwrite')
+/** Rebuild the list from conversation records and keep metadata for unreadable rows. */
+const rebuildHistorySummaries = async (
+  view: WritableHistoryView,
+  source: WritableHistoryView['sessions'],
+  expected: number,
+  previous: StoredSessionSummary[]
+) => {
+  const known = new Map(previous.map((summary) => [summary.id, summary]))
   const rebuilt: SessionSummary[] = []
+  let incomplete = 0
+  await view.summaries.clear()
+  for (let cursor = await source.openCursor(); cursor; cursor = await cursor.continue()) {
+    const { summary, incomplete: partial } = recoverSummary(
+      cursor.primaryKey,
+      cursor.value,
+      known.get(cursor.primaryKey)
+    )
+    await view.summaries.put(summary)
+    rebuilt.push(toSessionSummary(summary))
+    incomplete += Number(partial)
+  }
+  if (rebuilt.length !== expected || (await view.summaries.count()) !== expected) {
+    throw new Error('Incomplete history index repair')
+  }
+  await view.state.put(incomplete > 0, INCOMPLETE_FILE_REFERENCES_KEY)
+  if (incomplete) {
+    logEvent('storage', 'history.index-recovery-records-unreadable', { count: incomplete }, 'warn')
+  }
+  return rebuilt
+}
+
+const reconstructHistoryIndex = async (
+  options: HistoryLoadOptions,
+  previousCount = 0
+): Promise<SessionSummary[]> => {
+  const history = await historyTransaction('readwrite')
+  let rebuilt: SessionSummary[]
   try {
     const latest = await inspectHistoryIndex(history, { tolerant: true })
-    if (latest.current) {
+    const switched = canRestoreOtherBank(history, latest)
+    if (!switched && latest.activeCount === 0) {
+      await history.tx.done
+      await checkEmptyHistory(history, latest, options)
+      return []
+    }
+    if (!switched && latest.current) {
       if (latest.activeCount > 0 && !history.selectionConfirmed) {
         await confirmHistorySelection(history)
       }
@@ -491,7 +660,7 @@ const reconstructHistoryIndex = async (previousCount = 0): Promise<SessionSummar
       }
       return latest.stored.map(toSessionSummary)
     }
-    if (latest.alternate) {
+    if (switched && latest.alternate) {
       await confirmHistorySelection(history, !history.useStagingStores)
       await history.state.delete(CONFIRMED_EMPTY_KEY)
       await history.state.delete(INCOMPLETE_STAGING_KEY)
@@ -505,25 +674,20 @@ const reconstructHistoryIndex = async (previousCount = 0): Promise<SessionSummar
       )
       return latest.stored.map(toSessionSummary)
     }
-    const count = latest.activeCount
-    if (count === 0) {
+    const source = switched ? history.stagingSessions : history.sessions
+    const count = switched ? latest.alternateCount : latest.activeCount
+    if (!switched && historySelectionUnresolved(history, latest)) {
       throw new HistoryMissingError()
     }
-    await history.summaries.clear()
-    for (
-      let cursor = await history.sessions.openCursor();
-      cursor;
-      cursor = await cursor.continue()
-    ) {
-      const summary = recordSummary(cursor.value)
-      await history.summaries.put(summary)
-      rebuilt.push(toSessionSummary(summary))
+    rebuilt = await rebuildHistorySummaries(history, source, count, latest.stored)
+    if (switched || !history.selectionConfirmed) {
+      await confirmHistorySelection(
+        history,
+        switched ? !history.useStagingStores : history.useStagingStores
+      )
     }
-    if (rebuilt.length !== count || (await history.summaries.count()) !== count) {
-      throw new Error('Incomplete history index repair')
-    }
-    if (!history.selectionConfirmed) {
-      await confirmHistorySelection(history)
+    if (switched) {
+      await history.state.delete(CONFIRMED_EMPTY_KEY)
     }
     await history.tx.done
   } catch (error) {
@@ -554,19 +718,20 @@ export type HistoryRepair = {
   state: 'one-store' | 'conflict' | 'both-empty' | 'consistent'
 }
 
-/**
- * 启动失败后的无损自愈。只做三件事，不删任何会话记录：
- *   1. 把激活指针收敛到一个有记录的库；两个库都有记录时选记录更多的一侧（并列保持当前选择）；
- *   2. 清掉会挡住启动的 confirmedEmpty / incompleteStaging 标记；
- *   3. 按该库的实际记录全量重建 sessionSummaries。
- * 没被选中的那个库保持原样留在暂存位置——导出和后续修复仍然读得到。
- */
+/** Preserve the committed bank and rebuild its list. A staged import is never a recovery source. */
 export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
   const view = await historyTransaction('readwrite')
   try {
     const index = await inspectHistoryIndex(view, { tolerant: true })
     const bothEmpty = index.activeCount === 0 && index.alternateCount === 0
-    const switched = index.alternateCount > index.activeCount
+    const switched =
+      canRestoreOtherBank(view, index) ||
+      (!index.activeCount &&
+        index.alternateCount > 0 &&
+        !view.selectionConfirmed &&
+        !view.selectionConflict &&
+        !index.interruptedImport &&
+        !index.confirmedEmpty)
     const target = switched ? !view.useStagingStores : view.useStagingStores
     const source = switched ? view.stagingSessions : view.sessions
     const sessionCount = switched ? index.alternateCount : index.activeCount
@@ -575,7 +740,7 @@ export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
       index.current &&
       index.indexCount === index.activeCount &&
       view.selectionConfirmed
-    if (consistent) {
+    if (consistent || bothEmpty || (!sessionCount && index.confirmedEmpty)) {
       await view.tx.done
       return {
         activeCount: index.activeCount,
@@ -583,35 +748,22 @@ export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
         indexCount: index.indexCount,
         sessionCount,
         switched: false,
-        state: 'consistent',
+        state: bothEmpty ? 'both-empty' : 'consistent',
       }
     }
+    if (
+      !switched &&
+      (!sessionCount || (!index.current && historySelectionUnresolved(view, index)))
+    ) {
+      throw new HistoryMissingError()
+    }
     await confirmHistorySelection(view, target)
-    // 修复后激活库就是选中的那个：暂存标记必须清掉，否则启动后的 recoverStaging 会把
-    // 另一个库里的记录当「中断的导入」清掉——那才是真正的数据丢失。
-    await view.state.delete(INCOMPLETE_STAGING_KEY)
-    if (sessionCount > 0) {
-      await view.state.delete(CONFIRMED_EMPTY_KEY)
-    }
-    await view.summaries.clear()
-    const rebuilt: SessionSummary[] = []
-    for (let cursor = await source.openCursor(); cursor; cursor = await cursor.continue()) {
-      const summary = recordSummary(cursor.value)
-      await view.summaries.put(summary)
-      rebuilt.push(toSessionSummary(summary))
-    }
-    if (rebuilt.length !== sessionCount || (await view.summaries.count()) !== sessionCount) {
-      throw new Error('Incomplete history repair')
-    }
+    await view.state.delete(CONFIRMED_EMPTY_KEY)
+    const rebuilt = await rebuildHistorySummaries(view, source, sessionCount, index.stored)
     await view.tx.done
-    const state: HistoryRepair['state'] = bothEmpty
-      ? 'both-empty'
-      : index.activeCount > 0 && index.alternateCount > 0
-        ? 'conflict'
-        : 'one-store'
-    if (!bothEmpty) {
-      recordHistoryCheckpoint(rebuilt.length > 0, rebuilt.length)
-    }
+    const state: HistoryRepair['state'] =
+      index.activeCount > 0 && index.alternateCount > 0 ? 'conflict' : 'one-store'
+    recordHistoryCheckpoint(true, rebuilt.length)
     logEvent(
       'storage',
       'history.repaired',
@@ -623,7 +775,7 @@ export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
         indexCount: index.indexCount,
         switched,
       },
-      bothEmpty ? 'warn' : 'info'
+      'info'
     )
     return {
       activeCount: index.activeCount,
@@ -710,7 +862,14 @@ export const backfillSessionModes = async (
 
 export const loadSession = async (id: string): Promise<Session | undefined> => {
   const { sessions, tx } = await historyTransaction('readonly')
-  const [record] = await Promise.all([sessions.get(id), tx.done])
+  let record = await sessions.get(id)
+  if (record === undefined) {
+    record = (await sessions.openCursor(id))?.value
+    if (record !== undefined) {
+      logEvent('storage', 'history.session-read-recovered', { lookup: 'cursor' }, 'warn')
+    }
+  }
+  await tx.done
   return record === undefined ? undefined : unpackSession(record)
 }
 
@@ -767,7 +926,7 @@ export const visitStoredSessions = async (
 }
 
 export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
-  const summary = storedSummary(session)
+  const summary = { ...storedSummary(session), revision: createId() }
   const record = sessionRecord(session, summary)
   const history = await historyTransaction('readwrite')
   let newSessionCount: number | undefined
@@ -819,7 +978,7 @@ export const renameSession = async (id: string, title: string): Promise<void> =>
             ? { ...value, summary: { ...value.summary, title, ...(mode && { mode }) } }
             : { ...value, title }
           await sessions.put(updated)
-          await summaries.put(recordSummary(updated))
+          await summaries.put({ ...recordSummary(updated), revision: createId() })
         }
       } catch (error) {
         abortTransaction(tx)
@@ -845,9 +1004,10 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
     (async () => {
       try {
         const summary = await summaries.get(sessionId)
+        const incomplete = await state.get(INCOMPLETE_FILE_REFERENCES_KEY)
         await sessions.delete(sessionId)
         await summaries.delete(sessionId)
-        for (const id of summary?.fileIds ?? []) {
+        for (const id of incomplete ? [] : summary?.fileIds ?? []) {
           if ((await summaries.index('fileIds').count(id)) === 0) {
             const file = await files.get(id)
             if (file && 'disk' in file) {
@@ -916,7 +1076,9 @@ const diskKeys = async (files: {
 }
 
 /** 清空导入暂存：开始导入前清除上次中断（如关闭页面）遗留的数据，导入失败后清除本次写入。 */
-export const clearStaging = async (onlyInterrupted = false): Promise<void> => {
+export const clearStaging = async ({
+  onlyInterrupted = false,
+}: { onlyInterrupted?: boolean } = {}): Promise<void> => {
   const view = await historyTransaction('readwrite')
   const { files, stagingSessions, stagingFiles, state, tx } = view
   if (onlyInterrupted) {
@@ -925,11 +1087,7 @@ export const clearStaging = async (onlyInterrupted = false): Promise<void> => {
       return
     }
     const index = await inspectHistoryIndex(view)
-    if (
-      !view.selectionConfirmed ||
-      !index.current ||
-      (!index.activeCount && !index.confirmedEmpty)
-    ) {
+    if (!view.selectionConfirmed || !index.current) {
       await tx.done
       return
     }
@@ -960,27 +1118,46 @@ export const saveStagingDiskFile = (id: string, disk: DiskOriginal): Promise<voi
   putFiles(true, [{ id, disk }])
 
 const HISTORY_REPLACEMENT_LOCK = 'freeseek:history-replacement'
+let localReplacementRunning = false
 
-export const withHistoryReplacement = <T>(work: () => Promise<T>): Promise<T> =>
-  browserHistoryLocks()?.request(HISTORY_REPLACEMENT_LOCK, { ifAvailable: true }, (lock) => {
-    if (!lock) {
-      throw new BackupError('backupOtherTabBusy')
-    }
-    return work()
-  }) ?? work()
+export const withHistoryReplacement = async <T>(work: () => Promise<T>): Promise<T> => {
+  const locks = browserHistoryLocks()
+  if (locks) {
+    return locks.request(HISTORY_REPLACEMENT_LOCK, { ifAvailable: true }, (lock) => {
+      if (!lock) {
+        throw new BackupError('backupOtherTabBusy')
+      }
+      return work()
+    })
+  }
+  if (localReplacementRunning) {
+    throw new BackupError('backupHistoryBusy')
+  }
+  localReplacementRunning = true
+  try {
+    return await work()
+  } finally {
+    localReplacementRunning = false
+  }
+}
 
 /** Only reclaim an interrupted import whose staging store was marked before writing. */
 export const recoverStaging = async () => {
-  const locks = browserHistoryLocks()
-  if (!locks) {
-    await clearStaging(true)
+  const { state, tx } = await historyTransaction('readonly')
+  const [interrupted] = await Promise.all([state.get(INCOMPLETE_STAGING_KEY), tx.done])
+  if (!interrupted) {
     return
   }
-  await locks.request(HISTORY_REPLACEMENT_LOCK, { ifAvailable: true }, async (lock) => {
-    if (lock) {
-      await clearStaging(true)
+  try {
+    await withHistoryReplacement(() => clearStaging({ onlyInterrupted: true }))
+  } catch (error) {
+    if (
+      !(error instanceof BackupError) ||
+      (error.key !== 'backupOtherTabBusy' && error.key !== 'backupHistoryBusy')
+    ) {
+      throw error
     }
-  })
+  }
 }
 
 /** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
@@ -1024,7 +1201,9 @@ export const updateStagingFileTypes = async (
  * Both sets of records already live in this database. Rebuild the small chat list, make
  * the staged set active, and clear the old set in one transaction. The payload stays put.
  */
-export const commitStaging = async (allowEmpty = true): Promise<SessionSummary[]> => {
+export const commitStaging = async ({
+  allowEmpty = true,
+}: { allowEmpty?: boolean } = {}): Promise<SessionSummary[]> => {
   const history = await historyTransaction('readwrite')
   const imported: SessionSummary[] = []
   let keep: string[] | undefined
@@ -1053,6 +1232,7 @@ export const commitStaging = async (allowEmpty = true): Promise<SessionSummary[]
       confirmHistorySelection(history, !history.useStagingStores),
       history.state.put(expected === 0, CONFIRMED_EMPTY_KEY),
       history.state.delete(INCOMPLETE_STAGING_KEY),
+      history.state.delete(INCOMPLETE_FILE_REFERENCES_KEY),
       history.sessions.clear(),
       history.files.clear(),
       history.tx.done,
@@ -1073,6 +1253,215 @@ export const commitStaging = async (allowEmpty = true): Promise<SessionSummary[]
   return imported
 }
 
+export type HistoryImportPreview = {
+  added: number
+  conflicts: { local: SessionSummary; backup: SessionSummary; revision?: string }[]
+  usingStagingStores: boolean
+}
+
+export const prepareHistoryMerge = async () => {
+  await clearStaging({ onlyInterrupted: true })
+  const history = await historyTransaction('readwrite')
+  const { files, sessions, summaries, stagingSessions, stagingFiles, tx } = history
+  const [staged, stagedFiles, keys, fileCount, current, count] = await Promise.all([
+    stagingSessions.count(),
+    stagingFiles.count(),
+    files.getAllKeys(),
+    files.count(),
+    summaries.getAll(),
+    sessions.count(),
+  ])
+  if (staged || stagedFiles) {
+    throw new BackupError('backupUnresolvedHistory')
+  }
+  if (keys.length !== fileCount || (count > 0 && current.length !== count)) {
+    throw new BackupError('backupMergeChanged')
+  }
+  await confirmHistorySelection(history)
+  await tx.done
+  return new Set([...keys, ...current.flatMap(({ fileIds }) => fileIds)])
+}
+
+export const previewHistoryMerge = async (): Promise<HistoryImportPreview> => {
+  const { tx, stagingSessions, summaries, sessions, useStagingStores } =
+    await historyTransaction('readonly')
+  const [expected, count, current] = await Promise.all([
+    stagingSessions.count(),
+    sessions.count(),
+    summaries.getAll(),
+  ])
+  const locals = new Map(count ? current.map((summary) => [summary.id, summary]) : [])
+  const conflicts: HistoryImportPreview['conflicts'] = []
+  let scanned = 0
+  for (let cursor = await stagingSessions.openCursor(); cursor; cursor = await cursor.continue()) {
+    scanned += 1
+    const local = locals.get(cursor.primaryKey)
+    if (local) {
+      conflicts.push({
+        local: toSessionSummary(local),
+        backup: toSessionSummary(recordSummary(cursor.value)),
+        revision: local.revision,
+      })
+    }
+  }
+  await tx.done
+  if (scanned !== expected || !scanned) {
+    throw new BackupError(scanned === expected ? 'backupEmptyHistory' : 'backupIncomplete')
+  }
+  return {
+    added: scanned - conflicts.length,
+    conflicts: conflicts.sort((a, b) => b.backup.updatedAt - a.backup.updatedAt),
+    usingStagingStores: useStagingStores,
+  }
+}
+
+const sameConversationVersion = (
+  current: StoredSessionSummary,
+  { local, revision }: HistoryImportPreview['conflicts'][number]
+) =>
+  current.revision === revision &&
+  current.updatedAt === local.updatedAt &&
+  current.title === local.title &&
+  current.pinned === local.pinned
+
+/** Keep the archive payload in staging and copy existing records into that same bank before switching. */
+export const commitHistoryMerge = async (
+  preview: HistoryImportPreview,
+  useBackup: ReadonlySet<string>
+) => {
+  const history = await historyTransaction('readwrite')
+  const { tx, sessions, files, summaries, stagingSessions, stagingFiles, state } = history
+  const imported: StoredSessionSummary[] = []
+  const replaced = new Set<string>()
+  const replacedFiles = new Set<string>()
+  const replacedRuns = new Set<string>()
+  const importedFiles = new Set<string>()
+  let kept = 0
+  let originalCount: number
+  let merged: SessionSummary[]
+  let keep: string[] | undefined
+  try {
+    if (!history.selectionConfirmed || history.useStagingStores !== preview.usingStagingStores) {
+      throw new BackupError('backupMergeChanged')
+    }
+    originalCount = await sessions.count()
+    const current = originalCount ? await summaries.getAll() : []
+    if (current.length !== originalCount) {
+      throw new BackupError('backupMergeChanged')
+    }
+    const locals = new Map(current.map((summary) => [summary.id, summary]))
+    const choices = new Map(preview.conflicts.map((conflict) => [conflict.local.id, conflict]))
+    let scanned = 0
+    for (let cursor = await stagingSessions.openCursor(); cursor; cursor = await cursor.continue()) {
+      scanned += 1
+      const id = cursor.primaryKey
+      const current = locals.get(id)
+      const choice = choices.get(id)
+      if (current && (!choice || !useBackup.has(id))) {
+        kept += 1
+        await cursor.delete()
+        continue
+      }
+      if (choice && (!current || !sameConversationVersion(current, choice))) {
+        throw new BackupError('backupMergeChanged')
+      }
+      if (current) {
+        replaced.add(id)
+        current.fileIds.forEach((file) => replacedFiles.add(file))
+        current.goalRunIds?.forEach((run) => replacedRuns.add(run))
+      }
+      const summary = { ...recordSummary(cursor.value), revision: createId() }
+      summary.fileIds.forEach((file) => importedFiles.add(file))
+      locals.set(id, summary)
+      imported.push(summary)
+    }
+    if (scanned !== preview.added + preview.conflicts.length) {
+      throw new BackupError('backupIncomplete')
+    }
+    merged = [...locals.values()].map(toSessionSummary)
+    if (imported.length) {
+      const localFiles = new Set(current.flatMap(({ fileIds }) => fileIds))
+      if ([...importedFiles].some((id) => localFiles.has(id))) {
+        throw new BackupError('backupMergeChanged')
+      }
+      const usedFiles = new Set([...locals.values()].flatMap(({ fileIds }) => fileIds))
+      const incomplete = await state.get(INCOMPLETE_FILE_REFERENCES_KEY)
+      const stagedFileCount = await stagingFiles.count()
+      let scannedFiles = 0
+      for (let cursor = await stagingFiles.openCursor(); cursor; cursor = await cursor.continue()) {
+        scannedFiles += 1
+        if (!importedFiles.has(cursor.primaryKey)) {
+          await cursor.delete()
+        }
+      }
+      if (scannedFiles !== stagedFileCount) {
+        throw new BackupError('backupIncomplete')
+      }
+      let scannedSessions = 0
+      for (let cursor = await sessions.openCursor(); cursor; cursor = await cursor.continue()) {
+        scannedSessions += 1
+        if (!replaced.has(cursor.primaryKey)) {
+          await stagingSessions.add(cursor.value)
+        }
+      }
+      const originalFileCount = await files.count()
+      scannedFiles = 0
+      for (let cursor = await files.openCursor(); cursor; cursor = await cursor.continue()) {
+        scannedFiles += 1
+        const id = cursor.primaryKey
+        if (importedFiles.has(id)) {
+          throw new BackupError('backupMergeChanged')
+        }
+        if (incomplete || !replacedFiles.has(id) || usedFiles.has(id)) {
+          await stagingFiles.add(cursor.value)
+        }
+      }
+      if (
+        scannedSessions !== originalCount ||
+        scannedFiles !== originalFileCount ||
+        (await stagingSessions.count()) !== originalCount + imported.length - replaced.size
+      ) {
+        throw new BackupError('backupIncomplete')
+      }
+      if (originalCount === 0) {
+        await summaries.clear()
+      }
+      for (const summary of imported) {
+        await summaries.put(summary)
+      }
+      keep = await diskKeys(stagingFiles)
+      await Promise.all([
+        confirmHistorySelection(history, !history.useStagingStores),
+        state.delete(CONFIRMED_EMPTY_KEY),
+        sessions.clear(),
+        files.clear(),
+      ])
+    } else {
+      keep = await diskKeys(files)
+      await Promise.all([stagingSessions.clear(), stagingFiles.clear()])
+    }
+    await Promise.all([state.delete(INCOMPLETE_STAGING_KEY), tx.done])
+  } catch (error) {
+    abortTransaction(tx)
+    throw error
+  }
+  if (imported.length) {
+    recordHistoryCheckpoint(true, merged.length)
+  }
+  if (keep) {
+    await pruneDiskOriginals(keep).catch(reportStorageError('clean merged history originals'))
+  }
+  return {
+    summaries: merged,
+    imported: imported.map(toSessionSummary),
+    replaced,
+    replacedRuns,
+    added: imported.length - replaced.size,
+    kept,
+    previousSessionCount: originalCount,
+  }
+}
+
 /** 本地存储失败不打断对话，只在控制台留痕 */
 export const reportStorageError = (action: string) => (error: unknown) => {
   logEvent('storage', 'operation.failed', { operation: action, ...diagnosticError(error) }, 'error')
@@ -1082,12 +1471,24 @@ export const reportStorageError = (action: string) => (error: unknown) => {
 
 /** 诊断仅取数量和体积，不读取会话正文或附件字节。 */
 export const getStorageSummary = async () => {
-  const { sessions, files, summaries, stagingSessions, useStagingStores, tx, databaseVersion } =
-    await historyTransaction('readonly')
-  const [sessionCount, fileCount] = await Promise.all([sessions.count(), files.count()])
-  const [indexCount, alternateSessionCount] = await Promise.all([
+  const view = await historyTransaction('readonly')
+  const { sessions, files, summaries, stagingSessions, state, tx } = view
+  const [
+    sessionCount,
+    fileCount,
+    indexCount,
+    alternateSessionCount,
+    confirmedEmpty,
+    interruptedImport,
+    incompleteFileReferences,
+  ] = await Promise.all([
+    sessions.count(),
+    files.count(),
     summaries.count(),
     stagingSessions.count(),
+    state.get(CONFIRMED_EMPTY_KEY),
+    state.get(INCOMPLETE_STAGING_KEY),
+    state.get(INCOMPLETE_FILE_REFERENCES_KEY),
   ])
   let originalBytes = 0
   for (let cursor = await files.openCursor(); cursor; cursor = await cursor.continue()) {
@@ -1096,12 +1497,17 @@ export const getStorageSummary = async () => {
   }
   await tx.done
   return {
-    databaseVersion,
+    databaseVersion: view.databaseVersion,
     sessionCount,
     fileCount,
     originalBytes,
     indexCount,
     alternateSessionCount,
-    useStagingStores,
+    useStagingStores: view.useStagingStores,
+    selectionConfirmed: view.selectionConfirmed,
+    selectionConflict: view.selectionConflict,
+    confirmedEmpty: confirmedEmpty === true,
+    interruptedImport: interruptedImport === true,
+    incompleteFileReferences: incompleteFileReferences === true,
   }
 }

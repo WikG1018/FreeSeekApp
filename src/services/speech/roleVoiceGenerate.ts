@@ -3,6 +3,7 @@ import type { MessageStreamEvent } from '../api/types.js'
 import { streamProviderMessage } from '../api/providerClient.js'
 import { activeConnection } from '../providers.js'
 import { customReasoning, disabledReasoning } from '../reasoning.js'
+import { useSettings } from '../settings.js'
 import type { VoiceRole } from './roleMarkers.js'
 
 /**
@@ -17,6 +18,11 @@ const PROMPT =
   '说清性别、年龄感、音色质感、语速或口音中真正有辨识度的部分。' +
   '不要写情绪或语气（那由正文决定），不要用引号，不要解释，不要列举。' +
   '不要出现「音色」「描述」这类词。只输出描述本身。'
+
+const PROMPT_EN =
+  'Write one or two short English sentences that describe a character’s voice for speech synthesis. ' +
+  'Use distinctive traits such as apparent age, pitch, texture, pace, or accent. ' +
+  'Leave emotion and delivery to the scene. Return the description alone, without quotation marks.'
 
 const clean = (text: string) =>
   text
@@ -51,6 +57,7 @@ export const regenerateVoiceDescription = async (
   signal: AbortSignal
 ): Promise<string> => {
   const connection = activeConnection()
+  const prompt = useSettings.getState().locale === 'en-US' ? PROMPT_EN : PROMPT
   const ask = [
     `角色：${role.name}${role.aliases.length ? `（别名：${role.aliases.join('、')}）` : ''}`,
     role.nature.trim() ? `性格：${role.nature.trim()}` : '',
@@ -69,7 +76,7 @@ export const regenerateVoiceDescription = async (
           {
             model: connection.model,
             max_tokens: 200,
-            system: PROMPT,
+            system: prompt,
             thinking: { type: 'disabled' },
             messages: [{ role: 'user', content: ask }],
           },
@@ -83,7 +90,7 @@ export const regenerateVoiceDescription = async (
           connection.profile,
           connection.model,
           [{ role: 'user', content: [{ type: 'text', text: ask }] }],
-          PROMPT,
+          prompt,
           signal,
           disabledReasoning(customReasoning(connection.profile, connection.model)),
           { maxOutputTokens: 200, managedTools: true }

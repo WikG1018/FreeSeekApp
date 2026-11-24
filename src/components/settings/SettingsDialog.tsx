@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { Capacitor } from '@capacitor/core'
 import logo from '../../assets/logo.png'
@@ -18,6 +18,8 @@ import {
   clearHistory,
   exportHistory,
   importHistory,
+  type HistoryImportPreview,
+  type HistoryImportResult,
 } from '../../services/chat/backup.js'
 import { useChatStore, selectSession } from '../../services/chat/store.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
@@ -103,7 +105,9 @@ const SettingsRoot = () => {
   const historyImport = useHistoryImport(),
     historyDelete = useHistoryDelete()
   const ready = useChatStore((state) => state.ready)
+  const initError = useChatStore((state) => state.initError)
   const replacing = useChatStore((state) => state.importingHistory)
+  const historyBusy = replacing || historyImport.busy || historyDelete.busy
   const pageId = useSettingsDialog((state) => state.page)
   const modelUsage = useModelUsage(pageId === 'usageModels' || pageId === 'usageModel')
   const [modelUsageFilters, setModelUsageFilters] = useState(initialModelUsageFilters)
@@ -269,7 +273,8 @@ const SettingsRoot = () => {
                 <DataPage
                   historyImport={historyImport}
                   historyDelete={historyDelete}
-                  disabled={!ready || replacing || historyImport.busy || historyDelete.busy}
+                  disabled={!ready || historyBusy}
+                  importDisabled={(!ready && !initError) || historyBusy}
                 />
               )
             case 'usage':
@@ -346,10 +351,12 @@ const DataPage = ({
   historyImport,
   historyDelete,
   disabled,
+  importDisabled,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
   historyDelete: ReturnType<typeof useHistoryDelete>
   disabled: boolean
+  importDisabled: boolean
 }) => {
   const t = useTranslate()
   const hasHistory = useChatStore((state) => state.sessions.length > 0)
@@ -357,7 +364,7 @@ const DataPage = ({
   return (
     <>
       <Section title={t('settingsBackupGroup')}>
-        <ImportHistory historyImport={historyImport} disabled={disabled} />
+        <ImportHistory historyImport={historyImport} disabled={importDisabled} />
         {hasHistory && <ExportHistory disabled={disabled} />}
       </Section>
       <SettingsDisclosure
@@ -667,68 +674,111 @@ const DeleteAllSetting = ({
   )
 }
 
-/** 覆盖导入的二次确认 */
-/**
- * 覆盖导入确认：分两步，第一步强调「会删掉现有聊天」，第二步再确认一次，
- * 两次都显示当前对话数量，避免误操作把本地记录清空。
- */
+const ImportReview = ({
+  preview,
+  useBackup,
+  setUseBackup,
+}: {
+  preview: HistoryImportPreview
+  useBackup: ReadonlySet<string>
+  setUseBackup: (ids: Set<string>) => void
+}) => {
+  const t = useTranslate()
+  const locale = useSettings((state) => state.locale)
+  const [limit, setLimit] = useState(30)
+  const focus = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    focus.current?.focus({ preventScroll: true })
+  }, [])
+  const date = new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return (
+    <>
+      <p ref={focus} tabIndex={-1} className={styles.importSummary}>
+        {preview.conflicts.length
+          ? t('historyImportConflictsBody', { added: preview.added, count: preview.conflicts.length })
+          : t('historyImportAvailable', { count: preview.added })}
+      </p>
+      {preview.skipped > 0 && (
+        <p className={styles.importSummary}>{t('historyImportWillSkip', { count: preview.skipped })}</p>
+      )}
+      {preview.conflicts.length > 1 && (
+        <div className={styles.importBulkChoices}>
+          <button type="button" className={styles.quietAction} onClick={() => setUseBackup(new Set())}>
+            {t('historyImportKeepAll')}
+          </button>
+          <button
+            type="button"
+            className={styles.quietAction}
+            onClick={() => setUseBackup(new Set(preview.conflicts.map(({ local }) => local.id)))}
+          >
+            {t('historyImportUseAll')}
+          </button>
+        </div>
+      )}
+      {preview.conflicts.slice(0, limit).map(({ local, backup }) => (
+        <fieldset className={styles.importConflict} key={local.id}>
+          <legend title={local.title}>{local.title || t('newChat')}</legend>
+          <div className={styles.importChoices}>
+            {([['local', local], ['backup', backup]] as const).map(([source, session]) => {
+              const selected = useBackup.has(local.id) === (source === 'backup')
+              const timestamp = new Date(session.updatedAt)
+              return (
+                <label
+                  className={clsx(styles.importChoice, selected && styles.importChoiceSelected)}
+                  key={source}
+                >
+                  <input
+                    type="radio"
+                    name={'import-version-' + local.id}
+                    checked={selected}
+                    onChange={() => {
+                      const next = new Set(useBackup)
+                      if (source === 'backup') {
+                        next.add(local.id)
+                      } else {
+                        next.delete(local.id)
+                      }
+                      setUseBackup(next)
+                    }}
+                  />
+                  <span>{t(source === 'local' ? 'historyImportKeepLocal' : 'historyImportUseBackup')}</span>
+                  {local.title !== backup.title && (
+                    <span className={styles.importChoiceTitle} title={session.title}>
+                      {session.title || t('newChat')}
+                    </span>
+                  )}
+                  <time>{Number.isFinite(timestamp.getTime()) ? date.format(timestamp) : t('historyImportUnknownDate')}</time>
+                </label>
+              )
+            })}
+          </div>
+        </fieldset>
+      ))}
+      {limit < preview.conflicts.length && (
+        <Button variant="outlined" size="s" onClick={() => setLimit(limit + 30)}>
+          {t('historyImportShowMore', { count: preview.conflicts.length - limit })}
+        </Button>
+      )}
+    </>
+  )
+}
+
 const ImportConfirm = ({
   historyImport,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
-  const [stage, setStage] = useState<'warn' | 'final'>('warn')
-  const sessionCount = useChatStore((state) => state.sessions.length)
-  const fileName = historyImport.file?.name ?? ''
-
-  const [backingUp, setBackingUp] = useState(false)
-  const empty = sessionCount === 0
-  if (stage === 'warn' && !empty && !historyImport.busy && !historyImport.errorKey) {
-    return (
-      <Modal
-        title={t('historyImportConfirmTitle')}
-        centered
-        dismissible={!backingUp}
-        onClose={historyImport.cancel}
-        footer={
-          <>
-            <Button
-              variant="outlined"
-              size="m"
-              autoFocus
-              disabled={backingUp}
-              onClick={historyImport.cancel}
-            >
-              {t('cancel')}
-            </Button>
-            <Button
-              variant="danger"
-              size="m"
-              disabled={backingUp}
-              onClick={() => setStage('final')}
-            >
-              {t('historyImportContinue')}
-            </Button>
-          </>
-        }
-      >
-        <div className={styles.importFile}>
-          <IconFileOutline16 />
-          <span>{fileName}</span>
-        </div>
-        <div className={styles.importWarn}>
-          <div className={styles.importWarnTitle}>{t('historyImportWarnTitle')}</div>
-          <div className={styles.importWarnBody}>
-            {t('historyImportWarnBody', { count: sessionCount })}
-          </div>
-        </div>
-        <ExportHistory disabled={backingUp} label="importBackupFirst" onBusy={setBackingUp} />
-      </Modal>
-    )
-  }
-
-  const { busy, phase, progress, errorKey } = historyImport
+  const { busy, phase, progress, errorKey, preview, useBackup } = historyImport
+  const showingProgress = busy && !preview
+  const hasConflicts = Boolean(preview?.conflicts.length)
+  const branchFailure = errorKey === 'backupInvalidBranches'
   const percent =
     progress && progress.total > 0
       ? Math.min(
@@ -743,27 +793,37 @@ const ImportConfirm = ({
           )
         )
       : null
+  const title = preview
+    ? hasConflicts
+      ? 'historyImportConflictsTitle'
+      : 'historyImportPartialTitle'
+    : busy
+      ? 'historyImportBusyTitle'
+      : errorKey
+        ? 'historyImportFailedTitle'
+        : 'importEmpty'
+  const confirmLabel = preview
+    ? hasConflicts
+      ? 'historyImportMerge'
+      : 'historyImportAvailableAction'
+    : errorKey
+      ? 'historyImportRetry'
+      : 'importStart'
   return (
     <Modal
-      title={
-        busy
-          ? t('historyImportBusyTitle')
-          : errorKey
-            ? t('historyImportFailedTitle')
-            : t(empty ? 'importEmpty' : 'historyImportFinalTitle')
-      }
+      title={t(title)}
       centered
-      dismissible={!busy}
+      dismissible={!showingProgress}
       onClose={historyImport.cancel}
       footer={
         <div className={styles.importFooter}>
-          {busy ? (
-            <div className={styles.importBusy}>
+          {showingProgress ? (
+            <div className={styles.importBusy} role="status">
               <span className={styles.importSpinner} aria-hidden />
               <span>
                 {phase === 'checking'
                   ? t('historyImportChecking')
-                  : progress && progress.total > 0 && progress.processed < progress.total
+                  : phase === 'reading' && progress && progress.processed < progress.total
                     ? t('historyImportProgress', {
                         processed: progress.processed,
                         total: progress.total,
@@ -771,48 +831,53 @@ const ImportConfirm = ({
                     : t('historyImportWriting')}
               </span>
             </div>
-          ) : null}
-          {!busy && (
-            <div className={styles.importActions}>
-              <Button
-                variant="outlined"
-                size="m"
-                autoFocus
-                onClick={() => (errorKey || empty ? historyImport.cancel() : setStage('warn'))}
-              >
-                {t(errorKey ? 'close' : empty ? 'cancel' : 'historyImportBack')}
-              </Button>
-              <Button
-                variant={errorKey || empty ? 'primary' : 'danger'}
-                size="m"
-                onClick={() => void historyImport.confirm()}
-              >
-                {t(
-                  errorKey
-                    ? 'historyImportRetry'
-                    : empty
-                      ? 'importStart'
-                      : 'historyImportFinalConfirm'
+          ) : (
+            <>
+              {preview && useBackup.size > 0 && (
+                <div className={styles.importReplacementNote} aria-live="polite">
+                  {t('historyImportReplacing', { count: useBackup.size })}
+                </div>
+              )}
+              <div className={styles.importActions}>
+                <Button variant="outlined" size="m" onClick={historyImport.cancel}>
+                  {t(errorKey ? 'close' : 'cancel')}
+                </Button>
+                {!branchFailure && (
+                  <Button
+                    size="m"
+                    onClick={() => {
+                      if (preview) {
+                        historyImport.acceptChoices()
+                      } else {
+                        void historyImport.confirm()
+                      }
+                    }}
+                  >
+                    {t(confirmLabel)}
+                  </Button>
                 )}
-              </Button>
-            </div>
+              </div>
+            </>
           )}
         </div>
       }
     >
-      {!busy && !errorKey && (
-        <div className={empty ? styles.importFile : styles.importWarnFinal}>
-          {empty ? (
-            <>
-              <IconFileOutline16 />
-              <span>{fileName}</span>
-            </>
-          ) : (
-            t('historyImportFinalBody', { count: sessionCount })
-          )}
-        </div>
-      )}
-      {busy ? (
+      {preview ? (
+        <ImportReview
+          preview={preview}
+          useBackup={useBackup}
+          setUseBackup={historyImport.setUseBackup}
+        />
+      ) : !busy && !errorKey ? (
+        <>
+          <div className={styles.importFile}>
+            <IconFileOutline16 />
+            <span>{historyImport.file?.name}</span>
+          </div>
+          <p className={styles.importSummary}>{t('historyImportMergeBody')}</p>
+        </>
+      ) : null}
+      {showingProgress && (
         <div className={styles.importProgress}>
           <div
             className={styles.importProgressTrack}
@@ -826,10 +891,10 @@ const ImportConfirm = ({
               className={
                 percent === null ? styles.importProgressIndeterminate : styles.importProgressFill
               }
-              style={percent === null ? undefined : { width: `${percent}%` }}
+              style={percent === null ? undefined : { width: String(percent) + '%' }}
             />
           </div>
-          {progress?.reading && progress.reading.total >= 1024 * 1024 && (
+          {phase === 'reading' && progress?.reading && progress.reading.total >= 1024 * 1024 && (
             <div className={styles.importProgressHint}>
               {t('historyImportReading', {
                 read: (progress.reading.bytes / 1024 / 1024).toFixed(1),
@@ -839,21 +904,26 @@ const ImportConfirm = ({
           )}
           <div className={styles.importProgressHint}>{t('historyImportNoClose')}</div>
         </div>
-      ) : null}
-      {errorKey ? (
-        <div className={styles.importErrorBox}>
+      )}
+      {errorKey && (
+        <div className={styles.importErrorBox} role="alert">
           <div className={styles.importErrorBody}>{t(errorKey)}</div>
-          <div className={styles.importErrorHint}>{t('historyImportFailedHint')}</div>
+          <div className={styles.importErrorHint}>
+            {t(branchFailure ? 'historyImportPreserved' : 'historyImportFailedHint')}
+          </div>
         </div>
-      ) : null}
+      )}
     </Modal>
   )
 }
 
-/** 导入完成后可直接打开恢复的对话，也可以留在数据管理。 */
 const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHistoryImport> }) => {
   const t = useTranslate()
-  const count = historyImport.result ?? 0
+  const result = historyImport.result
+  if (!result) {
+    return null
+  }
+  const { firstImportedId: id, added, kept, replaced, skipped } = result
   return (
     <Modal
       title={t('historyImportDoneTitle')}
@@ -861,27 +931,31 @@ const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHis
       onClose={historyImport.dismissResult}
       footer={
         <>
-          <Button variant="outlined" size="m" onClick={historyImport.dismissResult}>
-            {t('restartLater')}
-          </Button>
+          {id && (
+            <Button variant="outlined" size="m" onClick={historyImport.dismissResult}>
+              {t('restartLater')}
+            </Button>
+          )}
           <Button
             size="m"
             onClick={() => {
-              const first = useChatStore.getState().sessions[0]
               historyImport.dismissResult()
-              if (first) {
-                selectSession(first.id)
+              if (id) {
+                selectSession(id)
                 closeMobileSider()
+                closeSettings()
               }
-              closeSettings()
             }}
           >
-            {t(count ? 'importView' : 'importFinish')}
+            {t(id ? 'importView' : 'importFinish')}
           </Button>
         </>
       }
     >
-      <div className={styles.importDone}>{t('historyImportDoneBody', { count })}</div>
+      <div className={styles.importDone}>{t('historyImportDoneBody', { added, kept, replaced })}</div>
+      {skipped > 0 && (
+        <div className={styles.importDone}>{t('historyImportSkipped', { count: skipped })}</div>
+      )}
     </Modal>
   )
 }
@@ -901,62 +975,83 @@ const errorStatus = (key: TranslationKey, error: unknown): Status => ({
 const statusText = (t: ReturnType<typeof useTranslate>, status: Status): string =>
   status ? t(status.key, status.reason ? { message: t(status.reason) } : status.params) : ''
 
-/** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
-  const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
-  /** 成功导入的会话数；非 null 时弹出「导入完成」对话框 */
-  const [result, setResult] = useState<number | null>(null)
-  /** 导入阶段：checking 校验 / importing 写入；失败回到 idle 并给出原因 */
-  const [phase, setPhase] = useState<'idle' | 'checking' | 'importing'>('idle')
+  const [result, setResult] = useState<HistoryImportResult | null>(null)
+  const [phase, setPhase] = useState<'idle' | 'checking' | 'reading' | 'writing'>('idle')
   const [progress, setProgress] = useState<{
     processed: number
     total: number
     reading?: { bytes: number; total: number }
   } | null>(null)
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null)
+  const [preview, setPreview] = useState<HistoryImportPreview | null>(null)
+  const [useBackup, setUseBackup] = useState(() => new Set<string>())
   const importing = useRef(false)
+  const pendingChoice = useRef<(ids: ReadonlySet<string> | null) => void>()
+
+  useEffect(() => () => pendingChoice.current?.(null), [])
+
+  const resolveChoices = (ids: ReadonlySet<string> | null) => {
+    const resolve = pendingChoice.current
+    pendingChoice.current = undefined
+    setPreview(null)
+    setPhase('writing')
+    resolve?.(ids)
+  }
 
   const confirm = async () => {
     if (!file || importing.current) {
       return
     }
     importing.current = true
-    setBusy(true)
     setStatus(null)
     setErrorKey(null)
     setProgress(null)
     setPhase('checking')
     try {
-      const count = await importHistory(file, (processed, total, reading) => {
-        setPhase('importing')
-        setProgress({ processed, total, reading })
-      })
-      setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
+      const result = await importHistory(
+        file,
+        (processed, total, reading) => {
+          setPhase(processed < total ? 'reading' : 'writing')
+          setProgress({ processed, total, reading })
+        },
+        (preview) =>
+          new Promise((resolve) => {
+            pendingChoice.current = resolve
+            setUseBackup(new Set())
+            setPreview(preview)
+          })
+      )
       setFile(null)
-      setResult(count)
-      setPhase('idle')
+      if (result) {
+        const { added, kept, replaced } = result
+        setStatus({ key: 'historyImportDoneBody', params: { added, kept, replaced } })
+        setResult(result)
+      }
     } catch (error) {
-      // 失败时保留文件与弹窗：把原因写在按钮上方，可直接重试
       const key = error instanceof BackupError ? error.key : 'historyImportFailed'
       setErrorKey(key)
       setStatus({ key, error: true })
-      setPhase('idle')
     } finally {
       importing.current = false
-      setBusy(false)
+      setPhase('idle')
     }
   }
 
   return {
     file,
-    busy,
+    busy: phase !== 'idle',
     status,
     result,
     phase,
     progress,
     errorKey,
+    preview,
+    useBackup,
+    setUseBackup,
+    acceptChoices: () => resolveChoices(useBackup),
     select: (next: File) => {
       logEvent('backup', 'import.file-selected', { bytes: next.size })
       setErrorKey(null)
@@ -965,15 +1060,18 @@ const useHistoryImport = () => {
       setFile(next)
     },
     cancel: () => {
-      logEvent('backup', 'import.confirmation-cancelled')
-      setFile(null)
+      if (pendingChoice.current) {
+        resolveChoices(null)
+      } else if (!importing.current) {
+        logEvent('backup', 'import.confirmation-cancelled')
+        setFile(null)
+      }
     },
     dismissResult: () => setResult(null),
     confirm,
   }
 }
 
-/** 导入 = 覆盖：用选中文件替换本地全部会话与附件。 */
 const ImportHistory = ({
   historyImport,
   disabled,
@@ -1019,20 +1117,12 @@ const ImportHistory = ({
 }
 
 /** 将全部会话及图片导出为 ZIP 文件并下载 */
-const ExportHistory = ({
-  disabled,
-  label = 'exportAllLabel',
-  onBusy,
-}: {
-  disabled: boolean
-  label?: TranslationKey
-  onBusy?: (busy: boolean) => void
-}) => {
+const ExportHistory = ({ disabled }: { disabled: boolean }) => {
   const t = useTranslate()
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
-  const [skipped, setSkipped] = useState(0)
+  const [report, setReport] = useState<{ skipped: number; missingOriginals: number } | null>(null)
 
   const onExport = async () => {
     if (disabled || busy || empty) {
@@ -1040,16 +1130,15 @@ const ExportHistory = ({
     }
     setBusy(true)
     setStatus(null)
-    setSkipped(0)
-    onBusy?.(true)
+    setReport(null)
     try {
       const result = await exportHistory()
-      await saveBackup(result.name, result.blob)
-      setSkipped(result.skipped)
+      if (await saveBackup(result.name, result.blob)) {
+        setReport({ skipped: result.skipped, missingOriginals: result.missingOriginals })
+      }
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {
-      onBusy?.(false)
       setBusy(false)
     }
   }
@@ -1058,16 +1147,21 @@ const ExportHistory = ({
     <div>
       <Row
         icon={<IconDownloadOutline16 />}
-        label={t(label)}
+        label={t('exportAllLabel')}
         disabled={disabled || busy || empty}
         onClick={() => void onExport()}
       />
       {status ? (
         <div className={clsx(styles.rowNote, styles.errorNote)}>{statusText(t, status)}</div>
       ) : null}
-      {skipped > 0 ? (
+      {report && report.skipped > 0 ? (
         <div className={clsx(styles.rowNote, styles.warnNote)}>
-          {t('historyExportSkipped', { count: skipped })}
+          {t('historyExportSkipped', { count: report.skipped })}
+        </div>
+      ) : null}
+      {report && report.missingOriginals > 0 ? (
+        <div className={clsx(styles.rowNote, styles.warnNote)}>
+          {t('historyExportMissingOriginals', { count: report.missingOriginals })}
         </div>
       ) : null}
     </div>

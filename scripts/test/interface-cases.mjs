@@ -1102,6 +1102,7 @@ export const runInterfaceCases = async ({ run }) => {
         const a = window.__audit
         const pack = await a.backup.exportHistory()
         localStorage.removeItem('freeseek:model-prices')
+        await a.backup.clearHistory()
         await a.backup.importHistory(new File([pack.blob], 'model-price-check.zip'))
         return Object.fromEntries(
           (await a.usage.collectModelUsage()).map(({ model, days }) => [model, days[0].costCny])

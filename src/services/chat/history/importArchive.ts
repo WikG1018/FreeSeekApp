@@ -1,11 +1,12 @@
 import * as db from '../db.js'
+import { mapSessionFileIds } from '../sessionData.js'
 import { logEvent } from '../../diagnostics/log.js'
 import { readJsonEntry as readJson, type ImportProgress } from './readJson.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
 import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
-import { toLocalSession } from './toLocal.js'
+import { BranchImportError, toLocalSession } from './toLocal.js'
 import {
   isNativeManifest,
   readNativeManifest,
@@ -65,18 +66,19 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
       }
       const data = await readJson(entry)
       if (isNativeManifest(data)) {
-        if (!readNativeManifest(data).sessions.length) {
+        const native = readNativeManifest(data)
+        if (!native.sessions.length) {
           fail('backupEmptyHistory')
         }
-      } else {
-        checkManifest(data)
+        return
       }
+      checkManifest(data)
       return
     }
   } catch (error) {
     throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
   }
-  fail('backupUnrecognized')
+  return fail('backupUnrecognized')
 }
 
 /**
@@ -87,12 +89,16 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
  */
 export const importArchive = async (
   file: File,
+  mapFileId: (id: string) => string,
   onProgress?: ImportProgress
-): Promise<NativeBackupSettings | undefined> => {
+): Promise<{ settings?: NativeBackupSettings; skipped: number }> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
   }
-  const imported = new Set<string>()
+  const seenSessions = new Set<string>()
+  const branchErrors: Partial<Record<BranchImportError['reason'], number>> = {}
+  let skipped = 0
+  let recoveredSelections = 0
   const images = new Map<string, string>()
   const sessionsWithImages = new Set<string>()
   /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
@@ -138,37 +144,51 @@ export const importArchive = async (
           logEvent('backup', 'import.format-detected', {
             format: 'freeseek',
             sessionCount: native.sessions.length,
+            partial: native.partial?.kind,
           })
           if (!native.sessions.length) {
             fail('backupEmptyHistory')
           }
-          return await importNativeEntries(entries, native, total, useDisk, onProgress)
+          const settings = await importNativeEntries(
+            entries, native, total, useDisk, mapFileId, onProgress
+          )
+          return { settings, skipped: 0 }
         }
         checkManifest(data)
         logEvent('backup', 'import.format-detected', { format: 'deepseek' })
         manifest = true
-      } else if (path === USER_PATH && !index && imported.size === 0) {
+      } else if (path === USER_PATH && !index && seenSessions.size === 0) {
         // 账号信息（已脱敏）不导入；文件可能缺失。
         await skipEntry(entry)
       } else if (sessionId !== null && !index) {
-        const local = toLocalSession(readSessionFile(await read(entry, 'session')))
-        if (local.session.id !== sessionId || imported.has(sessionId)) {
+        const session = readSessionFile(await read(entry, 'session'))
+        if (session.id !== sessionId || seenSessions.has(sessionId)) {
           fail('backupIncomplete')
         }
-        imported.add(sessionId)
+        seenSessions.add(sessionId)
         currentSessionId = sessionId
-        if (local.images.size > 0) {
-          sessionsWithImages.add(sessionId)
+        try {
+          const local = toLocalSession(session)
+          if (local.images.size > 0) {
+            sessionsWithImages.add(sessionId)
+          }
+          for (const [imagePath, id] of local.images) {
+            images.set(imagePath, mapFileId(id))
+          }
+          await db.addStagingSession(mapSessionFileIds(local.session, mapFileId))
+          recoveredSelections += Number(local.recoveredSelection)
+        } catch (error) {
+          if (!(error instanceof BranchImportError)) {
+            throw error
+          }
+          skipped += 1
+          branchErrors[error.reason] = (branchErrors[error.reason] ?? 0) + 1
         }
-        for (const [imagePath, id] of local.images) {
-          images.set(imagePath, id)
-        }
-        await db.addStagingSession(local.session)
       } else if (path === INDEX_PATH && !index) {
         index = readSessionIndex(await read(entry))
       } else if (
         index
-          ? imported.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')
+          ? seenSessions.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')
           : currentSessionId && path.startsWith(sessionFilesDir(currentSessionId))
       ) {
         // 没有被引用的条目不保存，引用了但缺失的图片只展示文件名。
@@ -191,14 +211,25 @@ export const importArchive = async (
   if (
     !index ||
     listed.size !== index.length ||
-    listed.size !== imported.size ||
-    [...imported].some((id) => !listed.has(id))
+    listed.size !== seenSessions.size ||
+    [...seenSessions].some((id) => !listed.has(id))
   ) {
     fail('backupIncomplete')
   }
-  if (imported.size === 0) {
+  if (!seenSessions.size) {
     fail('backupEmptyHistory')
   }
+  if (skipped || recoveredSelections) {
+    logEvent(
+      'backup',
+      'import.branches-checked',
+      { recoveredSelections, skippedSessions: skipped, ...branchErrors },
+      skipped ? 'warn' : 'info'
+    )
+  }
+  if (skipped === seenSessions.size) {
+    fail('backupInvalidBranches')
+  }
   await db.updateStagingFileTypes(stored, sessionsWithImages)
-  return undefined
+  return { skipped }
 }

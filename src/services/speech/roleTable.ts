@@ -1,5 +1,7 @@
 import {
   DEFAULT_EXTRA_VOICE,
+  MAX_ROLE_ALIASES,
+  MAX_ROLES,
   NARRATOR_NAME,
   type MiMoPresetVoice,
   type ParsedReply,
@@ -26,11 +28,12 @@ export const sessionRoles = (session: Pick<Session, 'voiceRoles' | 'inherited'>)
  */
 export const applyParsedRoles = (roles: VoiceRole[], parsed: ParsedReply): VoiceRole[] => {
   const next = [...roles.map((role) => ({ ...role }))]
-  next.push(...parsed.newRoles.map((role) => ({ ...role, aliases: [...role.aliases] })))
+  const remaining = Math.max(0, MAX_ROLES - next.length)
+  next.push(...parsed.newRoles.slice(0, remaining).map((role) => ({ ...role, aliases: [...role.aliases] })))
   for (const { roleId, aliases } of parsed.aliasAdditions) {
     const role = next.find((item) => item.id === roleId)
     if (role) {
-      role.aliases = [...new Set([...role.aliases, ...aliases])]
+      role.aliases = [...new Set([...role.aliases, ...aliases])].slice(0, MAX_ROLE_ALIASES)
     }
   }
   for (const { roleId, to } of parsed.promotions) {
@@ -62,7 +65,7 @@ export const mergeInheritedRoles = (session: Session): VoiceRole[] => {
     return own
   }
   const seen = new Set(own.map((role) => role.id))
-  return [...own, ...inherited.filter((role) => !seen.has(role.id))]
+  return [...own, ...inherited.filter((role) => !seen.has(role.id))].slice(0, MAX_ROLES)
 }
 
 /** 面板顺序：主角 → 次要 → 路人；同级按首次出场 */

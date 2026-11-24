@@ -36,7 +36,7 @@ export function ReadingBars({ mode }: { mode: 'loading' | 'playing' }) {
   const svgRef = useRef<SVGSVGElement>(null)
   useEffect(() => {
     // 显式启动 SMIL 时间轴，支持容器初始处于暂停状态的 WebKit。
-    svgRef.current?.unpauseAnimations()
+    svgRef.current?.unpauseAnimations?.()
   }, [])
 
   return (

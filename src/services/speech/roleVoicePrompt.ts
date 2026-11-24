@@ -106,7 +106,7 @@ Full example (follow exactly this shape; do not invent another):
 ${declarationEn(exampleVoice(leadVoice))}
 Daiyu entered the room, careful at every step.
 
-「旁白｜Tone: calm narration」
+「Narrator｜Tone: calm narration」
 She glanced around; every object was exquisite.
 
 「Lin Daiyu｜Tone: startled」
@@ -120,9 +120,9 @@ Hard requirements:
    ${voiceRuleEn(leadVoice)}
 4. A character that already appeared uses only 「Name｜Tone: …」 — no voice, aliases or nature again.
 5. The tone is the actual emotion of this line. It may change per line but must stay within the character's nature.
-6. Importance is one of: 主角 (lead), 次要 (supporting), 路人 (extra). The lead is the character the story is about — in a scene, whoever has the most lines is a lead. The narrator is 次要.
+6. Importance is one of: lead, supporting, extra. The lead is the character the story is about — in a scene, whoever has the most lines is a lead. The narrator is supporting.
 7. Character names and aliases must match the names used in the prose; when using a short form later, use one listed in the aliases.
-8. In a story or a novel, narration where no one is speaking is tagged 「旁白｜Tone: …」 — it is read aloud too.
+8. In a story or a novel, narration where no one is speaking is tagged 「Narrator｜Tone: …」 — it is read aloud too.
    Never add any tag to ordinary Q&A, explanations, code, or a reply that is not telling a story at all.
 
 Again: 「」 is the only bracket for tags, and a tag always occupies its own line.`

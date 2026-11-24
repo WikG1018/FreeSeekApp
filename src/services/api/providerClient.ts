@@ -44,7 +44,7 @@ const goProtocolPath: Record<ProviderProfile['protocol'], string> = {
   anthropic: '/anthropic/v1',
   gemini: '/google/v1beta',
 }
-const endpoint = (
+export const providerEndpoint = (
   profile: ProviderProfile,
   operation: 'models' | 'chat',
   model: string,
@@ -210,7 +210,7 @@ export const readApiJson = async (
     reader.releaseLock()
   }
 }
-const fetchResponse = async (
+export const fetchProviderResponse = async (
   profile: ProviderProfile,
   url: string,
   body: unknown | undefined,
@@ -320,7 +320,7 @@ const loadProviderCatalog = async (
 ): Promise<ProviderCatalogModel[]> => {
   const profile = validateProfile(input, false),
     models = new Map<string, ProviderCatalogModel>()
-  const url = new URL(endpoint(profile, 'models', ''))
+  const url = new URL(providerEndpoint(profile, 'models', ''))
   const go = isOpenCodeGoUrl(url)
   const gemini = !go && profile.protocol === 'gemini'
   let next: string | undefined
@@ -328,7 +328,7 @@ const loadProviderCatalog = async (
     if (next) {
       url.searchParams.set(gemini ? 'pageToken' : 'after_id', next)
     }
-    const { response, dispose } = await fetchResponse(profile, url.toString(), undefined, signal)
+    const { response, dispose } = await fetchProviderResponse(profile, url.toString(), undefined, signal)
     try {
       const data = await readApiJson(response, signal)
       const items = gemini ? data.models : data.data
@@ -572,7 +572,7 @@ export async function* streamProviderMessage(
     task?.host &&
     (await task.host({
       protocol: profile.protocol,
-      url: endpoint(profile, 'chat', model, profile.stream),
+      url: providerEndpoint(profile, 'chat', model, profile.stream),
       headers: await headersFor(profile, isOpenCodeGoUrl(new URL(profile.url)), true, sessionId),
       body,
     }))
@@ -610,9 +610,9 @@ async function* streamProviderRound(
   collector?: SearchTurnCollector,
   showToolInput = false
 ): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
-  const { response, dispose } = await fetchResponse(
+  const { response, dispose } = await fetchProviderResponse(
     profile,
-    endpoint(profile, 'chat', model, profile.stream),
+    providerEndpoint(profile, 'chat', model, profile.stream),
     body,
     signal,
     { requestId, sessionId }

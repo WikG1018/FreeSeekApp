@@ -16,7 +16,7 @@ import {
   type SiderOrder,
 } from '../../services/settings.js'
 import { groupSessions, orderSessions } from '../../services/chat/sessionGroups.js'
-import { initChat, newChat, removeSession, useChatStore } from '../../services/chat/store.js'
+import { newChat, removeSession, retryInitChat, useChatStore } from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
@@ -45,6 +45,7 @@ export const Sider = ({
   const sessions = useChatStore((state) => state.sessions)
   const ready = useChatStore((state) => state.ready)
   const initError = useChatStore((state) => state.initError)
+  const historyUpgradeBlocked = useChatStore((state) => state.historyUpgradeBlocked)
   const historyMissing = useChatStore((state) => state.historyMissing)
   const activeId = useChatStore((state) => state.activeId)
   const order = useSettings((state) => state.siderOrder)
@@ -246,25 +247,27 @@ export const Sider = ({
           }}
         >
           <div data-scroll-edge-content="">
-            {!ready && (
+            {(!ready || historyMissing) && (
               <div className={styles.historyStatus} role="status">
                 <p>
                   {t(
-                    initError
-                      ? historyMissing
-                        ? 'historyPreviouslySaved'
-                        : 'sessionListLoadFailed'
-                      : 'sessionLoading'
+                    historyMissing
+                      ? 'historyPreviouslySaved'
+                      : initError
+                        ? historyUpgradeBlocked
+                          ? 'historyUpgradeBlocked'
+                          : 'sessionListLoadFailed'
+                        : 'sessionLoading'
                   )}
                 </p>
-                {initError && (
-                  <Button variant="outlined" size="m" onClick={() => void initChat()}>
+                {(initError || historyMissing) && (
+                  <Button variant="outlined" size="m" onClick={() => void retryInitChat()}>
                     {t('retry')}
                   </Button>
                 )}
               </div>
             )}
-            {ready && groups.length === 0 && !search.searching && !search.failed && (
+            {ready && !historyMissing && groups.length === 0 && !search.searching && !search.failed && (
               <p className={styles.emptyList} role="status">
                 {t(keyword ? 'siderEmptySearch' : 'siderEmptyHistory')}
               </p>

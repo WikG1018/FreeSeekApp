@@ -1,59 +1,73 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { IconChevronRightOutline14, IconEditOutline16, IconMasksOutline16, IconPlayMediaOutline16 } from '../base/icons.js'
+import {
+  IconChevronRightOutline14,
+  IconMasksOutline16,
+  IconPlayMediaOutline16,
+} from '../base/icons.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
 import { useSettings } from '../../services/settings.js'
 import { useProviders } from '../../services/providers.js'
 import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
 import { effectiveVoice, sortRoles, visibleRoleCount } from '../../services/speech/roleTable.js'
+import { useReadAloud } from '../../services/speech/readAloud.js'
 import type { VoiceRole } from '../../services/speech/roleMarkers.js'
-import { RoleVoiceDialog } from './RoleVoiceDialog.js'
+import { openSettings } from '../settings/settingsDialogState.js'
+import { ReadingBars } from '../messages/ReadingBars.js'
+import { RoleVoiceDialog, type RoleVoiceSaveResult } from './RoleVoiceDialog.js'
 import styles from './RoleVoice.module.css'
 
-/**
- * 顶栏的角色配音按钮与面板。位置与样式沿用会话成果按钮（同一槽位、同款玻璃胶囊）。
- * 只有开关打开且本会话已出现角色时才显示。
- */
 export const RoleVoiceButton = ({
   roles,
   onPreview,
   onSave,
 }: {
   roles: ReadonlyArray<VoiceRole>
-  onPreview: (role: VoiceRole) => void
-  onSave: (next: VoiceRole) => void
+  onPreview: (role: VoiceRole, context?: AudioContext) => void
+  onSave: (next: VoiceRole) => Promise<RoleVoiceSaveResult>
 }) => {
   const t = useTranslate()
   const roleVoice = useSettings((state) => state.roleVoice)
   const profiles = useProviders((state) => state.profiles)
-  const panel = useOptionPanel(t('settingsRoleVoice'), { kind: 'artifacts', align: 'end', focusFirst: false })
   const [editing, setEditing] = useState<VoiceRole | null>(null)
   const [showExtras, setShowExtras] = useState(false)
+  const extraList = useId()
+  const count = visibleRoleCount(roles) || roles.length
+  const panel = useOptionPanel(t('settingsRoleVoice'), {
+    kind: 'artifacts',
+    align: 'end',
+    disabled: !roleVoice.enabled || !count,
+  })
+  if (!roleVoice.enabled || !count) {
+    return null
+  }
+
   const profile = roleVoiceProfile(profiles, roleVoice)
   const ordered = sortRoles(roles)
   const named = ordered.filter((role) => role.importance !== 'extra')
   const extras = ordered.filter((role) => role.importance === 'extra')
-  const count = visibleRoleCount(roles)
-  if (!roleVoice.enabled || count === 0) {
-    return null
+  const renderRole = (role: VoiceRole) => {
+    const voice = effectiveVoice(role, roleVoice)
+    const label = voice.description
+      ? t('roleVoiceDescriptionShort')
+      : voice.preset === 'mimo_default'
+        ? t('roleVoiceDefaultPreset')
+        : (voice.preset ?? roleVoice.extraVoice)
+    return (
+      <VoiceRoleRow
+        key={role.id}
+        role={role}
+        label={label}
+        canPreview={!!profile}
+        onEdit={() => {
+          panel.close()
+          setEditing(role)
+        }}
+        onPreview={() => onPreview(role)}
+      />
+    )
   }
-  const extraVoice = roleVoice.extraVoice
-  const voiceLabel = (role: VoiceRole) => {
-    const voice = effectiveVoice(role, { extrasShareVoice: roleVoice.extrasShareVoice, extraVoice })
-    if (voice.description) {
-      return voice.description
-    }
-    return voice.preset ?? extraVoice
-  }
-  const importanceLabel = (role: VoiceRole) =>
-    t(`roleVoiceImportance_${role.importance}`)
-  const meta = (role: VoiceRole) => {
-    const parts = [importanceLabel(role)]
-    if (role.aliases.length) {
-      parts.push(role.aliases.join('、'))
-    }
-    return parts.join(' · ')
-  }
+
   return (
     <>
       <button
@@ -67,144 +81,122 @@ export const RoleVoiceButton = ({
         {...panel.trigger}
       >
         <IconMasksOutline16 />
-        <span>{count}</span>
+        <span aria-hidden>{count}</span>
       </button>
       {panel.open &&
         panel.render(
           <>
             <div className={styles.heading}>
               <strong>{t('settingsRoleVoice')}</strong>
-              <span>{count}</span>
+              <span>{roles.length}</span>
             </div>
-            {profile ? (
-              <>
-                <div className={styles.scroll} data-testid="role-voice-list">
-                  <ul className={styles.list}>
-                    {named.map((role) => (
-                      <li key={role.id}>
-                        <div
-                          className={styles.row}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={t('roleVoiceEdit', { name: role.name })}
-                          onClick={() => {
-                            panel.close()
-                            setEditing(role)
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              panel.close()
-                              setEditing(role)
-                            }
-                          }}
-                        >
-                          <button
-                            type="button"
-                            className={styles.preview}
-                            aria-label={t('roleVoicePreview', { name: role.name })}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              onPreview({ ...role, source: 'user' })
-                            }}
-                          >
-                            <IconPlayMediaOutline16 />
-                          </button>
-                          <span className={styles.copy}>
-                            <span className={styles.copyName}>{role.name}</span>
-                            <span className={styles.copyMeta}>{meta(role)}</span>
-                          </span>
-                          <span className={styles.copyVoice}>{voiceLabel(role)}</span>
-                          <span className={styles.editButton} aria-hidden>
-                            <IconEditOutline16 />
-                          </span>
-                        </div>
-                      </li>
-                    ))}
+            <div className={styles.scroll} data-testid="role-voice-list">
+              {!profile && (
+                <button
+                  type="button"
+                  className={styles.configuration}
+                  data-panel-item=""
+                  onClick={() => {
+                    panel.close()
+                    openSettings('providerSpeech')
+                  }}
+                >
+                  <span>
+                    <strong>{t('settingsRoleVoiceModelMissing')}</strong>
+                    <small>{t('settingsRoleVoiceModelGo')}</small>
+                  </span>
+                  <IconChevronRightOutline14 />
+                </button>
+              )}
+              {named.length > 0 && <ul className={styles.list}>{named.map(renderRole)}</ul>}
+              {extras.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.foldRow}
+                    data-panel-item=""
+                    aria-expanded={showExtras}
+                    aria-controls={extraList}
+                    onClick={() => setShowExtras(!showExtras)}
+                  >
+                    <IconChevronRightOutline14 />
+                    <span>{t('roleVoiceOthers', { count: extras.length })}</span>
+                    <span>
+                      {roleVoice.extrasShareVoice
+                        ? t('roleVoiceSharedVoice', { voice: roleVoice.extraVoice })
+                        : t('roleVoiceOwnVoices')}
+                    </span>
+                  </button>
+                  <ul id={extraList} className={styles.list} hidden={!showExtras}>
+                    {showExtras && extras.map(renderRole)}
                   </ul>
-                  {extras.length > 0 && (
-                    <>
-                      <button
-                        type="button"
-                        className={styles.foldRow}
-                        aria-expanded={showExtras}
-                        onClick={() => setShowExtras(!showExtras)}
-                      >
-                        <IconChevronRightOutline14 />
-                        <span>{t('roleVoiceOthers', { count: extras.length })}</span>
-                        <span>
-                          {roleVoice.extrasShareVoice
-                            ? t('roleVoiceSharedVoice', { voice: extraVoice })
-                            : t('roleVoiceOwnVoices')}
-                        </span>
-                      </button>
-                      {showExtras && (
-                        <ul className={styles.list}>
-                          {extras.map((role) => (
-                            <li key={role.id}>
-                              <div
-                                className={styles.row}
-                                role="button"
-                                tabIndex={0}
-                                aria-label={t('roleVoiceEdit', { name: role.name })}
-                                onClick={() => {
-                                  panel.close()
-                                  setEditing(role)
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter' || event.key === ' ') {
-                                    event.preventDefault()
-                                    panel.close()
-                                    setEditing(role)
-                                  }
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  className={styles.preview}
-                                  aria-label={t('roleVoicePreview', { name: role.name })}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    onPreview({ ...role, source: 'user' })
-                                  }}
-                                >
-                                  <IconPlayMediaOutline16 />
-                                </button>
-                                <span className={styles.copy}>
-                                  <span className={styles.copyName}>{role.name}</span>
-                                  <span className={styles.copyMeta}>{meta(role)}</span>
-                                </span>
-                                <span className={styles.copyVoice}>{voiceLabel(role)}</span>
-                                <span className={styles.editButton} aria-hidden>
-                                  <IconEditOutline16 />
-                                </span>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </>
-                  )}
-                </div>
-                <p className={styles.note}>{t('roleVoiceToneNote')}</p>
-              </>
-            ) : (
-              <p className={styles.note}>{t('settingsRoleVoiceNeedKey')}</p>
-            )}
+                </>
+              )}
+            </div>
           </>
         )}
       {editing && (
         <RoleVoiceDialog
           role={editing}
-          extraVoice={extraVoice}
+          extraVoice={roleVoice.extraVoice}
+          extrasShareVoice={roleVoice.extrasShareVoice}
           onClose={() => setEditing(null)}
-          onSave={(next) => {
-            onSave(next)
-            setEditing(null)
-          }}
-          onPreview={(next) => onPreview(next)}
+          onSave={onSave}
+          onPreview={profile ? onPreview : undefined}
         />
       )}
     </>
+  )
+}
+
+const VoiceRoleRow = ({
+  role,
+  label,
+  canPreview,
+  onEdit,
+  onPreview,
+}: {
+  role: VoiceRole
+  label: string
+  canPreview: boolean
+  onEdit: () => void
+  onPreview: () => void
+}) => {
+  const t = useTranslate()
+  const playback = useReadAloud((state) =>
+    state.messageId === 'preview-' + role.id ? state.status : 'idle'
+  )
+  const previewLabel =
+    playback === 'idle' ? t('roleVoicePreview', { name: role.name }) : t('ttsStop')
+  const meta = [t(`roleVoiceImportance_${role.importance}`), ...role.aliases].join(' · ')
+  return (
+    <li className={styles.row}>
+      {canPreview && (
+        <button
+          type="button"
+          className={styles.preview}
+          aria-label={previewLabel}
+          title={previewLabel}
+          data-panel-item=""
+          onClick={onPreview}
+        >
+          {playback === 'idle' ? <IconPlayMediaOutline16 /> : <ReadingBars mode={playback} />}
+        </button>
+      )}
+      <button
+        type="button"
+        className={styles.editRole}
+        aria-label={t('roleVoiceEdit', { name: role.name })}
+        data-panel-item=""
+        onClick={onEdit}
+      >
+        <span className={styles.copy}>
+          <span className={styles.copyName}>{role.name}</span>
+          <span className={styles.copyMeta}>{meta}</span>
+        </span>
+        <span className={styles.copyVoice}>{label}</span>
+        <IconChevronRightOutline14 />
+      </button>
+    </li>
   )
 }

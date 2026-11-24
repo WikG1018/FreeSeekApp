@@ -26,6 +26,8 @@ export class ServerSentEventDecoder {
   private eventType = ''
   private lastEventId = ''
 
+  constructor(private readonly maxEventChars = 2 * 1024 * 1024) {}
+
   /** 输入一段已解码的文本，返回其中完整的事件 */
   push(text: string): ServerSentEvent[] {
     this.buffer += text
@@ -44,7 +46,7 @@ export class ServerSentEventDecoder {
       lineStart = LINE_BREAK.lastIndex
     }
     this.buffer = this.buffer.slice(lineStart)
-    if (this.buffer.length > 2 * 1024 * 1024) {
+    if (this.buffer.length > this.maxEventChars) {
       throw new Error('SSE line exceeds size limit')
     }
     return events
@@ -76,7 +78,7 @@ export class ServerSentEventDecoder {
     switch (field) {
       case 'data':
         this.data = this.hasData ? `${this.data}\n${value}` : value
-        if (this.data.length > 2 * 1024 * 1024) {
+        if (this.data.length > this.maxEventChars) {
           throw new Error('SSE event exceeds size limit')
         }
         this.hasData = true
@@ -138,7 +140,8 @@ export class StreamReadError extends Error {
 export async function* readServerSentEvents(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
-  idleTimeoutMs: number = streamIdle.timeoutMs
+  idleTimeoutMs: number = streamIdle.timeoutMs,
+  maxEventChars?: number
 ): AsyncGenerator<ServerSentEvent> {
   const reader = stream.getReader()
   const onAbort = () => {
@@ -147,7 +150,7 @@ export async function* readServerSentEvents(
   signal?.addEventListener('abort', onAbort, { once: true })
   // TextDecoder 默认会去掉开头的 BOM；stream: true 保证多字节字符跨分片时不被截断
   const textDecoder = new TextDecoder()
-  const decoder = new ServerSentEventDecoder()
+  const decoder = new ServerSentEventDecoder(maxEventChars)
   let finished = false
   let receivedBytes = 0
   /** 每读到一段数据就重置；到点仍没数据视为连接已死 */

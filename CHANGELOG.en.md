@@ -1,5 +1,35 @@
 # Release notes
 
+## v3.1.6
+
+This stable release brings together changes since public version 3.0.0, covering chat backups and recovery, speech, long conversations, and the web app.
+
+### Chat backups and recovery
+
+- Import new chats alongside existing history and choose which copy to keep when a conversation appears in both places. Cancelling a failed or unfinished import preserves existing chats.
+- Recover usable branches from official DeepSeek archives. When a selected branch is missing, a valid endpoint is selected. If some conversations cannot be recovered, review the count before importing what is available.
+- Export available conversations and attachment originals when a record cannot be read or validated. Partial backups report skipped chats and missing originals and retain the names and details of missing attachments.
+- Retry now checks and repairs a blank history index before reloading available chats. A single unreadable conversation no longer prevents other chats from opening.
+- Improved web storage recovery and added history and storage evidence to diagnostic bundles.
+
+### Voice input and character voices
+
+- The composer shows recording time, a waveform, and transcription progress. Retry a failed transcription with the same recording, or discard it. Successful transcription goes into the draft for review.
+- Character voices use distinct voices for dialogue and narration and show who is speaking. Long lines are split near sentence boundaries.
+- Open the character list from the chat header to preview and edit voices. Aliases, shared walk-on voices, and character settings carry into continued conversations.
+- Speech synthesis can reuse an existing Xiaomi MiMo connection or use separately configured preset and described voice models. Errors for lost audio, timeouts, and microphone access are clearer.
+
+### Long conversations
+
+- Improved context compression with compatible third-party endpoints. The app accepts common summary completion signals and retries when an endpoint rejects reasoning parameters.
+- Improved estimates for models without a configured context window. Short chats get an earlier explanation, and completed compression work remains available for recovery.
+
+### Web and platform compatibility
+
+- Improved web startup on slow networks, offline loading, and cache handling. iPhone and iPad use the system font by default, with a choice under Appearance.
+- Updated back navigation in mobile browsers and home-screen apps to follow the active screen or panel and reduce white flashes and accidental exits.
+- Fixed a workspace file preview crash on older Android versions. In-app update notes display headings and lists in their correct sections.
+
 ## v3.1.5
 
 ### Stability fixes

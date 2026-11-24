@@ -19,6 +19,7 @@ import {
   providerModelParameters,
   saveProvider,
   validModel,
+  validateProviderUrl,
   type ProviderModelSettings,
   type ProviderProfile,
   type ProviderProtocol,
@@ -31,8 +32,9 @@ import {
 } from '../../services/reasoning.js'
 import { saveThirdPartySearch, setRoleVoice, useSettings } from '../../services/settings.js'
 import { useProviders } from '../../services/providers.js'
-import { MIMO_PRESET_VOICES } from '../../services/speech/roleMarkers.js'
-import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
+import { MIMO_TTS_MODEL, MIMO_TTS_DESIGN_MODEL } from '../../services/api/speech.js'
+import { describeReadAloudError, previewRoleVoice, stopReadAloud, useReadAloud } from '../../services/speech/readAloud.js'
+import { reusableVoiceProfiles, roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
 import { Button } from '../base/Button.js'
 import {
   IconAddOutline16,
@@ -1050,158 +1052,174 @@ export const ProviderSearchPage = ({ onDone }: { onDone: () => void }) => {
   )
 }
 
-/**
- * 语音合成配置：角色配音朗读用哪套语音服务。
- * 默认「跟随对话模型」——同一个 MiMo 配置既能聊天也能朗读；
- * 也可以单独填地址和 Key，用于只提供 TTS 的服务或想分开计费。
- */
+const SPEECH_CHECK_ID = 'speech-settings-preview'
+
+/** The connection page manages service settings. Voices are configured in chat preferences. */
 export const ProviderSpeechPage = ({
   onDone,
   onSwitch,
 }: {
   onDone: () => void
-  /** 跳到「对话偏好」里的总开关：开关只在一处出现，避免两个开关互相打架 */
   onSwitch: () => void
 }) => {
   const t = useTranslate()
-  const initial = useSettings((state) => state.roleVoice)
+  const settings = useSettings((state) => state.roleVoice)
   const profiles = useProviders((state) => state.profiles)
+  const initial = {
+    source: settings.source,
+    providerId: settings.providerId,
+    custom: {
+      ...settings.custom,
+      designModel: settings.custom.designModel ?? (
+        settings.custom.model === MIMO_TTS_MODEL ? '' : settings.custom.model
+      ),
+    },
+  }
   const [form, setForm] = useState(initial)
   const [error, setError] = useState('')
+  const previewing = useReadAloud((state) => state.messageId === SPEECH_CHECK_ID)
   const leave = useSettingsLeave(JSON.stringify(form) !== JSON.stringify(initial))
-  const patch = (value: Partial<typeof form>) => setForm((current) => ({ ...current, ...value }))
-  const followProfile = roleVoiceProfile(profiles, { ...form, source: 'follow' })
-  const customReady = Boolean(form.custom.url.trim() && form.custom.apiKey.trim())
+  const available = reusableVoiceProfiles(profiles)
+  const profile = roleVoiceProfile(profiles, form)
+
+  const stopPreview = () => {
+    if (useReadAloud.getState().messageId === SPEECH_CHECK_ID) {
+      stopReadAloud()
+    }
+  }
+  useEffect(() => stopPreview, [])
+
+  const patch = (next: Partial<typeof form>) => {
+    stopPreview()
+    setError('')
+    setForm((current) => ({ ...current, ...next }))
+  }
+  const patchCustom = (key: keyof typeof form.custom, value: string) =>
+    patch({ custom: { ...form.custom, [key]: value } })
+
+  const save = () => {
+    const url = form.custom.url.trim()
+    if (form.source === 'custom') {
+      if (!url || !form.custom.apiKey.trim()) {
+        setError(t('providerSpeechMissingCustom'))
+        return
+      }
+      try {
+        validateProviderUrl(url)
+      } catch {
+        setError(t('providerErrorUrl'))
+        return
+      }
+      if ([form.custom.model, form.custom.designModel].some((model) => model.trim() && !validModel(model.trim()))) {
+        setError(t('providerSpeechInvalidModel'))
+        return
+      }
+    }
+    if (!setRoleVoice({ ...form, custom: {
+      url,
+      apiKey: form.custom.apiKey.trim(),
+      model: form.custom.model.trim(),
+      designModel: form.custom.designModel.trim(),
+    } })) {
+      setError(t('providerErrorStorage'))
+      return
+    }
+    showToast({ key: 'providerSaved' })
+    onDone()
+  }
+
   return (
     <div className={styles.page}>
-      {/* 开关只在「对话偏好」里出现一次；这里说明状态并给个入口，避免两处开关互相打架 */}
-      <Section title={t('providerSpeechSection')}>
+      <Section>
         <Row
           label={t('settingsRoleVoice')}
-          description={form.enabled ? t('providerSpeechOn') : t('providerSpeechOff')}
-          className={styles.providerRow}
-          icon={<ProviderMark id="xiaomimimo" />}
-          prominent
+          target="chat"
+          description={t(settings.enabled ? 'providerSpeechOn' : 'providerSpeechOff')}
           detail={t('providerSpeechSwitchHint')}
           onClick={onSwitch}
         />
       </Section>
-      <Section title={t('providerSpeechSource')}>
+      <Section>
         <Select
           ariaLabel={t('providerSpeechSource')}
-          settingRow="detail"
+          settingRow="value"
           value={form.source}
           options={[
             { value: 'follow', label: t('providerSpeechFollow'), detail: t('providerSpeechFollowHint') },
             { value: 'custom', label: t('providerSpeechCustom'), detail: t('providerSpeechCustomHint') },
           ]}
-          onChange={(source) => patch({ source: source as typeof form.source })}
+          onChange={(source) => patch({ source })}
         />
         {form.source === 'follow' ? (
-          followProfile ? (
-            <Row
-              label={followProfile.name}
-              description={new URL(followProfile.url).host}
-              className={styles.providerRow}
-              icon={<ProviderMark id={followProfile.preset?.id ?? 'xiaomimimo'} />}
-              prominent
-              detail={t('providerSpeechReuse')}
-            />
-          ) : (
-            <p className={styles.hint}>{t('providerSpeechNeedMiMo')}</p>
-          )
+          <>
+            {available.length > 0 && (
+              <Select
+                ariaLabel={t('providerSpeechConnection')}
+                settingRow="value"
+                value={form.providerId ?? ''}
+                options={[
+                  { value: '', label: t('providerSpeechAutomatic') },
+                  ...available.map((entry) => ({ value: entry.id, label: entry.name })),
+                ]}
+                onChange={(providerId) => patch({ providerId: providerId || null })}
+              />
+            )}
+            {!profile && <p className={styles.hint}>{t('providerSpeechNeedMiMo')}</p>}
+          </>
         ) : (
           <div className={styles.formFields}>
-            <KeyField
-              label={t('providerSpeechUrl')}
-              value={form.custom.url}
-              placeholder="https://api.xiaomimimo.com/v1"
-              change={(url) => patch({ custom: { ...form.custom, url } })}
-            />
-            <KeyField
-              label={t('providerKey')}
-              value={form.custom.apiKey}
-              change={(apiKey) => patch({ custom: { ...form.custom, apiKey } })}
-            />
-            <KeyField
-              label={t('providerSpeechModel')}
-              value={form.custom.model}
-              placeholder="mimo-v2.5-tts"
-              change={(model) => patch({ custom: { ...form.custom, model } })}
-            />
+            <Field label={t('providerSpeechUrl')}>
+              <input type="url" autoCapitalize="none" autoComplete="off" spellCheck={false}
+                value={form.custom.url} placeholder="https://api.xiaomimimo.com/v1"
+                onChange={(event) => patchCustom('url', event.target.value)} />
+            </Field>
+            <KeyField label={t('providerKey')} value={form.custom.apiKey}
+              change={(apiKey) => patchCustom('apiKey', apiKey)} />
+            <Field label={t('providerSpeechPresetModel')}>
+              <input autoCapitalize="none" autoComplete="off" spellCheck={false}
+                value={form.custom.model} placeholder={MIMO_TTS_MODEL}
+                onChange={(event) => patchCustom('model', event.target.value)} />
+            </Field>
+            <Field label={t('providerSpeechDesignModel')}>
+              <input autoCapitalize="none" autoComplete="off" spellCheck={false}
+                value={form.custom.designModel} placeholder={MIMO_TTS_DESIGN_MODEL}
+                onChange={(event) => patchCustom('designModel', event.target.value)} />
+            </Field>
             <p className={styles.hint}>{t('providerSpeechCustomNote')}</p>
           </div>
         )}
+        {profile && (
+          <Row
+            label={t(previewing ? 'ttsStop' : 'providerSpeechPreview')}
+            onClick={() => {
+              setError('')
+              previewRoleVoice({
+                role: {
+                  id: 'speech-settings',
+                  name: t('roleVoiceNarrator'),
+                  preset: settings.narratorVoice,
+                  aliases: [],
+                  nature: '',
+                  importance: 'supporting',
+                  source: 'user',
+                  createdAt: 0,
+                },
+                text: t('providerSpeechPreviewText'),
+                messageId: SPEECH_CHECK_ID,
+                profile,
+                extrasShareVoice: false,
+                extraVoice: settings.extraVoice,
+              }, (failure) => {
+                const message = describeReadAloudError(failure)
+                setError(t(message.key, message.params))
+              })
+            }}
+          />
+        )}
+        {error && <p className={styles.error} role="alert">{error}</p>}
       </Section>
-      <Section title={t('providerSpeechVoices')}>
-        <Select
-          ariaLabel={t('settingsRoleVoiceLead')}
-          settingRow="detail"
-          value={form.leadVoice}
-          options={[
-            { value: 'preset', label: t('settingsRoleVoiceLeadPreset'), detail: t('providerSpeechLeadPresetHint') },
-            { value: 'description', label: t('settingsRoleVoiceLeadDescription'), detail: t('settingsRoleVoiceLeadHint') },
-          ]}
-          onChange={(leadVoice) => patch({ leadVoice: leadVoice as typeof form.leadVoice })}
-        />
-        <Select
-          ariaLabel={t('settingsRoleVoiceNarrator')}
-          settingRow="value"
-          compactMenu
-          value={form.narratorVoice}
-          options={MIMO_PRESET_VOICES.map((voice) => ({
-            value: voice.id,
-            label: `${voice.id} · ${voice.label}`,
-            shortLabel: voice.id,
-          }))}
-          onChange={(narratorVoice) => patch({ narratorVoice: narratorVoice as typeof form.narratorVoice })}
-        />
-        <Select
-          ariaLabel={t('settingsRoleVoiceExtra')}
-          settingRow="value"
-          compactMenu
-          value={form.extraVoice}
-          options={MIMO_PRESET_VOICES.map((voice) => ({
-            value: voice.id,
-            label: `${voice.id} · ${voice.label}`,
-            shortLabel: voice.id,
-          }))}
-          onChange={(extraVoice) => patch({ extraVoice: extraVoice as typeof form.extraVoice })}
-        />
-        <SwitchRow
-          label={t('settingsRoleVoiceShare')}
-          description={t('settingsRoleVoiceShareHint')}
-          checked={form.extrasShareVoice}
-          change={(extrasShareVoice) => patch({ extrasShareVoice })}
-        />
-      </Section>
-      {error && (
-        <p className={styles.error} role="alert">
-          {error}
-        </p>
-      )}
       <div className={styles.footer} data-provider-actions="">
-        <Button
-          block
-          onClick={() => {
-            if (form.enabled && form.source === 'custom' && !customReady) {
-              setError(t('providerSpeechMissingCustom'))
-              return
-            }
-            if (form.enabled && form.source === 'follow' && !followProfile) {
-              setError(t('providerSpeechNeedMiMo'))
-              return
-            }
-            if (!setRoleVoice(form)) {
-              setError(t('providerErrorStorage'))
-              return
-            }
-            showToast({ key: 'providerSaved' })
-            onDone()
-          }}
-        >
-          {t('providerSpeechSave')}
-        </Button>
+        <Button block onClick={save}>{t('providerSpeechSave')}</Button>
       </div>
       {leave.dialog}
     </div>

@@ -1,5 +1,20 @@
-import type { ProviderProfile } from '../providers.js'
+import { validateProviderUrl, type ProviderProfile } from '../providers.js'
 import type { RoleVoiceSettings } from '../settings.js'
+import type { MiMoSpeechProfile } from '../api/speech.js'
+
+const usesMiMoHost = (profile: ProviderProfile) => {
+  try {
+    const host = new URL(profile.url).hostname
+    return host === 'xiaomimimo.com' || host.endsWith('.xiaomimimo.com')
+  } catch {
+    return false
+  }
+}
+
+export const reusableVoiceProfiles = (profiles: ReadonlyArray<ProviderProfile>) =>
+  profiles.filter((profile) => profile.apiKey.trim() && profile.url && (
+    profile.preset?.id === 'xiaomimimo' || usesMiMoHost(profile)
+  ) && (profile.protocol === 'openai' || profile.protocol === 'responses'))
 
 /**
  * 角色配音用哪套 TTS 配置。
@@ -12,13 +27,18 @@ import type { RoleVoiceSettings } from '../settings.js'
 export const roleVoiceProfile = (
   profiles: ReadonlyArray<ProviderProfile>,
   roleVoice: Pick<RoleVoiceSettings, 'source' | 'providerId' | 'custom'>
-): ProviderProfile | null => {
+): MiMoSpeechProfile | null => {
   if (roleVoice.source === 'custom') {
-    const { url, apiKey, model } = roleVoice.custom
+    const { url, apiKey, model, designModel } = roleVoice.custom
     if (!url.trim() || !apiKey.trim()) {
       return null
     }
     // 单独配置的语音服务不落进供应商列表：每次按需合成一个临时 profile
+    try {
+      validateProviderUrl(url)
+    } catch {
+      return null
+    }
     return {
       id: 'role-voice-custom',
       revision: 'role-voice-custom',
@@ -27,19 +47,21 @@ export const roleVoiceProfile = (
       apiKey: apiKey.trim(),
       protocol: 'openai',
       model: model.trim() || 'mimo-v2.5-tts',
+      speechModel: model.trim() || undefined,
+      speechDesignModel: designModel?.trim(),
       models: [],
       modelListUrl: '',
       headers: {},
       extraBody: {},
     }
   }
-  const usable = profiles.filter((profile) => profile.apiKey && profile.url)
+  const usable = reusableVoiceProfiles(profiles)
   if (roleVoice.providerId) {
     return usable.find((profile) => profile.id === roleVoice.providerId) ?? null
   }
   return (
     usable.find((profile) => profile.preset?.id === 'xiaomimimo') ??
-    usable.find((profile) => /xiaomimimo\.com/i.test(profile.url)) ??
+    usable.find(usesMiMoHost) ??
     null
   )
 }

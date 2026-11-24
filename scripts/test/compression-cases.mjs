@@ -419,7 +419,9 @@ export const runCompressionCases = async (run) => {
           throw Error('Missing summary: ' + JSON.stringify(state().messages.at(-1).error))
         const edited = a.store.editContextSummary('long', summarized, 'User edited facts')
         const blob = (await a.backup.exportHistory()).blob
-        await a.backup.importHistory(new File([blob], 'test.zip'))
+        await a.backup.importHistory(new File([blob], 'test.zip'), undefined, async () =>
+          new Set(['long'])
+        )
         const restored = await a.db.loadSession('long')
         a.store.selectSession('long')
         await new Promise((resolve) => {
@@ -445,7 +447,9 @@ export const runCompressionCases = async (run) => {
           oldSent: JSON.stringify(sent[0]).includes('🌊末尾'),
           edited,
           editedNote: restored.contextSummary.text,
-          originalFile: await (await a.db.loadFile(file.id)).text(),
+          originalFile: await (await a.db.loadFile(
+            restored.messages.find(({ files }) => files?.length).files[0].id
+          )).text(),
           compactReply:
             restored.messages.at(-1).id === second.id && restored.messages.at(-1).status === 'done',
           inputs: chunks.join(''),
@@ -1101,14 +1105,18 @@ export const runCompressionCases = async (run) => {
         a.store.sendMessage(id)
         await a.waitIdle()
         const backup = (await a.backup.exportHistory()).blob
-        await a.backup.importHistory(new File([backup], 'recent-context.zip'))
+        await a.backup.importHistory(new File([backup], 'recent-context.zip'), undefined, async () =>
+          new Set([id])
+        )
         const stored = await a.db.loadSession(id)
         return {
           original: stored.messages[0].content,
           status: stored.messages.at(-1).status,
           retained: stored.contextSummary.recentOnly,
           cut: stored.contextSummary.coveredRounds,
-          attachment: await (await a.db.loadFile('document')).text(),
+          attachment: await (await a.db.loadFile(
+            stored.messages.find(({ files }) => files?.length).files[0].id
+          )).text(),
           calls: window.__recentCalls,
         }
       })

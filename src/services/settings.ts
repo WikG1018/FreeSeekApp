@@ -34,7 +34,7 @@ export type RoleVoiceSettings = {
   /** source=follow 时可选指定某个已配置的供应商；null 表示自动找 MiMo */
   providerId: string | null
   /** source=custom 时的语音服务 */
-  custom: { url: string; apiKey: string; model: string }
+  custom: { url: string; apiKey: string; model: string; designModel?: string }
   leadVoice: 'preset' | 'description'
   narratorVoice: MiMoPresetVoice
   extraVoice: MiMoPresetVoice
@@ -182,7 +182,7 @@ const DEFAULT_ROLE_VOICE: RoleVoiceSettings = {
   enabled: false,
   source: 'follow',
   providerId: null,
-  custom: { url: '', apiKey: '', model: '' },
+  custom: { url: '', apiKey: '', model: '', designModel: '' },
   leadVoice: 'preset',
   narratorVoice: DEFAULT_NARRATOR_VOICE,
   extraVoice: DEFAULT_EXTRA_VOICE,
@@ -207,6 +207,7 @@ const initialRoleVoice = (): RoleVoiceSettings => {
           url: typeof custom.url === 'string' ? custom.url : '',
           apiKey,
           model: typeof custom.model === 'string' ? custom.model : '',
+          ...(typeof custom.designModel === 'string' ? { designModel: custom.designModel } : {}),
         },
         leadVoice: value.leadVoice === 'description' ? 'description' : 'preset',
         narratorVoice: isPresetVoice(value.narratorVoice) ? value.narratorVoice : DEFAULT_ROLE_VOICE.narratorVoice,
@@ -412,6 +413,7 @@ export const setProSearchOn = (proSearchOn: boolean) => {
 /** 改角色配音的一项设置；返回是否写入成功 */
 export const setRoleVoice = (patch: Partial<RoleVoiceSettings>): boolean => {
   const roleVoice = { ...useSettings.getState().roleVoice, ...patch }
+  registerLogSecret(roleVoice.custom.apiKey)
   if (!write(KEYS.roleVoice, JSON.stringify(roleVoice))) {
     return false
   }

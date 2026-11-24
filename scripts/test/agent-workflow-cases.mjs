@@ -85,7 +85,9 @@ export const runAgentWorkflowCases = async (run) => {
         ])
         const backup = await a.backup.exportHistory()
         await a.backup.importHistory(
-          new File([backup.blob], backup.name, { type: 'application/zip' })
+          new File([backup.blob], backup.name, { type: 'application/zip' }),
+          undefined,
+          async () => new Set(['workspace-roundtrip'])
         )
         const restored = await a.db.loadSession('workspace-roundtrip')
         const files = (await a.workspaces.readWorkspace(restored.workspaceId)).files

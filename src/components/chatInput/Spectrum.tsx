@@ -41,7 +41,7 @@ export const Spectrum = ({ getAnalyser }: { getAnalyser: () => AnalyserNode | nu
 
   useEffect(() => {
     const root = rootRef.current
-    if (!root || count < 1) {
+    if (!root || count < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       return
     }
     const bars = Array.from(root.children) as HTMLElement[]
@@ -79,7 +79,9 @@ export const Spectrum = ({ getAnalyser }: { getAnalyser: () => AnalyserNode | nu
             // 频段窄于一个 bin：在相邻 bin 之间线性插值，避免低频几根柱子完全同步
             const base = Math.min(data.length - 2, Math.floor(center))
             const weight = center - base
-            peak = data[base] * (1 - weight) + data[base + 1] * weight
+            const low = Math.max(DB_FLOOR, data[base])
+            const high = Math.max(DB_FLOOR, data[base + 1])
+            peak = low * (1 - weight) + high * weight
           } else {
             for (let bin = from; bin < to; bin += 1) {
               peak = Math.max(peak, data[bin])

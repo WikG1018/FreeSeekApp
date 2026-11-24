@@ -17,7 +17,7 @@ export const roleVoiceActive = (roleVoice: Pick<RoleVoiceSettings, 'enabled'>, a
 /** 系统提示词里要追加的角色配音段：规则 + 已定角色。未开启或 Agent 模式时为空串 */
 export const roleVoicePromptFor = (session: Session | undefined, agent: AssistantMessage['agent'] | undefined, locale: string): string => {
   const { roleVoice } = useSettings.getState()
-  if (!roleVoiceActive(roleVoice, agent)) {
+  if (session?.mode === 'agent' || !roleVoiceActive(roleVoice, agent)) {
     return ''
   }
   const roles = sessionRoles(session ?? {})
@@ -27,7 +27,7 @@ export const roleVoicePromptFor = (session: Session | undefined, agent: Assistan
 const visibleText = (reply: Pick<AssistantMessage, 'blocks'>): string =>
   (reply.blocks ?? [])
     .flatMap((block) => (block.type === 'text' && !block.isTemplate ? [block.text] : []))
-    .join('\n')
+    .join('')
 
 /**
  * 回答结束后，把这条回答里首次出场的角色、补充的别名、升级的重要性、后补的音色和性格写回会话。
@@ -39,7 +39,7 @@ export const withReplyRoles = (
   reply: AssistantMessage,
   roleVoice: RoleVoiceSettings
 ): Session => {
-  if (!roleVoiceActive(roleVoice, reply.agent) || reply.status !== 'done') {
+  if (session.mode === 'agent' || !roleVoiceActive(roleVoice, reply.agent) || reply.status !== 'done') {
     return session
   }
   const text = visibleText(reply)

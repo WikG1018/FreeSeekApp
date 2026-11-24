@@ -580,9 +580,14 @@ export const cleanSessionMemory = (sessionId: string, deleteNotes: boolean) =>
     return changed ? { ...current, grants, memories, suggestions, activity } : current
   })
 
-export const cleanReplacedHistoryMemory = (restored: ReadonlySet<string>) =>
+export const cleanReplacedHistoryMemory = (
+  restored: ReadonlySet<string>,
+  replaced?: ReadonlySet<string>
+) =>
   change((current) => {
-    const grants = current.grants.filter(({ sessionId }) => !sessionId)
+    const grants = current.grants.filter(
+      ({ sessionId }) => !sessionId || (replaced && !replaced.has(sessionId))
+    )
     const suggestions = current.suggestions.filter((item) => restored.has(item.source.sessionId))
     const memories = current.memories.map((note) =>
       note.source && !restored.has(note.source.sessionId) ? { ...note, source: undefined } : note

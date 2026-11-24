@@ -1,7 +1,13 @@
 import { readMessageEvent } from '../../api/parseEvent.js'
 import type { MessageUsage } from '../../api/types.js'
 import type { FileAttachment, Message, ReplyBlock, Session } from '../types.js'
-import type { VoiceRole } from '../../speech/roleMarkers.js'
+import {
+  MAX_ROLE_ALIASES,
+  MAX_ROLE_NAME,
+  MAX_ROLE_TEXT,
+  MAX_ROLES,
+  type VoiceRole,
+} from '../../speech/roleMarkers.js'
 import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
 import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
@@ -687,10 +693,6 @@ const contextSummary = (value: unknown) => {
 
 const MIMO_PRESETS = ['冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean', 'mimo_default'] as const
 const IMPORTANCES = ['lead', 'supporting', 'extra'] as const
-const MAX_ROLE_NAME = 80
-const MAX_ROLES = 500
-/** 音色描述与性格底色的长度上限：提示词里要带，不能无限长 */
-const MAX_ROLE_TEXT = 400
 
 const voiceRole = (value: unknown): VoiceRole => {
   const raw = record(value)
@@ -721,7 +723,7 @@ const voiceRole = (value: unknown): VoiceRole => {
     aliases: list(raw.aliases, (alias) => {
       const text = string(alias)
       return text && text.length <= MAX_ROLE_NAME ? text : invalid()
-    }).slice(0, 50),
+    }).slice(0, MAX_ROLE_ALIASES),
     ...(preset !== undefined && { preset }),
     ...(description !== undefined && { description }),
     nature,

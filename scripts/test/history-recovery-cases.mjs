@@ -1,6 +1,298 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { unzipSync } from 'fflate'
+
+const changeHistory = (page, ops) =>
+  page.evaluate((ops) => new Promise((resolve, reject) => {
+    const request = indexedDB.open('freeseek')
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const database = request.result
+      const tx = database.transaction([...new Set(ops.map(([name]) => name))], 'readwrite')
+      for (const [name, method, ...args] of ops) {
+        tx.objectStore(name)[method](...args)
+      }
+      tx.oncomplete = () => {
+        database.close()
+        resolve()
+      }
+      tx.onabort = () => {
+        database.close()
+        reject(tx.error)
+      }
+    }
+  }), ops)
 
 export const runHistoryRecoveryCases = async (run) => {
+  await run(
+    'history visibility honors the legacy Android presence marker without a count',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        a.historyCheckpoint.historyCheckpointReader.read = async () => ({ present: true })
+        a.store.useChatStore.setState({ ready: false })
+        await a.store.initChat()
+        const { ready, historyMissing, historyMayStartFresh } = a.store.useChatStore.getState()
+        return { ready, historyMissing, historyMayStartFresh }
+      })
+      assert.deepEqual(result, { ready: false, historyMissing: true, historyMayStartFresh: true })
+    },
+    (context) => context.addInitScript(() => {
+      window.CapacitorCustomPlatform = { name: 'android' }
+    })
+  )
+
+  await run(
+    'history visibility loads verified chats when the legacy count preference throws',
+    async (page) => {
+      const titles = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([a.fixtures.session({ id: 'known-chat', title: '标题仍然可读' })])
+        a.store.useChatStore.setState({ ready: false, sessions: [] })
+        const getItem = Storage.prototype.getItem
+        try {
+          Storage.prototype.getItem = function (key) {
+            if (key === 'freeseek:history-count') throw new DOMException('Denied', 'SecurityError')
+            return getItem.call(this, key)
+          }
+          await a.store.initChat()
+        } finally {
+          Storage.prototype.getItem = getItem
+        }
+        const state = a.store.useChatStore.getState()
+        return { ready: state.ready, titles: state.sessions.map(({ title }) => title) }
+      })
+      assert.deepEqual(titles, { ready: true, titles: ['标题仍然可读'] })
+    }
+  )
+
+  await run(
+    'history visibility recovers the only committed bank after the active pointer and index break',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const session = a.fixtures.session({
+          id: 'committed-body',
+          title: '保留下来的会话',
+          messages: [a.fixtures.user('u', '恢复后的完整正文')],
+        })
+        await a.backup.importHistory(new File([await a.exportArchive([session])], 'backup.zip'))
+      })
+      await changeHistory(page, [
+        ['historyState', 'put', false, 'useStagingStores'],
+        ['sessionSummaries', 'clear'],
+      ])
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      await page.evaluate(() => window.__audit.store.selectSession('committed-body'))
+      await page.getByText('恢复后的完整正文', { exact: true }).waitFor()
+    }
+  )
+
+  await run(
+    'history visibility rebuilds around a malformed record without deleting any data',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([a.fixtures.session({
+          id: 'healthy-chat',
+          title: '可读会话',
+          messages: [a.fixtures.user('u', '有完整正文')],
+        })])
+      })
+      await changeHistory(page, [
+        ['sessions', 'put', { id: 'damaged-chat', title: '正文损坏的会话', createdAt: 1, updatedAt: 1 }],
+        ['sessionSummaries', 'clear'],
+      ])
+      await page.reload()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        return {
+          ids: a.store.useChatStore.getState().sessions.map(({ id }) => id).sort(),
+          count: (await a.db.getStorageSummary()).sessionCount,
+        }
+      })
+      assert.deepEqual(result, { ids: ['damaged-chat', 'healthy-chat'], count: 2 })
+      await page.evaluate(() => window.__audit.store.selectSession('healthy-chat'))
+      await page.getByText('有完整正文', { exact: true }).waitFor()
+      await page.evaluate(() => window.__audit.store.selectSession('damaged-chat'))
+      await page.getByText('对话加载失败，请重试', { exact: true }).waitFor()
+    }
+  )
+
+  await run(
+    'history visibility treats a single missing read as recoverable and keeps the attachment',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([
+          a.fixtures.session({
+            id: 'only-conversation',
+            title: '唯一的聊天',
+            messages: [a.fixtures.user('u', '不能消失的正文', {
+              files: [{ id: 'saved-original', name: 'fixture.txt', size: 7, mimeType: 'text/plain', isImage: false }],
+            })],
+          }),
+        ], [{ id: 'saved-original', blob: new Blob(['fixture']) }])
+        a.store.useChatStore.setState({ sessionCache: {} })
+        const original = IDBObjectStore.prototype.get
+        IDBObjectStore.prototype.get = function (key) {
+          return original.call(this, this.name === 'sessions' && key === 'only-conversation' ? 'miss-on-get' : key)
+        }
+        a.store.selectSession('only-conversation')
+      })
+      await page.getByText('不能消失的正文', { exact: true }).waitFor()
+      const actual = await page.evaluate(async () => {
+        const db = window.__audit.db
+        return {
+          count: (await db.getStorageSummary()).sessionCount,
+          original: await (await db.loadFile('saved-original')).text(),
+        }
+      })
+      assert.deepEqual(actual, { count: 1, original: 'fixture' })
+    }
+  )
+
+  await run(
+    'history visibility restores from the startup recovery screen and watches the restored list',
+    async (page) => {
+      await page.setViewportSize({ width: 1366, height: 860 })
+      const encoded = await page.evaluate(async () => {
+        const a = window.__audit
+        const session = a.fixtures.session({
+          id: 'recovered-here', title: '从恢复入口导入', messages: [a.fixtures.user('u', '恢复入口正文')],
+        })
+        return btoa(String.fromCharCode(...new Uint8Array(await (await a.exportArchive([session])).arrayBuffer())))
+      })
+      await page.getByRole('button', { name: '打开备份设置', exact: true }).click()
+      const importButton = page.getByRole('button', { name: /导入历史对话/ })
+      await importButton.waitFor()
+      assert.equal(await importButton.isEnabled(), true)
+      await page.locator('input[type="file"][accept*="application/zip"]').setInputFiles({
+        name: '恢复测试.zip', mimeType: 'application/zip', buffer: Buffer.from(encoded, 'base64'),
+      })
+      await page.getByRole('button', { name: '开始导入', exact: true }).click()
+      await page.getByRole('button', { name: '查看已导入的对话', exact: true }).click()
+      await page.getByText('恢复入口正文', { exact: true }).waitFor()
+      await changeHistory(page, [
+        ['sessionsStaging', 'clear'],
+        ['sessionSummaries', 'clear'],
+        ['historyState', 'clear'],
+      ])
+      await page.evaluate(() => window.dispatchEvent(new Event('freeseek:history-terminated')))
+      const sidebar = page.getByTestId('sider-list')
+      await sidebar.getByText(/暂时读取不到之前的聊天记录/).waitFor({ timeout: 3000 })
+      await sidebar.getByText('从恢复入口导入', { exact: true }).waitFor()
+    },
+    (context) => context.addInitScript(() => {
+      localStorage.setItem('freeseek:history-count', '40')
+    }),
+    false
+  )
+
+  await run(
+    'history visibility keeps the last readable list and retries after a live storage loss',
+    async (page) => {
+      await page.setViewportSize({ width: 1366, height: 860 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([a.fixtures.session({
+          id: 'lived-history', title: '最后读到的列表', messages: [a.fixtures.user('old', '缓存正文')],
+        })])
+      })
+      await changeHistory(page, [
+        ['sessions', 'clear'],
+        ['sessionSummaries', 'clear'],
+        ['historyState', 'clear'],
+      ])
+      await page.evaluate(() => window.dispatchEvent(new Event('freeseek:history-terminated')))
+      const sidebar = page.getByTestId('sider-list')
+      await sidebar.getByText(/暂时读取不到之前的聊天记录/).waitFor()
+      await sidebar.getByText('最后读到的列表', { exact: true }).waitFor()
+      assert.equal(await sidebar.getByText('还没有对话', { exact: true }).count(), 0)
+      await page.evaluate(async () => {
+        const a = window.__audit
+        await a.db.saveSession(a.fixtures.session({
+          id: 'lived-history', title: '再次可读的列表', messages: [a.fixtures.user('old', '恢复正文')],
+        }))
+      })
+      await sidebar.getByRole('button', { name: '重试', exact: true }).click()
+      await sidebar.getByText('再次可读的列表', { exact: true }).waitFor()
+      assert.equal(await sidebar.getByText(/暂时读取不到之前的聊天记录/).count(), 0)
+    }
+  )
+
+  await run(
+    'history visibility reports a blocked upgrade and recovers when the old window closes',
+    async (page) => {
+      await page.getByText('另一个窗口正在使用旧版聊天存储。关闭那个窗口后重试。', { exact: true }).waitFor()
+      await page.evaluate(() => window.__legacyHistory.close())
+      await page.getByRole('button', { name: '重试', exact: true }).click()
+      await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
+      const ids = await page.evaluate(() =>
+        window.__audit.store.useChatStore.getState().sessions.map(({ id }) => id).sort()
+      )
+      assert.deepEqual(ids, ['legacy-damaged', 'legacy-readable'])
+      await page.evaluate(() => window.__audit.store.selectSession('legacy-readable'))
+      await page.getByText('升级保留的历史正文', { exact: true }).waitFor()
+    },
+    (context) => context.addInitScript(() => {
+      const request = indexedDB.open('freeseek', 12)
+      request.onupgradeneeded = () => {
+        const sessions = request.result.createObjectStore('sessions', { keyPath: 'id' })
+        sessions.put({
+          id: 'legacy-readable',
+          title: '旧版里正常的对话',
+          createdAt: 1,
+          updatedAt: 1,
+          messages: [{ id: 'u', role: 'user', content: '升级保留的历史正文', files: [], createdAt: 1 }],
+        })
+        sessions.put({ id: 'legacy-damaged', title: '旧版里损坏的对话', createdAt: 2, updatedAt: 2 })
+      }
+      request.onsuccess = () => { window.__legacyHistory = request.result }
+    }),
+    false
+  )
+
+  await run(
+    'history visibility shows verified chats while interrupted import cleanup is waiting',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([a.fixtures.session({ id: 'visible-history', title: '可立即查看' })])
+        await a.db.addStagingSession(a.fixtures.session({ id: 'interrupted-import' }))
+        const request = navigator.locks.request
+        let unblock
+        const pause = new Promise((resolve) => { unblock = resolve })
+        let started
+        const waiting = new Promise((resolve) => { started = resolve })
+        navigator.locks.request = function (name, options, callback) {
+          return request.call(this, name, options, async (lock) => {
+            started()
+            await pause
+            return callback(lock)
+          })
+        }
+        a.store.useChatStore.setState({ ready: false, sessions: [] })
+        const initial = a.store.initChat()
+        try {
+          await waiting
+          const before = a.store.useChatStore.getState()
+          return { ready: before.ready, titles: before.sessions.map(({ title }) => title) }
+        } finally {
+          unblock()
+          navigator.locks.request = request
+          await initial
+        }
+      })
+      assert.deepEqual(result, { ready: true, titles: ['可立即查看'] })
+      await page.waitForFunction(async () =>
+        (await window.__audit.db.getStorageSummary()).alternateSessionCount === 0
+      )
+    }
+  )
+
   await run(
     'history recovery finds committed chats when the active store selector is missing',
     async (page) => {
@@ -32,7 +324,7 @@ export const runHistoryRecoveryCases = async (run) => {
           [{ id: 'keep-file', blob: new Blob(['keep me'], { type: 'text/plain' }) }]
         )
         const { name, blob } = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([blob], name))
+        await a.backup.importHistory(new File([blob], name), undefined, async () => new Set(['keep-id']))
         await new Promise((resolve, reject) => {
           const request = indexedDB.open('freeseek')
           request.onerror = () => reject(request.error)
@@ -60,7 +352,7 @@ export const runHistoryRecoveryCases = async (run) => {
           title: session.title,
           pinned: session.pinned,
           text: session.messages[0].content,
-          original: await (await a.db.loadFile('keep-file')).text(),
+          original: await (await a.db.loadFile(session.messages[0].files[0].id)).text(),
         }
       })
       assert.deepEqual(found, {
@@ -87,7 +379,9 @@ export const runHistoryRecoveryCases = async (run) => {
           }),
         ])
         const pack = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([pack.blob], pack.name))
+        await a.backup.importHistory(new File([pack.blob], pack.name), undefined, async () =>
+          new Set(['saved-bank'])
+        )
         await new Promise((resolve, reject) => {
           const request = indexedDB.open('freeseek')
           request.onerror = () => reject(request.error)
@@ -237,6 +531,29 @@ export const runHistoryRecoveryCases = async (run) => {
       assert.deepEqual(second.titles, ['应保留的旧对话'])
       assert.equal(second.body, '完整内容')
       assert.equal(second.indexCount, 1)
+
+      // A WebView can return equally short arrays for both reads. The count still exposes the loss.
+      const truncated = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([
+          a.fixtures.session({ id: 'chat-a', title: '第一条' }),
+          a.fixtures.session({ id: 'chat-b', title: '第二条' }),
+        ])
+        const { getAll, getAllKeys } = IDBObjectStore.prototype
+        IDBObjectStore.prototype.getAll = function (...args) {
+          return getAll.apply(this, this.name === 'sessionSummaries' ? [undefined, 1] : args)
+        }
+        IDBObjectStore.prototype.getAllKeys = function (...args) {
+          return getAllKeys.apply(this, this.name === 'sessions' ? [undefined, 1] : args)
+        }
+        try {
+          return (await a.db.loadSessionSummaries()).map(({ id }) => id).sort()
+        } finally {
+          IDBObjectStore.prototype.getAll = getAll
+          IDBObjectStore.prototype.getAllKeys = getAllKeys
+        }
+      })
+      assert.deepEqual(truncated, ['chat-a', 'chat-b', 'repair-index'])
     }
   )
 
@@ -280,7 +597,7 @@ export const runHistoryRecoveryCases = async (run) => {
     false
   )
   await run(
-    'export skips conversations whose record is gone instead of failing',
+    'a marked partial backup merges safely into existing history',
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit
@@ -306,17 +623,34 @@ export const runHistoryRecoveryCases = async (run) => {
             tx.onerror = () => reject(tx.error)
           }
         })
-        const { blob, skipped } = await a.backup.exportHistory()
+        const { blob, name, skipped } = await a.backup.exportHistory()
+        const file = new File([blob], name)
         const paths = []
+        let manifest
         // 归档是流式解析的：每条 entry 必须读掉再往下走
-        for await (const entry of a.readArchive(new File([blob], 'backup.zip'))) {
+        for await (const entry of a.readArchive(file)) {
           paths.push(entry.path)
-          await (await a.readEntry(entry)).text()
+          const value = await (await a.readEntry(entry)).text()
+          if (entry.path === 'manifest.json') {
+            manifest = JSON.parse(value)
+          }
         }
-        return { skipped, bytes: blob.size, paths }
+        await a.seed([keep, a.fixtures.session({ id: 'keep-after-export', messages: [] })])
+        const merged = await a.backup.importHistory(file)
+        const retained = Boolean(await a.db.loadSession('keep-after-export'))
+        await a.backup.clearHistory()
+        const restored = await a.backup.importHistory(file)
+        return { skipped, name, bytes: blob.size, paths, manifest, merged, retained, restored }
       })
       // 一条读不到不该让整次备份失败：导出剩下的，并如实报告跳过数
       assert.equal(result.skipped, 1)
+      assert.match(result.name, /^freeseek-partial-backup-/)
+      assert.equal(result.manifest.freeseek_backup_version, 8)
+      assert.deepEqual(result.manifest.partial, { kind: 'unreadable', skippedSessions: 1 })
+      assert.equal(result.merged.added, 0)
+      assert.equal(result.merged.kept, 1)
+      assert.equal(result.retained, true)
+      assert.equal(result.restored.added, 1)
       assert.ok(result.bytes > 0)
       assert.ok(
         result.paths.some((path) => path.includes('export-keep')),
@@ -330,6 +664,93 @@ export const runHistoryRecoveryCases = async (run) => {
     }
   )
   await run(
+    'history export downloads valid chats and originals despite a broken conversation or missing attachment',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const file = (id, name) => ({ id, name, serverId: null, size: 12, mimeType: 'text/plain', isImage: false })
+        const present = file('export-original', '可用原件.txt')
+        const missing = file('export-missing-original', '找不到的原件.txt')
+        const healthy = a.fixtures.session({
+          id: 'export-readable', title: '可用会话',
+          messages: [
+            a.fixtures.user('u1', '请读附件', { files: [present, missing] }),
+            a.fixtures.assistant('a1', '好的。'),
+            a.fixtures.user('u2', '再看同一份附件', { files: [missing] }),
+          ],
+        })
+        const broken = a.fixtures.session({
+          id: 'export-unreadable', title: '待恢复会话',
+          voiceRoles: [{ id: 'bad-role', name: '甲'.repeat(81), preset: '白桦', aliases: [],
+            nature: '', importance: 'lead', source: 'model', createdAt: 1 }],
+        })
+        await a.seed([healthy, broken], [{ id: present.id, blob: new Blob(['fixture text'], { type: 'text/plain' }) }])
+        a.settingsDialog.openSettings('data')
+      })
+      const [saved] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByRole('button', { name: '导出所有历史对话', exact: true }).click(),
+      ])
+      const name = saved.suggestedFilename()
+      assert.match(name, /^freeseek-partial-backup-/)
+      const bytes = await readFile(await saved.path())
+      const entries = unzipSync(bytes)
+      const manifest = JSON.parse(Buffer.from(entries['manifest.json']).toString('utf8'))
+      assert.deepEqual(manifest.sessions, ['export-readable'])
+      assert.deepEqual(manifest.partial, { kind: 'unreadable', skippedSessions: 1, missingOriginals: 1 })
+      assert.equal(Buffer.from(entries['freeseek/files/export-original.bin']).toString(), 'fixture text')
+      assert.equal(entries['freeseek/files/export-missing-original.bin'], undefined)
+      await page.getByText(/已跳过 1 个无法备份的会话/).waitFor()
+      await page.getByText(/有 1 个附件原件未能读取/).waitFor()
+      const restored = await page.evaluate(async ({ encoded, name }) => {
+        const a = window.__audit
+        const sourceUnchanged = Boolean(await a.db.loadSession('export-unreadable'))
+        const file = new File([Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))], name)
+        await a.backup.clearHistory()
+        const imported = await a.backup.importHistory(file)
+        const chat = await a.db.loadSession('export-readable')
+        const reexported = await a.backup.exportHistory()
+        let partial
+        for await (const entry of a.readArchive(new File([reexported.blob], reexported.name))) {
+          const chunk = await a.readEntry(entry)
+          if (entry.path === 'manifest.json') partial = JSON.parse(await chunk.text()).partial
+        }
+        await a.backup.clearHistory()
+        const recovered = await a.backup.importHistory(new File([reexported.blob], reexported.name))
+        return {
+          sourceUnchanged, imported: imported.added, recovered: recovered.added, partial,
+          missingName: chat.messages[0].files[1].name,
+          original: await (await a.db.loadFile('export-original')).text(),
+        }
+      }, { encoded: bytes.toString('base64'), name })
+      assert.deepEqual(restored, {
+        sourceUnchanged: true, imported: 1, recovered: 1, missingName: '找不到的原件.txt',
+        original: 'fixture text', partial: { kind: 'unreadable', skippedSessions: 0, missingOriginals: 1 },
+      })
+    }
+  )
+  await run(
+    'history retry keeps committed conversations even when interrupted staging is larger',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.seed([a.fixtures.session({ id: 'valid-history', messages: [] })])
+        for (const id of ['unfinished-a', 'unfinished-b']) {
+          await a.db.addStagingSession(a.fixtures.session({ id, messages: [] }))
+        }
+        const repair = await a.db.repairHistoryStateAndIndex()
+        return {
+          switched: repair.switched,
+          active: (await a.db.loadSessionSummaries()).map(({ id }) => id),
+          staged: (await a.db.getStorageSummary()).alternateSessionCount,
+        }
+      })
+      assert.equal(result.switched, false)
+      assert.deepEqual(result.active, ['valid-history'])
+      assert.equal(result.staged, 2)
+    }
+  )
+  await run(
     'a large drop in conversation count is recorded for diagnosis',
     async (page) => {
       await page.evaluate(async () => {
@@ -338,6 +759,10 @@ export const runHistoryRecoveryCases = async (run) => {
           a.fixtures.session({ id: 'drop-a', messages: [] }),
           a.fixtures.session({ id: 'drop-b', messages: [] }),
         ])
+        // An unfinished import must not hide the size of the committed history loss.
+        for (let index = 0; index < 18; index++) {
+          await a.db.addStagingSession(a.fixtures.session({ id: 'drop-staged-' + index, messages: [] }))
+        }
         // 模拟「上次还有 20 个会话、这次只剩 2 个」——正是库被系统清空后的样子
         localStorage.setItem('freeseek:history-had-conversations', '1')
         localStorage.setItem(
@@ -359,6 +784,7 @@ export const runHistoryRecoveryCases = async (run) => {
       assert.ok(found, 'a large drop must be recorded')
       assert.equal(found.details.previousCount, 20)
       assert.equal(found.details.sessionCount, 2)
+      assert.equal(found.details.alternateCount, 18)
       assert.equal(found.level, 'error')
     }
   )
@@ -432,7 +858,10 @@ export const runHistoryRecoveryCases = async (run) => {
       })
       await page.reload()
       await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().historyMissing)
-      await page.getByRole('button', { name: '重试', exact: true }).click()
+      if (!(await page.evaluate(() => window.matchMedia('(min-width: 768px)').matches))) {
+        await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      }
+      await page.getByTestId('sider-list').getByRole('button', { name: '重试', exact: true }).click()
       await page.waitForFunction(() => window.__audit?.store.useChatStore.getState().ready)
       const state = await page.evaluate(async () => {
         const a = window.__audit
@@ -453,7 +882,7 @@ export const runHistoryRecoveryCases = async (run) => {
       assert.equal(state.repaired.switched, true)
       assert.equal(state.body, '不能丢的正文', 'no record may be dropped while repairing')
       // 恢复出来的会话真的能打开，正文完整
-      await page.evaluate(() => window.__audit.store.selectSession('uncertain-keep'))
+      await page.getByTestId('sider-list').getByText('暂存里的对话', { exact: true }).click()
       await page.getByText('不能丢的正文', { exact: true }).waitFor()
     }
   )
@@ -510,7 +939,7 @@ export const runHistoryRecoveryCases = async (run) => {
   )
 
   await run(
-    'a conversation whose body is gone leaves the list instead of stalling on a retry loop',
+    'a missing body preserves the row and leaves the other conversations usable',
     async (page) => {
       await page.evaluate(async () => {
         const a = window.__audit
@@ -547,26 +976,27 @@ export const runHistoryRecoveryCases = async (run) => {
         })
         a.store.selectSession('orphan-row')
       })
-      await page.waitForTimeout(800)
+      await page.getByText('对话加载失败，请重试', { exact: true }).waitFor()
       const state = await page.evaluate(async () => {
         const a = window.__audit
         const store = a.store.useChatStore.getState()
         const logs = await a.diagnostics.readDiagnosticLogs()
         return {
-          ids: store.sessions.map((session) => session.id),
+          ids: store.sessions.map((session) => session.id).sort(),
           activeId: store.activeId,
           loadErrors: Object.keys(store.sessionLoadErrors),
-          orphanLogged: logs.events.some((event) => event.event === 'session.orphan-summary'),
+          unavailable: logs.events.some((event) => event.event === 'session.body-unavailable'),
           storage: await a.db.getStorageSummary(),
         }
       })
-      assert.deepEqual(state.ids, ['healthy-row'])
-      assert.equal(state.activeId, null, 'the unreadable conversation is not left as the active one')
-      assert.deepEqual(state.loadErrors, [])
-      assert.equal(state.orphanLogged, true)
+      assert.deepEqual(state.ids, ['healthy-row', 'orphan-row'])
+      assert.equal(state.activeId, 'orphan-row')
+      assert.deepEqual(state.loadErrors, ['orphan-row'])
+      assert.equal(state.unavailable, true)
       assert.equal(state.storage.sessionCount, 1)
-      assert.equal(await page.getByText('对话加载失败，请重试', { exact: true }).count(), 0)
-      assert.equal(await page.getByText('正文丢了', { exact: true }).count(), 0)
+      assert.equal(state.storage.indexCount, 2)
+      await page.evaluate(() => window.__audit.store.selectSession('healthy-row'))
+      await page.getByText('好', { exact: true }).waitFor()
     }
   )
 

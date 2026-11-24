@@ -42,7 +42,7 @@ import { useOptionPanel } from '../base/OptionPanel.js'
 import optionStyles from '../base/OptionPanel.module.css'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
-import { ensureApiKey } from '../settings/settingsDialogState.js'
+import { ensureApiKey, openSettings } from '../settings/settingsDialogState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
@@ -156,6 +156,7 @@ const Input = ({
   const isMobile = useIsMobile()
   const enterSends = useSettings((state) => state.composerEnter) === 'send'
   const custom = selection.providerId !== 'deepseek'
+  const hasVoiceKey = useSettings((state) => Boolean(state.apiKey?.trim()))
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
@@ -274,7 +275,7 @@ const Input = ({
   const dragging = useFileDrop(acceptFiles)
 
   /** 转写结果插入到光标处，并把光标移到插入内容之后 */
-  const voice = useVoiceInput((transcript) => {
+  const voice = useVoiceInput(sessionId, (transcript) => {
     const textarea = textareaRef.current
     const current = getDraft(sessionId).text
     const start = textarea?.selectionStart ?? current.length
@@ -288,12 +289,6 @@ const Input = ({
 
   // 欢迎页导入后会话 ID 不变，不能依赖卸载取消语音；订阅开始事件也覆盖快速完成的导入。
   const cancelVoice = voice.cancel
-  useEffect(() => {
-    if (custom) {
-      cancelVoice()
-      stopReadAloud()
-    }
-  }, [custom, cancelVoice])
   useEffect(
     () =>
       useChatStore.subscribe((state, previous) => {
@@ -305,14 +300,15 @@ const Input = ({
     [cancelVoice]
   )
 
-  // 移动端录音时用频谱替代输入框内容
   const recording = voice.status === 'recording'
+  const voiceAvailable = (voice.active || !custom || hasVoiceKey) && voice.status !== 'failed'
+  const voiceTime = `${Math.floor(voice.seconds / 60)}:${String(voice.seconds % 60).padStart(2, '0')}`
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend =
     !importingHistory &&
     !streaming &&
-    voice.status === 'idle' &&
+    !voice.active &&
     draftReady &&
     !invalidAgent &&
     !(filesDisabled && attachments.length)
@@ -321,7 +317,7 @@ const Input = ({
     if (
       streaming ||
       useChatStore.getState().importingHistory ||
-      voice.status !== 'idle' ||
+      voice.active ||
       !prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks, route)
     ) {
       return
@@ -330,6 +326,7 @@ const Input = ({
     if (invalidAgent || (!agent?.model && !ensureApiKey()) || !sendMessage(sessionId)) {
       return
     }
+    cancelVoice()
     stopReadAloud()
     if (isMobile) {
       textareaRef.current?.blur()
@@ -368,14 +365,17 @@ const Input = ({
     <VoiceButton
       status={voice.status}
       disabled={!voice.available}
-      seconds={voice.seconds}
       onClick={() => {
-        if (
-          voice.status !== 'idle' ||
-          (!useChatStore.getState().importingHistory && ensureApiKey())
-        ) {
-          void voice.toggle()
+        if (!voice.active) {
+          if (useChatStore.getState().importingHistory) {return}
+          if (!hasVoiceKey) {
+            showToast({ key: 'voiceInputConnectionRequired' })
+            openSettings('account')
+            return
+          }
+          textareaRef.current?.blur()
         }
+        void voice.toggle()
       }}
     />
   )
@@ -404,11 +404,24 @@ const Input = ({
         sessionId={sessionId}
         draftImage={attachments.some((item) => item.isImage)}
         disabled={importingHistory}
-        modelLocked={streaming || voice.status !== 'idle'}
+        modelLocked={streaming || voice.active}
         planLocked={!!planStatus}
       />
       <div className={styles.surface} data-testid="composer-input-surface">
         <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+        {(voice.error || voice.status === 'failed') && (
+          <div className={styles.voiceFeedback}>
+            {voice.error && <p role="alert">{t(voice.error.key, voice.error.params)}</p>}
+            {voice.status === 'failed' && (
+              <div className={styles.voiceRecovery}>
+                <Button size="s" onClick={() => void voice.toggle()}>
+                  {t('voiceInputRetry')}
+                </Button>
+                <Button size="s" variant="outlined" onClick={cancelVoice}>{t('voiceInputDiscard')}</Button>
+              </div>
+            )}
+          </div>
+        )}
         {(invalidAgent || (filesDisabled && attachments.length > 0)) && (
           <p className={assistantStyles.hint + ' ' + assistantStyles.toolbarNote} role="status">
             {t(
@@ -447,10 +460,10 @@ const Input = ({
             {...attachmentPanel.trigger}
             disabled={importingHistory || filesDisabled}
           />
-          <div ref={textareaWrapperRef} className={styles.textareaWrapper}>
+          <div ref={textareaWrapperRef} className={styles.textareaWrapper} data-voice-active={voice.active || undefined}>
             <textarea
               ref={textareaRef}
-              className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
+              className={clsx(styles.textarea, voice.active && styles.textareaHidden)}
               placeholder={t(
                 planStatus === 'awaiting-review'
                   ? 'agentPlanFeedbackPlaceholder'
@@ -462,7 +475,7 @@ const Input = ({
               enterKeyHint={enterSends ? 'send' : 'enter'}
               // 移动端不自动聚焦，避免一打开就弹出键盘
               autoFocus={!isMobile}
-              disabled={importingHistory}
+              disabled={importingHistory || voice.active}
               value={text}
               onChange={(event) => setText(event.target.value)}
               onCompositionStart={() => (composing.current = true)}
@@ -504,15 +517,32 @@ const Input = ({
                 }
               }}
             />
-            {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
+            {voice.active && (
+              <div className={styles.voiceInline}>
+                <span className={styles.voiceState} role="status">
+                  {recording ? t('voiceInputRecording') : t(voice.status === 'starting'
+                    ? 'voiceInputStarting'
+                    : voice.limitReached ? 'voiceInputLimitTranscribing' : 'voiceInputTranscribing')}
+                </span>
+                {recording && (
+                  <>
+                    <span className={styles.voiceClock} aria-hidden>{voiceTime}</span>
+                    <div className={styles.voiceWave}><Spectrum getAnalyser={voice.getAnalyser} /></div>
+                    <button type="button" className={styles.voiceDiscard} aria-label={t('voiceInputDiscard')} onClick={cancelVoice}>
+                      <IconCloseOutline16 />
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
             <div ref={mirrorRef} className={styles.mirror} aria-hidden>
-              {text}
+              {!voice.active && text}
               {'\u200b'}
             </div>
           </div>
 
           <div className={styles.right}>
-            {!isMobile && !custom && voiceControl}
+            {voiceAvailable && !streaming && voiceControl}
             {streaming && sessionId ? (
               <button
                 type="button"
@@ -525,9 +555,7 @@ const Input = ({
               >
                 <IconStopFill16 />
               </button>
-            ) : isMobile && !custom && (!hasDraft || voice.status !== 'idle') ? (
-              voiceControl
-            ) : (
+            ) : !voice.active && (!isMobile || hasDraft || !voiceAvailable) ? (
               <button
                 type="button"
                 className={styles.sendButton}
@@ -538,7 +566,7 @@ const Input = ({
               >
                 <IconSendOutline16 />
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

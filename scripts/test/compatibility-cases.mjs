@@ -34,7 +34,8 @@ export const runCompatibilityCases = async (run) => {
           ]
         )
         const pack = await a.backup.exportHistory()
-        const count = await a.backup.importHistory(new File([pack.blob], pack.name))
+        await a.backup.clearHistory()
+        const { added: count } = await a.backup.importHistory(new File([pack.blob], pack.name))
         const totals = await a.db.getStorageSummary()
         return {
           count,
@@ -129,12 +130,13 @@ export const runCompatibilityCases = async (run) => {
       })
   )
   await run(
-    'data import uses both confirmations, cancellation retains history and invalid ZIP rolls back',
+    'data import appends chats, confirms duplicates, and cancellation or invalid ZIP keeps history',
     async (page) => {
       const encoded = await page.evaluate(async () => {
         const a = window.__audit,
           f = a.fixtures
         const target = f.session({
+          id: 'import-ui-new',
           title: 'Imported UI',
           messages: [f.user('target', 'Imported through UI')],
         })
@@ -147,6 +149,7 @@ export const runCompatibilityCases = async (run) => {
         })
         await a.seed([
           f.session({
+            id: 'import-ui-original',
             title: 'Original UI',
             messages: [f.user('original', 'Keep until confirmed')],
           }),
@@ -167,7 +170,6 @@ export const runCompatibilityCases = async (run) => {
         'Original UI'
       )
       await input.setInputFiles(file)
-      await page.getByRole('button', { name: '我已了解，继续', exact: true }).click()
       // 暂停第一次文件读取，在校验期间实际按返回并点遮罩。
       await page.evaluate(() => {
         const read = Blob.prototype.arrayBuffer
@@ -180,7 +182,7 @@ export const runCompatibilityCases = async (run) => {
           return read.call(this)
         }
       })
-      await page.getByRole('button', { name: '覆盖并导入', exact: true }).click()
+      await page.getByRole('button', { name: '开始导入', exact: true }).click()
       const working = page.getByRole('dialog', { name: '正在导入', exact: true })
       await working.waitFor()
       await page.keyboard.press('Escape')
@@ -196,30 +198,31 @@ export const runCompatibilityCases = async (run) => {
       )
       await page.evaluate(() => window.__resumeImport())
       await page.getByRole('dialog', { name: '导入完成', exact: true }).waitFor()
-      assert.equal(
-        await page.evaluate(() => window.__audit.store.useChatStore.getState().sessions[0].title),
-        'Imported UI'
+      const titles = () => page.evaluate(() =>
+        window.__audit.store.useChatStore.getState().sessions.map(({ title }) => title).sort()
       )
+      assert.deepEqual(await titles(), ['Imported UI', 'Original UI'])
       await page.getByRole('button', { name: '稍后', exact: true }).click()
       await input.setInputFiles({
         name: 'broken.zip',
         mimeType: 'application/zip',
         buffer: Buffer.from('Invalid ZIP'),
       })
-      await page.getByRole('button', { name: '我已了解，继续', exact: true }).click()
-      await page.getByRole('button', { name: '覆盖并导入', exact: true }).click()
+      await page.getByRole('button', { name: '开始导入', exact: true }).click()
       await page.getByRole('dialog', { name: '导入失败', exact: true }).waitFor()
-      assert.equal(
-        await page.evaluate(() => window.__audit.store.useChatStore.getState().sessions[0].title),
-        'Imported UI'
-      )
+      assert.deepEqual(await titles(), ['Imported UI', 'Original UI'])
       await page
         .getByRole('dialog', { name: '导入失败', exact: true })
         .getByRole('button', { name: '关闭', exact: true })
         .click()
       await input.setInputFiles(file)
-      await page.getByRole('button', { name: '我已了解，继续', exact: true }).click()
-      await page.getByRole('dialog', { name: '再次确认覆盖', exact: true }).waitFor()
+      await page.getByRole('button', { name: '开始导入', exact: true }).click()
+      const duplicates = page.getByRole('dialog', { name: '选择保留哪一份', exact: true })
+      await duplicates.waitFor()
+      assert.equal(await duplicates.getByRole('radio', { name: /保留本机/ }).isChecked(), true)
+      await duplicates.getByRole('button', { name: '取消', exact: true }).click()
+      await duplicates.waitFor({ state: 'hidden' })
+      assert.deepEqual(await titles(), ['Imported UI', 'Original UI'])
     }
   )
 

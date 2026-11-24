@@ -170,9 +170,7 @@ const joinTextBlocks = (
   let text = ''
   for (const block of blocks) {
     text += block.text
-    // 角色配音的 ⟦…⟧ 标注在前台不显示：剥掉再渲染。流式时未闭合的那截也一起藏起来，
-    // 否则用户会看到半个标记。朗读走的是另一条路（解析器直接读原始文本）。
-    const body = stripRoleMarkers(block.text)
+    const body = block.text
     const indexes = new Set<number>()
     for (const citation of block.citations ?? []) {
       indexes.add(registry.add(citation.url, citation.title, null).index)
@@ -184,7 +182,8 @@ const joinTextBlocks = (
     }
     markdown += body.slice(trimmed.length)
   }
-  return { markdown, text: stripRoleMarkers(text) }
+  // Markdown fences can span adjacent text blocks.
+  return { markdown: stripRoleMarkers(markdown), text: stripRoleMarkers(text) }
 }
 
 export const buildReplyView = (

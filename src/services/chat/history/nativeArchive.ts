@@ -1,6 +1,7 @@
 import * as db from '../db.js'
-import { mapSessionMessages, allSessionMessages, messageFiles } from '../sessionData.js'
-import { normalizeSession } from '../branches.js'
+import { mapSessionMessages, allSessionMessages, mapSessionFileIds, messageFiles } from '../sessionData.js'
+import { getVisibleMessages, normalizeSession } from '../branches.js'
+import { contextRounds, rebaseContextSummary } from '../contextCompression.js'
 import { logEvent, diagnosticError } from '../../diagnostics/log.js'
 import {
   discardImportedWorkspaces,
@@ -41,6 +42,7 @@ const LARGE_SPLIT_VERSION = 4
 const LEGACY_TASK_VERSION = 5
 const TASK_VERSION = 6
 const WORKSPACE_VERSION = 7
+const PARTIAL_VERSION = 8
 const MAX_SESSION_PARTS = 1024
 const PART_ITEMS = 512
 const MAX_SPLIT_TOKENS = 8_000_000
@@ -61,12 +63,16 @@ const json = (data: unknown) => encodeJson(data).blob
 type SplitSession = { id: string; parts: number }
 type PartField = 'messages' | 'inherited' | 'compressionUsage'
 type ZipEntry = { name: string; blob: Blob }
+type PartialBackup =
+  | { kind: 'unreadable'; skippedSessions: number; missingOriginals?: number }
+  | { kind: 'recovery' }
 type Manifest = {
   freeseek_backup_version: number
   sessions: string[]
   splitSessions?: SplitSession[]
   files: { id: string; size: number; type: string }[]
   workspaces?: string[]
+  partial?: PartialBackup
   personas: Persona[]
   defaultPersonaId: string
   pricing?: FlashPricing
@@ -75,9 +81,28 @@ type Manifest = {
 export type NativeBackupSettings = Pick<
   Manifest,
   'personas' | 'defaultPersonaId' | 'pricing' | 'modelPrices'
-> & { importedWorkspaces?: string[] }
+> & { importedWorkspaces?: string[]; workspacesBySession?: Map<string, string[]> }
 export const isNativeManifest = (value: unknown): boolean =>
   value !== null && typeof value === 'object' && 'freeseek_backup_version' in value
+
+const readPartialBackup = (value: unknown): PartialBackup => {
+  const partial = record(value)
+  if (partial.kind === 'recovery') {
+    return { kind: 'recovery' }
+  }
+  if (partial.kind === 'unreadable') {
+    const skippedSessions = number(partial.skippedSessions)
+    const missingOriginals = partial.missingOriginals === undefined ? 0 : number(partial.missingOriginals)
+    if (
+      Number.isSafeInteger(skippedSessions) &&
+      Number.isSafeInteger(missingOriginals) &&
+      (skippedSessions > 0 || missingOriginals > 0)
+    ) {
+      return { kind: 'unreadable', skippedSessions, ...(missingOriginals > 0 && { missingOriginals }) }
+    }
+  }
+  return fail('backupIncomplete')
+}
 
 export const readNativeManifest = (value: unknown): Manifest => {
   const item = record(value)
@@ -91,10 +116,11 @@ export const readNativeManifest = (value: unknown): Manifest => {
       LEGACY_TASK_VERSION,
       TASK_VERSION,
       WORKSPACE_VERSION,
+      PARTIAL_VERSION,
     ].includes(version)
   ) {
     return fail(
-      typeof version === 'number' && version > WORKSPACE_VERSION
+      typeof version === 'number' && version > PARTIAL_VERSION
         ? 'backupNewerVersion'
         : 'backupInvalidVersion'
     )
@@ -118,7 +144,11 @@ export const readNativeManifest = (value: unknown): Manifest => {
       const file = record(value)
       return { id: id(file.id), size: number(file.size), type: string(file.type) }
     }),
-    ...(version === WORKSPACE_VERSION && { workspaces: list(item.workspaces, id) }),
+    ...((version === WORKSPACE_VERSION ||
+      (version === PARTIAL_VERSION && item.workspaces !== undefined)) && {
+      workspaces: list(item.workspaces, id),
+    }),
+    ...(version === PARTIAL_VERSION && { partial: readPartialBackup(item.partial) }),
     personas: list(item.personas, (value) => {
       const persona = record(value)
       const personaId = id(persona.id)
@@ -214,10 +244,36 @@ const splitSessionEntries = (session: Session): ZipEntry[] => {
   return entries
 }
 
+const packSession = (original: Session) => {
+  const session = mapSessionMessages(normalizeSession(original), (message) => {
+    if (message.role !== 'assistant') {
+      return message
+    }
+    const settled = ['pending', 'streaming'].includes(message.status)
+      ? settleReply(message, 'stopped', Date.now())
+      : message
+    return settled.task?.pendingMcp
+      ? { ...settled, task: { ...settled.task, pendingMcp: undefined } }
+      : settled
+  })
+  readNativeSession(session)
+  const snapshot = { ...session, compressionCheckpoint: undefined }
+  try {
+    return { session, entries: [{ name: sessionPath(session.id), blob: json(snapshot) }] }
+  } catch (error) {
+    if (!(error instanceof BackupError) || error.key !== 'backupJsonTooLarge') {
+      throw error
+    }
+    return { session, entries: splitSessionEntries(snapshot) }
+  }
+}
+
 /** 无损本机备份；不写入 API Key，原件按文件 ID 去重。 */
 export const exportNativeArchive = async (
   sessions: Iterable<Session> | AsyncIterable<Session>,
-  loadOriginal: (id: string) => Promise<Blob | undefined> = db.loadFile
+  loadOriginal: (id: string) => Promise<Blob | undefined> = db.loadFile,
+  getPartial?: () => PartialBackup | undefined,
+  onSkipped?: (error: unknown) => void
 ): Promise<Blob> => {
   const entries: ZipEntry[] = []
   const files = new Map<string, Blob>()
@@ -228,27 +284,27 @@ export const exportNativeArchive = async (
   let version = FLAT_VERSION
   const { personas, defaultId } = usePersonas.getState()
   for await (const original of sessions) {
-    const session = mapSessionMessages(normalizeSession(original), (message) => {
-      if (message.role !== 'assistant') {
-        return message
+    let packed: ReturnType<typeof packSession>
+    try {
+      packed = packSession(original)
+    } catch (error) {
+      if (!onSkipped) {
+        throw error
       }
-      const settled = ['pending', 'streaming'].includes(message.status)
-        ? settleReply(message, 'stopped', Date.now())
-        : message
-      return settled.task?.pendingMcp
-        ? { ...settled, task: { ...settled.task, pendingMcp: undefined } }
-        : settled
-    })
+      onSkipped(error)
+      continue
+    }
+    const { session, entries: parts } = packed
+    const messages = allSessionMessages(session)
     if (
       session.mode === 'agent' ||
-      allSessionMessages(session).some((message) => message.role === 'assistant' && message.task)
+      messages.some((message) => message.role === 'assistant' && message.task)
     ) {
-      version = TASK_VERSION
+      version = Math.max(version, TASK_VERSION)
     }
-    readNativeSession(session)
     const workspaceIds = [
       session.workspaceId,
-      ...allSessionMessages(session).flatMap((message) =>
+      ...messages.flatMap((message) =>
         message.role === 'assistant' && message.task?.workspaceId ? [message.task.workspaceId] : []
       ),
     ]
@@ -261,20 +317,13 @@ export const exportNativeArchive = async (
       }
     }
     ids.push(session.id)
-    const snapshot = { ...session, compressionCheckpoint: undefined }
-    try {
-      entries.push({ name: sessionPath(session.id), blob: json(snapshot) })
-    } catch (error) {
-      if (!(error instanceof BackupError) || error.key !== 'backupJsonTooLarge') {
-        throw error
-      }
-      const parts = splitSessionEntries(snapshot)
+    if (parts.length > 1) {
       const bytes = parts.reduce((total, { blob }) => total + blob.size, 0)
       version = Math.max(version, bytes > MAX_JSON_BYTES ? LARGE_SPLIT_VERSION : SPLIT_VERSION)
       splitSessions.push({ id: session.id, parts: parts.length - 1 })
-      entries.push(...parts)
     }
-    for (const message of allSessionMessages(session)) {
+    entries.push(...parts)
+    for (const message of messages) {
       for (const file of messageFiles(message)) {
         if (!files.has(file.id)) {
           const original = await loadOriginal(file.id)
@@ -288,12 +337,17 @@ export const exportNativeArchive = async (
   if (workspaces.size) {
     version = WORKSPACE_VERSION
   }
+  const partial = getPartial?.()
+  if (partial) {
+    version = PARTIAL_VERSION
+  }
   const manifest: Manifest = {
     freeseek_backup_version: version,
     sessions: ids,
     ...(version >= SPLIT_VERSION ? { splitSessions } : {}),
     files: [...files].map(([id, blob]) => ({ id, size: blob.size, type: blob.type })),
     ...(workspaces.size > 0 && { workspaces: [...workspaces.keys()] }),
+    ...(partial && { partial }),
     personas: personas.filter((persona) => !persona.id.startsWith('builtin-')),
     defaultPersonaId: defaultId,
     pricing: usePricing.getState().pricing,
@@ -359,12 +413,35 @@ const restoreSplitSession = async (
   return head
 }
 
+const remapArchivedAttachments = (session: Session, mapFileId: (id: string) => string) => {
+  const mapped = mapSessionFileIds(session, mapFileId)
+  if (mapped === session) {
+    return session
+  }
+  if (session.contextSummary) {
+    mapped.contextSummary = rebaseContextSummary(
+      session.contextSummary,
+      contextRounds(getVisibleMessages(session), session.inherited),
+      contextRounds(getVisibleMessages(mapped), mapped.inherited)
+    )
+  }
+  if (session.inherited?.contextSummary && mapped.inherited) {
+    mapped.inherited.contextSummary = rebaseContextSummary(
+      session.inherited.contextSummary,
+      contextRounds(session.inherited.messages),
+      contextRounds(mapped.inherited.messages)
+    )
+  }
+  return mapped
+}
+
 /** 缺项或坏 CRC 均拒绝整份导入，正式数据由调用方原子提交。 */
 export const importNativeEntries = async (
   entries: AsyncGenerator<ArchiveEntry>,
   manifest: Manifest,
   total: number,
   useDisk: boolean,
+  mapFileId: (id: string) => string,
   onProgress?: ImportProgress
 ): Promise<NativeBackupSettings> => {
   const sessions = new Map(manifest.sessions.map((id) => [sessionPath(id), id]))
@@ -372,6 +449,7 @@ export const importNativeEntries = async (
   const files = new Map(manifest.files.map((file) => [filePath(file.id), file]))
   const workspaces = new Map((manifest.workspaces ?? []).map((id) => [workspacePath(id), id]))
   const restored = new Map<string, string>()
+  const workspacesBySession = new Map<string, string[]>()
   let processed = 1
   onProgress?.(processed, total)
   const onRead = (bytes: number, size: number) =>
@@ -416,18 +494,27 @@ export const importNativeEntries = async (
               return workspaceId ? { ...message, task: { ...message.task, workspaceId } } : message
             })
           : session
-        await db.addStagingSession({
+        const imported = remapArchivedAttachments({
           ...mapped,
           workspaceId: session.workspaceId
             ? (restored.get(session.workspaceId) ?? session.workspaceId)
             : undefined,
-        })
+        }, mapFileId)
+        if (restored.size) {
+          workspacesBySession.set(sessionId, [
+            ...(imported.workspaceId ? [imported.workspaceId] : []),
+            ...allSessionMessages(imported).flatMap((message) =>
+              message.role === 'assistant' && message.task?.workspaceId ? [message.task.workspaceId] : []
+            ),
+          ])
+        }
+        await db.addStagingSession(imported)
         sessions.delete(entry.path)
       } else if (file) {
         if (entry.size !== file.size) {
           fail('backupIncomplete')
         }
-        await stageArchiveFile(entry, file.id, file.type, onRead, useDisk)
+        await stageArchiveFile(entry, mapFileId(file.id), file.type, onRead, useDisk)
         files.delete(entry.path)
         onProgress?.(++processed, total)
       } else {
@@ -442,7 +529,7 @@ export const importNativeEntries = async (
       defaultPersonaId: manifest.defaultPersonaId,
       pricing: manifest.pricing,
       modelPrices: manifest.modelPrices,
-      ...(restored.size && { importedWorkspaces: [...restored.values()] }),
+      ...(restored.size && { importedWorkspaces: [...restored.values()], workspacesBySession }),
     }
   } catch (error) {
     await discardImportedWorkspaces(restored.values()).catch((failure) =>

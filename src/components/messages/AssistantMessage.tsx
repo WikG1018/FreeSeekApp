@@ -72,6 +72,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const speakingRole = useReadAloud((state) =>
     state.messageId === message.id ? state.speakingRole : null
   )
+  const playback = useReadAloud((state) => state.messageId === message.id ? state.status : 'idle')
   // 新回复（含重新生成）挂载时创建不足 800ms 播放一次入场动画
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
   const panelEntry = useSearchPanel((state) => state.entry)
@@ -293,16 +294,16 @@ export const AssistantMessage = memo(function AssistantMessage({
           ) : null}
           <MessageUsage message={message} />
           <div
-            className={clsx(styles.actions, (isLast || speakingRole) && styles.alwaysShow)}
+            className={clsx(styles.actions, (isLast || playback !== 'idle') && styles.alwaysShow)}
           >
-            {speakingRole ? (
+            {playback === 'loading' || speakingRole ? (
               <span className={styles.speakingRole} role="status">
-                {t('roleVoiceNowReading', { name: speakingRole })}
+                {speakingRole ? t('roleVoiceNowReading', { name: speakingRole }) : t('ttsPreparing')}
               </span>
             ) : null}
             {copyText ? <CopyButton text={copyText} /> : null}
             {responseText && !refused ? (
-              <ReadAloudButton messageId={message.id} text={responseText} sessionId={sessionId} />
+              <ReadAloudButton message={message} text={responseText} sessionId={sessionId} />
             ) : null}
             <IconButton
               icon={<IconRefreshOutline16 />}

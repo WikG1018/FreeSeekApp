@@ -15,11 +15,13 @@ export const MobileHeader = ({
   headerRef,
   openAssistant,
   artifactsButton,
+  voicesButton,
 }: {
   title?: string
   headerRef?: Ref<HTMLDivElement>
   openAssistant?: () => void
   artifactsButton?: ReactNode
+  voicesButton?: ReactNode
 }) => {
   const t = useTranslate()
   const open = useMobileSider((state) => state.open)
@@ -29,6 +31,7 @@ export const MobileHeader = ({
       className={styles.header}
       data-testid="chat-header"
       data-artifacts={!!artifactsButton || undefined}
+      data-voices={!!voicesButton || undefined}
     >
       <span className={styles.action}>
         <IconButton
@@ -61,6 +64,7 @@ export const MobileHeader = ({
           )}
           <div className={styles.right}>
             {artifactsButton}
+            {voicesButton}
             <span className={styles.action}>
               <IconButton
                 size="m"

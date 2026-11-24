@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
@@ -112,14 +113,28 @@ export const createConfig = ({
             },
             () => {
               const entry = compilation.entrypoints.get('main')?.getFiles() ?? []
-              const app = compilation
-                .getAssets()
-                .flatMap(({ name }) =>
-                  /^static\/(?:js|css)\/async\/app\.[a-f0-9]+\.(?:js|css)$/.test(name) ? [name] : []
-                )
+              // The app group also contains the split dependencies needed before mounting.
+              const app = compilation.namedChunkGroups.get('app')?.getFiles() ?? []
               const files = [...new Set([...entry, ...app])].filter((name) =>
                 /\.(?:js|css)$/.test(name)
               )
+              const worker = !dev && compilation.getAsset('sw.js')
+              if (worker) {
+                const source = readFileSync(path.resolve(root, 'src/pwa/sw.js'), 'utf8')
+                const build = createHash('sha256')
+                  .update(JSON.stringify({ version, files, source }))
+                  .update(compilation.getAsset('index.html')?.source.source().toString() ?? '')
+                  .digest('hex')
+                  .slice(0, 16)
+                compilation.updateAsset(
+                  'sw.js',
+                  new rspack.sources.RawSource(
+                    source
+                      .replace("'__FREESEEK_WEB_BUILD__'", JSON.stringify(build))
+                      .replace('/* FreeSeek startup assets */ []', JSON.stringify(files))
+                  )
+                )
+              }
               compilation.emitAsset(
                 'web-version.json',
                 new rspack.sources.RawSource(

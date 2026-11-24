@@ -34,9 +34,10 @@ import * as db from './db.js'
 import { allSessionMessages, mapSessionMessages } from './sessionData.js'
 import { sumMessageUsage, usageEntries } from './usage.js'
 import { abortReason } from '../../utils/abort.js'
-import { mergeInheritedRoles } from '../speech/roleTable.js'
-import type { VoiceRole } from '../speech/roleMarkers.js'
+import { mergeInheritedRoles, sessionRoles } from '../speech/roleTable.js'
+import { MAX_ROLE_ALIASES, roleNameKey, type VoiceRole } from '../speech/roleMarkers.js'
 import { roleVoicePromptFor, withReplyRoles } from '../speech/roleVoiceBridge.js'
+import { BackupError } from './history/errors.js'
 import {
   clearAllDrafts,
   clearDraft,
@@ -216,6 +217,7 @@ type ChatSaveFailure = 'space' | 'connection' | 'write'
 type ChatState = {
   ready: boolean
   initError: boolean
+  historyUpgradeBlocked: boolean
   historyMissing: boolean
   historyMayStartFresh: boolean
   /** 历史导入或全部删除期间锁定交互，提交成功前仍展示原有记录。 */
@@ -248,6 +250,7 @@ type ChatState = {
 export const useChatStore = create<ChatState>(() => ({
   ready: false,
   initError: false,
+  historyUpgradeBlocked: false,
   historyMissing: false,
   historyMayStartFresh: false,
   importingHistory: false,
@@ -303,8 +306,6 @@ let inheritSequence = 0
 /** 用于只在 activeId 变化时写入 localStorage */
 let lastActiveId: string | null = null
 let initTask: Promise<void> | undefined
-/** 数据库连接中断的监听只挂一次 */
-let terminatedListener = false
 const sessionLoads = new Map<string, { promise: Promise<void> }>()
 
 const touchSession = (id: string) => sessionAccess.set(id, ++accessSequence)
@@ -535,10 +536,14 @@ export const bindChatPersistence = () => {
   const onVisibilityChange = () => {
     if (document.visibilityState === 'hidden') {
       save()
+    } else if (get().ready && get().historyMissing) {
+      void resyncSessions()
     }
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('pagehide', save)
+  const onHistoryTerminated = () => void resyncSessions()
+  window.addEventListener('freeseek:history-terminated', onHistoryTerminated)
   const pauseForAccess = () => {
     pauseNativeAgentForAccessChange()
     for (const [id, controller] of Object.entries(get().streaming)) {
@@ -571,6 +576,7 @@ export const bindChatPersistence = () => {
     unbindMemory()
     document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('pagehide', save)
+    window.removeEventListener('freeseek:history-terminated', onHistoryTerminated)
   }
 }
 
@@ -695,27 +701,58 @@ const settleInterrupted = (session: Session): Session => {
   }
 }
 
-/** 数据库连接被系统中断后重新同步列表：库里真的没了就不要再显示幽灵会话。 */
-const resyncSessions = async () => {
+let historyRefresh: Promise<void> | undefined
+
+/** Only replace the visible list after a successful, current read. */
+const resyncSessions = () => {
   if (!get().ready || get().importingHistory) {
-    return
+    return Promise.resolve()
   }
-  try {
-    const summaries = await db.loadSessionSummaries({ previousSelection: false, allowEmpty: true })
-    logEvent('storage', 'sessions.resynced', { sessionCount: summaries.length })
-    if (!summaries.length) {
-      // 读不到不等于没有：保留现有列表，导出会跳过读不到的条目。
-      logEvent('storage', 'sessions.resync-empty', {}, 'warn')
-      return
+  return (historyRefresh ??= (async () => {
+    const epoch = historyEpoch
+    const before = get()
+    const current = () => epoch === historyEpoch && !get().importingHistory
+    try {
+      const summaries = await db.loadSessionSummaries({
+        previousSelection: before.sessions.length > 0,
+      })
+      if (!current() || get().sessions !== before.sessions) {
+        return
+      }
+      const merged = new Map(summaries.map((session) => [session.id, session]))
+      let unavailable = 0
+      for (const session of before.sessions) {
+        if (unsavedSessions.has(session.id)) {
+          merged.set(session.id, session)
+        } else if (before.historyMissing && summaries.length > 0 && !merged.has(session.id)) {
+          merged.set(session.id, session)
+          unavailable += 1
+        }
+      }
+      const activeId = get().activeId
+      set({
+        sessions: sortSessions([...merged.values()]),
+        activeId: activeId && merged.has(activeId) ? activeId : null,
+        historyMissing: unavailable > 0,
+      })
+      logEvent('storage', 'sessions.resynced', {
+        sessionCount: summaries.length,
+        unavailableCount: unavailable,
+      })
+    } catch (error) {
+      if (current()) {
+        set({ historyMissing: before.sessions.length > 0 || error instanceof db.HistoryMissingError })
+      }
+      logEvent(
+        'storage',
+        'history.resync-retained',
+        { previousCount: before.sessions.length, ...diagnosticError(error) },
+        'warn'
+      )
     }
-    const activeId = get().activeId
-    set({
-      sessions: sortSessions(summaries),
-      activeId: summaries.some(({ id }) => id === activeId) ? activeId : null,
-    })
-  } catch (error) {
-    db.reportStorageError('resync conversations')(error)
-  }
+  })().finally(() => {
+    historyRefresh = undefined
+  }))
 }
 
 export const initChat = (allowEmpty = false): Promise<void> => {
@@ -726,7 +763,12 @@ export const initChat = (allowEmpty = false): Promise<void> => {
     return initTask
   }
   const epoch = historyEpoch
-  set({ initError: false, historyMissing: false, historyMayStartFresh: false })
+  set({
+    initError: false,
+    historyUpgradeBlocked: false,
+    historyMissing: false,
+    historyMayStartFresh: false,
+  })
   initTask = (async () => {
     try {
       const savedId = readActiveSession()
@@ -734,19 +776,8 @@ export const initChat = (allowEmpty = false): Promise<void> => {
         previousSelection: Boolean(savedId),
         allowEmpty,
       })
-      await db.recoverStaging().catch(db.reportStorageError('clean interrupted import'))
+      void db.recoverStaging().catch(db.reportStorageError('clean interrupted import'))
       logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
-      // 上一次开着时有会话、这次却是空的：多半个库被系统清理了（WebView 数据被回收）。
-      // 只记录不修数据——本地确实没有了，让诊断包里能直接看出来。
-      const known = Number(localStorage.getItem('freeseek:history-count') ?? '0')
-      if (!summaries.length && Number.isFinite(known) && known > 0) {
-        logEvent('storage', 'sessions.lost', { previousCount: known }, 'error')
-      }
-      try {
-        localStorage.setItem('freeseek:history-count', String(summaries.length))
-      } catch {
-        /* 存储不可用时跳过。 */
-      }
       if (epoch === historyEpoch) {
         // 仅在选择恢复上次对话时读取保存的会话 ID。
         const { startupPage } = useSettings.getState()
@@ -759,14 +790,6 @@ export const initChat = (allowEmpty = false): Promise<void> => {
         })
         lastActiveId = restore
         set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
-        // 只挂一次：系统中断数据库连接后把列表拉回真实状态，并顺手申请持久化存储，
-        // 让浏览器别在空间紧张时把本地记录清掉。
-        if (!terminatedListener) {
-          terminatedListener = true
-          window.addEventListener('freeseek:history-terminated', () => {
-            void resyncSessions()
-          })
-        }
         void requestPersistentStorage()
         const missingModes = summaries.filter(({ mode }) => mode === undefined).map(({ id }) => id)
         if (missingModes.length) {
@@ -803,6 +826,7 @@ export const initChat = (allowEmpty = false): Promise<void> => {
         )
         set({
           initError: true,
+          historyUpgradeBlocked: error instanceof db.HistoryUpgradeBlockedError,
           historyMissing: error instanceof db.HistoryMissingError && error.previousHistoryKnown,
           historyMayStartFresh: error instanceof db.HistoryMissingError && error.canStartFresh,
         })
@@ -817,14 +841,18 @@ export const initChat = (allowEmpty = false): Promise<void> => {
   return initTask
 }
 
-/** 用户点「重试」：先做一次无损自愈（收敛激活指针、清掉挡路的标记、按实际记录重建列表索引），再重读。 */
+/** 用户点「重试」时，用已确认的历史修复列表索引，再读取一次。 */
 export const retryInitChat = async () => {
-  if (get().ready || get().importingHistory) {
+  if (get().importingHistory) {
+    return
+  }
+  if (get().ready) {
+    await resyncSessions()
     return
   }
   await initTask?.catch(() => {})
   try {
-    const repair = await db.repairHistoryStateAndIndex()
+    const repair = await db.withHistoryReplacement(db.repairHistoryStateAndIndex)
     if (repair.state !== 'consistent') {
       logEvent('storage', 'history.retry-repaired', { ...repair })
     }
@@ -861,28 +889,15 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
         return
       }
       if (!stored) {
-        // 列表里有、正文读不到（孤儿摘要）：这条会话已经不可能打开了。
-        // 剔掉这个条目，别把用户钉在「对话加载失败」上——重试一万次也不会变。
-        logEvent('storage', 'session.orphan-summary', { sessionId: id }, 'warn')
-        await db.deleteSession(id).catch(db.reportStorageError('remove unreadable session'))
-        if (epoch !== historyEpoch) {
-          return
-        }
-        set((state) => ({
-          sessions: state.sessions.filter((item) => item.id !== id),
-          sessionCache: Object.fromEntries(
-            Object.entries(state.sessionCache).filter(([key]) => key !== id)
-          ),
-          sessionLoadErrors: Object.fromEntries(
-            Object.entries(state.sessionLoadErrors).filter(([key]) => key !== id)
-          ),
-          activeId: state.activeId === id ? null : state.activeId,
-        }))
+        logEvent('storage', 'session.body-unavailable', { sessionId: id }, 'warn')
+        set((state) => ({ sessionLoadErrors: { ...state.sessionLoadErrors, [id]: true } }))
         return
       }
       const settled = settleInterrupted(normalizeSession(stored))
       // 读取期间可能已在列表重命名，保留最新元数据，不能让旧读取覆盖它。
-      const session = sameSummary(settled, summary) ? settled : { ...settled, ...summary }
+      const session = sameSummary(settled, summary)
+        ? settled
+        : { ...settled, ...summary, title: summary.title || settled.title }
       touchSession(id)
       set((state) => ({ sessionCache: { ...state.sessionCache, [id]: session } }))
       logEvent('storage', 'session.loaded', {
@@ -902,8 +917,7 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
           'session.load-failed',
           {
             sessionId: id,
-            // 打包的正文解不开，和「记录不存在」是两回事：前者可以保留原样等导出，
-            // 后者只能剔掉摘要。分开记录，诊断包里才分得清。
+            // Distinguish a malformed body from a missing lookup in diagnostics.
             unreadable:
               error instanceof Error && error.message === 'Invalid stored conversation'
                 ? true
@@ -949,8 +963,10 @@ const waitForIdle = (sessionId?: string) =>
  */
 export const replaceHistory = (
   write: () => Promise<void>,
-  allowEmpty = true,
-  rollback?: () => Promise<void>
+  {
+    allowEmpty = true,
+    rollback,
+  }: { allowEmpty?: boolean; rollback?: () => Promise<void> } = {}
 ): Promise<number> =>
   db.withHistoryReplacement(async () => {
     if (get().importingHistory) {
@@ -977,7 +993,7 @@ export const replaceHistory = (
       let summaries: SessionSummary[]
       try {
         await write()
-        summaries = await db.commitStaging(allowEmpty)
+        summaries = await db.commitStaging({ allowEmpty })
       } catch (error) {
         await db.clearStaging().catch(db.reportStorageError('clear unfinished history replacement'))
         await rollback?.().catch(db.reportStorageError('clear unfinished project restore'))
@@ -1013,6 +1029,7 @@ export const replaceHistory = (
       set({
         ready: true,
         initError: false,
+        historyUpgradeBlocked: false,
         historyMissing: false,
         historyMayStartFresh: false,
         sessions: sortSessions(summaries),
@@ -1023,12 +1040,118 @@ export const replaceHistory = (
         targetMessageId: null,
         inheritFrom: null,
       })
+      void requestPersistentStorage()
       return summaries.length
     } finally {
       set({ importingHistory: false })
       retrySaveSessions()
       const { activeId, ready } = get()
       // 替换失败时恢复被取消的详情读取，原有记录继续可用。
+      if (activeId !== null) {
+        void ensureSessionLoaded(activeId)
+      } else if (!ready) {
+        void initChat()
+      }
+    }
+  })
+
+export const mergeHistory = (
+  write: (reservedFileIds: ReadonlySet<string>) => Promise<void>,
+  choose: (preview: db.HistoryImportPreview) => Promise<ReadonlySet<string> | null>,
+  rollback: () => Promise<void>
+) =>
+  db.withHistoryReplacement(async () => {
+    await initTask
+    if (get().importingHistory) {
+      throw new BackupError('backupOtherTabBusy')
+    }
+    set({ importingHistory: true })
+    try {
+      await Promise.all(deletionTasks)
+      await db.loadSessionSummaries({
+        previousSelection: Boolean(readActiveSession()),
+        forReplacement: true,
+      })
+      flushChatUpdates()
+      const saved = await Promise.all([...unsavedSessions].map(persist))
+      if (saved.some((ok) => !ok)) {
+        throw new BackupError('backupSaveBeforeMerge')
+      }
+      const reserved = await db.prepareHistoryMerge()
+      const discard = async () => {
+        await db.clearStaging().catch(db.reportStorageError('clear unfinished history merge'))
+        await rollback().catch(db.reportStorageError('clear unfinished project restore'))
+      }
+      let result: Awaited<ReturnType<typeof db.commitHistoryMerge>>
+      try {
+        await write(reserved)
+        const preview = await db.previewHistoryMerge()
+        const useBackup = await choose(preview)
+        if (!useBackup) {
+          await discard()
+          return null
+        }
+        for (const { local } of preview.conflicts) {
+          if (
+            useBackup.has(local.id) &&
+            (getStreamController(local.id) || unsavedSessions.has(local.id))
+          ) {
+            throw new BackupError('backupConversationBusy')
+          }
+        }
+        result = await db.commitHistoryMerge(preview, useBackup)
+      } catch (error) {
+        await discard()
+        throw error
+      }
+      if (result.imported.length) {
+        const { replaced } = result
+        for (const id of replaced) {
+          sessionLoads.delete(id)
+        }
+        const retained = <T>(records: Record<string, T>) =>
+          Object.fromEntries(Object.entries(records).filter(([id]) => !replaced.has(id)))
+        set((state) => ({
+          ready: true,
+          initError: false,
+          historyUpgradeBlocked: false,
+          historyMissing: false,
+          historyMayStartFresh: false,
+          sessions: sortSessions(result.summaries),
+          sessionCache: retained(state.sessionCache),
+          sessionLoadErrors: retained(state.sessionLoadErrors),
+          targetMessageId: state.activeId && replaced.has(state.activeId) ? null : state.targetMessageId,
+        }))
+        void requestPersistentStorage()
+        const bridge = agentGoalBridge()
+        for (const runId of result.replacedRuns) {
+          if (bridge?.forget && /^[\w-]{1,80}$/.test(runId)) {
+            try {
+              if (!(await bridge.forget({ id: runId })).deleted) {
+                throw new Error('agent-goal-cleanup')
+              }
+            } catch (error) {
+              logEvent('storage', 'task.host.cleanup-failed', diagnosticError(error), 'warn')
+            }
+          }
+        }
+        for (const id of replaced) {
+          await forgetTaskReminders(id)
+        }
+        if (replaced.size) {
+          await cleanReplacedHistoryMemory(
+            new Set(result.summaries.map(({ id }) => id)),
+            replaced
+          ).catch(
+            db.reportStorageError('clean permissions for replaced conversations')
+          )
+        }
+      }
+      return result
+    } finally {
+      set({ importingHistory: false })
+      void retrySaveSessions()
+      const { activeId, ready } = get()
       if (activeId !== null) {
         void ensureSessionLoaded(activeId)
       } else if (!ready) {
@@ -1202,17 +1325,38 @@ export const setSessionPinned = async (id: string, pinned: boolean): Promise<boo
   return true
 }
 
-/** 用户在角色面板里改过某个角色的声音：整表替换并落盘 */
-export const setSessionVoiceRoles = (id: string, voiceRoles: VoiceRole[]) => {
+/** Save only the edited role. A reply can discover new characters while the editor is open. */
+export const saveSessionVoiceRole = async (id: string, next: VoiceRole) => {
   if (get().importingHistory || deletingSessions.has(id)) {
-    return
+    return 'failed'
   }
-  if (!getSession(id)) {
-    return
+  const session = getSession(id)
+  if (!session || session.mode === 'agent') {
+    return 'failed'
   }
+  const roles = sessionRoles(session)
+  const before = roles.find((role) => role.id === next.id)
+  if (!before) {
+    return 'failed'
+  }
+  const names = new Set([next.name, ...next.aliases].map(roleNameKey))
+  if (roles.some((role) =>
+    role.id !== next.id && [role.name, ...role.aliases].some((name) => names.has(roleNameKey(name)))
+  )) {
+    return 'conflict'
+  }
+  // Old replies use the name at generation time. A rename keeps that name as an alias.
+  const renamed = roleNameKey(next.name) !== roleNameKey(before.name)
+  const aliases = renamed && !names.has(roleNameKey(before.name))
+    ? [before.name, ...next.aliases].slice(0, MAX_ROLE_ALIASES)
+    : next.aliases
+  const voiceRoles = roles.map((role) => role.id === next.id ? { ...next, aliases } : role)
   updateSession(id, (session) => ({ ...session, voiceRoles }))
-  persist(id)
-  logEvent('speech', 'roles.saved', { sessionId: id, total: voiceRoles.length })
+  if (!(await persist(id))) {
+    return 'failed'
+  }
+  logEvent('speech', 'roles.saved', { total: voiceRoles.length })
+  return 'saved'
 }
 
 export const renameSession = (id: string, title: string) => {

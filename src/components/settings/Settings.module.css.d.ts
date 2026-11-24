@@ -34,13 +34,17 @@ declare const styles: {
   readonly header: string
   readonly hint: string
   readonly importActions: string
+  readonly importBulkChoices: string
   readonly importBusy: string
+  readonly importChoice: string
+  readonly importChoiceSelected: string
+  readonly importChoiceTitle: string
+  readonly importChoices: string
+  readonly importConflict: string
   readonly importDone: string
-  readonly importError: string
   readonly importErrorBody: string
   readonly importErrorBox: string
   readonly importErrorHint: string
-  readonly importErrorTitle: string
   readonly importFile: string
   readonly importFooter: string
   readonly importProgress: string
@@ -48,11 +52,9 @@ declare const styles: {
   readonly importProgressHint: string
   readonly importProgressIndeterminate: string
   readonly importProgressTrack: string
+  readonly importReplacementNote: string
   readonly importSpinner: string
-  readonly importWarn: string
-  readonly importWarnBody: string
-  readonly importWarnFinal: string
-  readonly importWarnTitle: string
+  readonly importSummary: string
   readonly keyActions: string
   readonly keyMask: string
   readonly layer: string

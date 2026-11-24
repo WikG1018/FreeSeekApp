@@ -400,6 +400,65 @@ button:disabled .modelReason {
 .textareaHidden {
   visibility: hidden;
 }
+.voiceInline {
+  position: absolute;
+  inset: 0;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ds-font-size-s, 13px);
+  color: var(--fs-secondary-text);
+}
+.textareaWrapper[data-voice-active] {
+  min-height: 36px;
+}
+.voiceState {
+  color: var(--dsw-alias-label-primary);
+  line-height: 1.35;
+}
+.voiceClock {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.voiceWave {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  height: 28px;
+}
+.voiceDiscard {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.voiceDiscard:hover,
+.voiceDiscard:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.voiceFeedback {
+  padding: 10px 14px 3px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fs-secondary-text);
+}
+.voiceFeedback p {
+  margin: 0;
+}
+.voiceRecovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
 .mirror {
   max-height: calc(4 * var(--line-height));
   visibility: hidden;

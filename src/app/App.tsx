@@ -113,6 +113,7 @@ export const App = () => {
   const openDonation = () => setDonationOpen(true)
   const milestone = useScreenTimeMilestones((state) => state.playing)
   const initError = useChatStore((state) => state.initError)
+  const historyUpgradeBlocked = useChatStore((state) => state.historyUpgradeBlocked)
   const historyMissing = useChatStore((state) => state.historyMissing)
   const historyMayStartFresh = useChatStore((state) => state.historyMayStartFresh)
   const saveError = useChatStore((state) => Object.keys(state.sessionSaveErrors).length > 0)
@@ -343,7 +344,9 @@ export const App = () => {
                           !ready
                             ? historyMissing
                               ? 'historyPreviouslySaved'
-                              : 'sessionListLoadFailed'
+                              : historyUpgradeBlocked
+                                ? 'historyUpgradeBlocked'
+                                : 'sessionListLoadFailed'
                             : 'sessionLoadFailed'
                         )
                       : t('sessionLoading')}

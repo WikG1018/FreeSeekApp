@@ -72,11 +72,13 @@
   margin-left: auto;
 }
 @media (max-width: 359px) {
-  .header[data-artifacts] .title {
+  .header[data-artifacts] .title,
+  .header[data-voices] .title {
     margin-inline: 5px;
     padding-inline: 7px;
   }
-  .header[data-artifacts] .right {
+  .header[data-artifacts] .right,
+  .header[data-voices] .right {
     gap: 4px;
   }
 }

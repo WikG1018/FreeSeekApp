@@ -6,9 +6,15 @@ import { synthesize, synthesizeMiMo, TTS_SAMPLE_RATE } from '../api/speech.js'
 import { useSettings } from '../settings.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import { playTimeline, type TimelineSegment } from './timeline.js'
-import type { ProviderProfile } from '../providers.js'
 import { styleInstruction, effectiveVoice } from './roleTable.js'
-import type { MiMoPresetVoice, VoiceRole, VoiceSegment } from './roleMarkers.js'
+import {
+  DEFAULT_NARRATOR_VOICE,
+  type MiMoPresetVoice,
+  type VoiceRole,
+  type VoiceSegment,
+} from './roleMarkers.js'
+import type { MiMoSpeechProfile } from '../api/speech.js'
+import { splitSpeechText } from './speechText.js'
 
 /**
  * 朗读：同一时间只读一条回复。
@@ -34,6 +40,10 @@ export const useReadAloud = create<ReadAloudState>(() => ({
 
 /** 段间停顿：让听感上「换人了」 */
 const ROLE_GAP_SECONDS = 0.22
+const DEEPSEEK_SPEECH_LIMIT = 8_000
+const ROLE_SPEECH_LIMIT = 1_600
+// A designed voice can return the whole waveform at once.
+const ROLE_DESIGN_LIMIT = 640
 
 let current: { controller: AbortController; context: AudioContext } | null = null
 
@@ -58,9 +68,34 @@ export const stopReadAloud = () => {
   }
 }
 
-export const describeReadAloudError = (error: unknown): TranslationMessage | string => {
-  if (error instanceof ApiError && error.kind === 'protocol') {
-    return error.message
+export const describeReadAloudError = (error: unknown): TranslationMessage => {
+  if (
+    error instanceof DOMException &&
+    (error.name === 'NotSupportedError' || error.name === 'InvalidStateError')
+  ) {
+    return { key: 'ttsAudioUnavailable' }
+  }
+  if (error instanceof ApiError) {
+    const key = error.localMessage?.key
+    if (
+      key === 'ttsNoAudio' ||
+      key === 'ttsInvalidAudio' ||
+      key === 'ttsInterrupted' ||
+      key === 'ttsServiceTimeout' ||
+      key === 'ttsAudioUnavailable' ||
+      key === 'ttsUnavailable'
+    ) {
+      return { key }
+    }
+    if (key === 'streamIdleTimeout') {
+      return { key: 'ttsServiceTimeout' }
+    }
+    if (error.kind === 'interrupted') {
+      return { key: 'ttsInterrupted' }
+    }
+    if (error.status === 403) {
+      return { key: 'ttsServiceDenied' }
+    }
   }
   // 400 表示这段正文服务端无法合成，与其余失败区分开
   if (error instanceof ApiError && error.status === 400) {
@@ -73,20 +108,44 @@ export const describeReadAloudError = (error: unknown): TranslationMessage | str
       return { key: 'insufficientBalance' }
     case 'rateLimited':
       return { key: 'rateLimited' }
+    case 'serverBusy':
+      return { key: 'ttsServiceBusy' }
+    case 'network':
+      return { key: 'ttsNetworkFailed' }
     default:
       return { key: 'ttsFailed' }
   }
 }
 
-/** 建播放上下文并登记为当前朗读；失败返回 null */
-const begin = (messageId: string, onError: (error: unknown) => void) => {
-  const controller = new AbortController()
+/** Keep the user gesture while a role edit is being committed to local storage. */
+export const prepareSpeechOutput = () => {
   let context: AudioContext
   try {
     context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
   } catch (error) {
+    if (!(error instanceof DOMException) || error.name !== 'NotSupportedError') {
+      throw error
+    }
+    context = new AudioContext()
+  }
+  if (context.state === 'suspended') {
+    void context.resume().catch(() => {})
+  }
+  return context
+}
+
+const begin = (messageId: string, onError: (error: unknown) => void, prepared?: AudioContext) => {
+  const controller = new AbortController()
+  let context: AudioContext
+  try {
+    context = prepared ?? prepareSpeechOutput()
+  } catch (error) {
     logEvent('speech', 'playback.init-failed', diagnosticError(error), 'error')
-    onError(error)
+    onError(
+      error instanceof DOMException
+        ? error
+        : new ApiError('protocol', { key: 'ttsAudioUnavailable' })
+    )
     return null
   }
   current = { controller, context }
@@ -103,7 +162,9 @@ const run = async (
   onError: (error: unknown) => void
 ) => {
   try {
-    await playTimeline(context, TTS_SAMPLE_RATE, segments, gapSeconds, controller.signal)
+    await playTimeline(context, TTS_SAMPLE_RATE, segments, gapSeconds, controller.signal, () => {
+      useReadAloud.setState({ status: 'loading', speakingRole: null })
+    })
     if (current?.controller === controller) {
       finish(controller)
     }
@@ -115,6 +176,8 @@ const run = async (
       controller.signal.aborted ? 'info' : 'error'
     )
     if (!controller.signal.aborted) {
+      // A failure can leave the next speaker's request in flight.
+      controller.abort()
       finish(controller, true)
       onError(error)
     }
@@ -135,6 +198,11 @@ export const toggleReadAloud = (
   if (reading === messageId) {
     return
   }
+  const parts = splitSpeechText(text, DEEPSEEK_SPEECH_LIMIT)
+  if (!parts.length) {
+    onError(new ApiError('protocol', { key: 'ttsUnavailable' }))
+    return
+  }
   const session = begin(messageId, onError)
   if (!session) {
     return
@@ -143,27 +211,33 @@ export const toggleReadAloud = (
   // 音色在开始朗读时读取，设置中切换后下一次朗读生效
   const { apiKey, ttsVoice } = useSettings.getState()
   let announced = false
-  void run(session.controller, session.context, [
-    {
-      open: (signal) => synthesize(apiKey ?? '', text, ttsVoice, signal),
+  void run(
+    session.controller,
+    session.context,
+    parts.map((part) => ({
+      open: (signal) => synthesize(apiKey ?? '', part, ttsVoice, signal),
       onStart: () => {
+        useReadAloud.setState({ status: 'playing' })
         if (!announced) {
           announced = true
-          useReadAloud.setState({ status: 'playing' })
           logEvent('speech', 'playback.started')
         }
       },
-    },
-  ], 0, onError)
+    })),
+    0,
+    onError
+  )
 }
 
 export type RoleReadAloudInput = {
   messageId: string
   segments: VoiceSegment[]
   roles: ReadonlyArray<VoiceRole>
-  profile: ProviderProfile
+  profile: MiMoSpeechProfile
   extrasShareVoice: boolean
   extraVoice: MiMoPresetVoice
+  narratorVoice?: MiMoPresetVoice
+  narratorLabel?: string
 }
 
 /**
@@ -181,23 +255,26 @@ export const toggleRoleReadAloud = (
     return
   }
   const byId = new Map(input.roles.map((role) => [role.id, role]))
-  const session = begin(messageId, onError)
-  if (!session) {
-    return
-  }
-  logEvent('speech', 'playback.requested', { roles: true, segments: input.segments.length })
   let announced = false
-  const timeline: TimelineSegment[] = input.segments.map((piece) => {
-    const role = byId.get(piece.roleId)
+  const timeline: TimelineSegment[] = input.segments.flatMap((piece) => {
+    const role = piece.roleId === null ? undefined : byId.get(piece.roleId)
     const voice = role
-      ? effectiveVoice(role, { extrasShareVoice: input.extrasShareVoice, extraVoice: input.extraVoice })
-      : { preset: input.extraVoice }
+      ? effectiveVoice(role, {
+          extrasShareVoice: input.extrasShareVoice,
+          extraVoice: input.extraVoice,
+        })
+      : { preset: input.narratorVoice ?? DEFAULT_NARRATOR_VOICE }
     const style = styleInstruction(role, piece.tone)
-    return {
+    const parts = splitSpeechText(
+      piece.text,
+      voice.description ? ROLE_DESIGN_LIMIT : ROLE_SPEECH_LIMIT
+    )
+    return parts.map((text, index) => ({
+      gapAfter: index === parts.length - 1 ? ROLE_GAP_SECONDS : 0,
       open: (signal) =>
         synthesizeMiMo({
           profile: input.profile,
-          text: piece.text,
+          text,
           ...(voice.preset && { preset: voice.preset }),
           ...(voice.description && { description: voice.description }),
           style,
@@ -208,10 +285,22 @@ export const toggleRoleReadAloud = (
           announced = true
           logEvent('speech', 'playback.started')
         }
-        useReadAloud.setState({ status: 'playing', speakingRole: role?.name ?? null })
+        useReadAloud.setState({
+          status: 'playing',
+          speakingRole: role?.name ?? input.narratorLabel ?? null,
+        })
       },
-    }
+    }))
   })
+  if (!timeline.length) {
+    onError(new ApiError('protocol', { key: 'ttsUnavailable' }))
+    return
+  }
+  const session = begin(messageId, onError)
+  if (!session) {
+    return
+  }
+  logEvent('speech', 'playback.requested', { roles: true, segments: timeline.length })
   void run(session.controller, session.context, timeline, ROLE_GAP_SECONDS, onError)
 }
 
@@ -224,27 +313,31 @@ export const previewRoleVoice = (
     role: VoiceRole
     text: string
     messageId: string
-    profile: ProviderProfile
+    profile: MiMoSpeechProfile
     extrasShareVoice: boolean
     extraVoice: MiMoPresetVoice
+    context?: AudioContext
   },
   onError: (error: unknown) => void
 ) => {
   const { role } = input
   const reading = useReadAloud.getState().messageId
   stopReadAloud()
-  if (reading === input.messageId) {
+  if (reading === input.messageId && !input.context) {
     return
   }
   const voice = effectiveVoice(role, {
     extrasShareVoice: input.extrasShareVoice,
     extraVoice: input.extraVoice,
   })
-  const session = begin(input.messageId, onError)
+  const session = begin(input.messageId, onError, input.context)
   if (!session) {
     return
   }
-  logEvent('speech', 'playback.preview', { preset: voice.preset, described: Boolean(voice.description) })
+  logEvent('speech', 'playback.preview', {
+    preset: voice.preset,
+    described: Boolean(voice.description),
+  })
   void run(
     session.controller,
     session.context,

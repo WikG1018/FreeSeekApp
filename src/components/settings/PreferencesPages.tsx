@@ -308,8 +308,8 @@ export const ChatPreferencesPage = () => {
 /** 角色配音：开关 + 朗读模型 + 主角/旁白/路人音色。只在开关打开时展开下面几项。 */
 const RoleVoiceSettings = () => {
   const t = useTranslate()
-  const name = useId()
   const roleVoice = useSettings((s) => s.roleVoice)
+  const english = useSettings((s) => s.locale === 'en-US')
   const profiles = useProviders((s) => s.profiles)
   const [saveFailed, setSaveFailed] = useState(false)
   const save = (patch: Parameters<typeof setRoleVoice>[0]) => setSaveFailed(!setRoleVoice(patch))
@@ -317,17 +317,17 @@ const RoleVoiceSettings = () => {
   // 菜单里显示「名字 · 听感」，行内右值只显示名字（shortLabel），保持单行
   const voiceOptions = MIMO_PRESET_VOICES.map((voice) => ({
     value: voice.id,
-    label: t('settingsRoleVoicePresetOption', { name: voice.id, kind: voice.label }),
+    label: t('settingsRoleVoicePresetOption', { name: voice.id, kind: english ? voice.enLabel : voice.label }),
     shortLabel: voice.id,
   }))
   return (
-    <Section title={t('settingsRoleVoice')}>
+    <Section>
       <SwitchRow
         label={t('settingsRoleVoice')}
+        description={t('settingsRoleVoiceHint')}
         checked={roleVoice.enabled}
         change={(enabled) => save({ enabled })}
       />
-      <p className={styles.paragraph}>{t('settingsRoleVoiceHint')}</p>
       {saveFailed && (
         <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
           {t('settingsRoleVoiceSaveFailed')}
@@ -335,32 +335,26 @@ const RoleVoiceSettings = () => {
       )}
       {roleVoice.enabled && (
         <>
-          <p className={styles.paragraph}>
-            {t('settingsRoleVoiceModel')}：{profile ? t('settingsRoleVoiceModelReuse') : t('settingsRoleVoiceModelMissing')}
-          </p>
-          {!profile && (
-            <p className={styles.paragraph}>
-              {t('settingsRoleVoiceNeedKey')}{' '}
-              <button type="button" className={styles.textButton} onClick={() => openSettings('providers')}>
-                {t('settingsRoleVoiceModelGo')}
-              </button>
-            </p>
-          )}
-          <p className={styles.paragraph}>{t('settingsRoleVoiceLead')}</p>
-          <div role="radiogroup" aria-label={t('settingsRoleVoiceLead')}>
-            <Choice
-              name={`${name}-lead`}
-              label={t('settingsRoleVoiceLeadPreset')}
-              checked={roleVoice.leadVoice === 'preset'}
-              change={() => save({ leadVoice: 'preset' })}
-            />
-            <Choice
-              name={`${name}-lead`}
-              label={t('settingsRoleVoiceLeadDescription')}
-              checked={roleVoice.leadVoice === 'description'}
-              change={() => save({ leadVoice: 'description' })}
-            />
-          </div>
+          <Row
+            label={t('settingsRoleVoiceModel')}
+            target="providerSpeech"
+            description={profile
+              ? roleVoice.source === 'custom' ? t('providerSpeechCustom') : t('settingsRoleVoiceModelReuse')
+              : t('settingsRoleVoiceModelMissing')}
+            detail={profile && roleVoice.source === 'follow' ? profile.name : undefined}
+            onClick={() => openSettings('providerSpeech')}
+          />
+          <Select
+            ariaLabel={t('settingsRoleVoiceLead')}
+            settingRow="value"
+            compactMenu
+            value={roleVoice.leadVoice}
+            options={[
+              { value: 'preset', label: t('settingsRoleVoiceLeadPreset') },
+              { value: 'description', label: t('settingsRoleVoiceLeadDescription') },
+            ]}
+            onChange={(leadVoice) => save({ leadVoice })}
+          />
           {roleVoice.leadVoice === 'description' && (
             <p className={styles.paragraph}>{t('settingsRoleVoiceLeadHint')}</p>
           )}
@@ -372,20 +366,22 @@ const RoleVoiceSettings = () => {
             options={voiceOptions}
             onChange={(value) => save({ narratorVoice: value as typeof roleVoice.narratorVoice })}
           />
-          <Select
-            ariaLabel={t('settingsRoleVoiceExtra')}
-            settingRow="value"
-            compactMenu
-            value={roleVoice.extraVoice}
-            options={voiceOptions}
-            onChange={(value) => save({ extraVoice: value as typeof roleVoice.extraVoice })}
-          />
           <SwitchRow
             label={t('settingsRoleVoiceShare')}
+            description={t('settingsRoleVoiceShareHint')}
             checked={roleVoice.extrasShareVoice}
             change={(extrasShareVoice) => save({ extrasShareVoice })}
           />
-          <p className={styles.paragraph}>{t('settingsRoleVoiceShareHint')}</p>
+          {roleVoice.extrasShareVoice && (
+            <Select
+              ariaLabel={t('settingsRoleVoiceExtra')}
+              settingRow="value"
+              compactMenu
+              value={roleVoice.extraVoice}
+              options={voiceOptions}
+              onChange={(extraVoice) => save({ extraVoice })}
+            />
+          )}
         </>
       )}
     </Section>

@@ -192,6 +192,16 @@ export const applicableSummary = (summary: ContextSummary | undefined, rounds: C
     ? summary
     : undefined
 
+/** Preserve the original boundary when import changes local attachment IDs. */
+export const rebaseContextSummary = (
+  summary: ContextSummary | undefined,
+  before: ContextRound[],
+  after: ContextRound[]
+) =>
+  summary && applicableSummary(summary, before) && summary.coveredRounds <= after.length
+    ? { ...summary, signature: prefixSignature(after, summary.coveredRounds) }
+    : summary
+
 export const estimateContextHistory = (rounds: ContextRound[], summary?: ContextSummary) => {
   const sizes = rounds.slice(summary?.coveredRounds ?? 0).map(roundTokens)
   return {

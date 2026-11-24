@@ -562,7 +562,11 @@ export const runAssistantCases = async (run) => {
         })
         await library.allowMemory({ connection: 'fixture-b', name: '已授权连接' })
         const { name, blob } = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([blob], name, { type: 'application/zip' }))
+        await a.backup.importHistory(
+          new File([blob], name, { type: 'application/zip' }),
+          undefined,
+          async () => new Set([session.id])
+        )
         const restored = await a.db.loadSession(session.id)
         const memory = await library.readAssistantLibrary()
         return {

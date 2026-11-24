@@ -255,7 +255,7 @@ export const readSessionFile: Read<SessionFile> = (value) => {
     id: sessionId(item.id),
     title: nullable(string)(item.title),
     pinned: item.pinned === undefined ? false : boolean(item.pinned),
-    current_message_id: count(item.current_message_id),
+    current_message_id: nullable(count)(item.current_message_id ?? null),
     inserted_at: time(item.inserted_at),
     updated_at: time(item.updated_at),
     messages: list(message)(item.messages),

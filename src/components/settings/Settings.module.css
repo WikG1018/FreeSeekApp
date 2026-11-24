@@ -812,7 +812,7 @@ button.row:active:not(:disabled),
   }
 }
 
-/* 导入：文件名 + 醒目警告 */
+/* Import preview and version choice */
 .importFile {
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -828,37 +828,86 @@ button.row:active:not(:disabled),
   background: var(--dsw-alias-bg-layer-3);
 }
 
-.importWarn {
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-interactive-bg-hover-danger);
+.importSummary {
+  margin: 0 0 12px;
 }
 
-.importWarnTitle {
+.importBulkChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+
+.importConflict {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.importConflict legend {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
   margin-bottom: 6px;
-  font-size: 15px;
-  line-height: 22px;
-  font-weight: 600;
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.importWarnBody {
-  font-size: 13px;
-  line-height: 21px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.importWarnFinal {
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-interactive-bg-hover-danger);
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 14px;
-  line-height: 22px;
   font-weight: 500;
   color: var(--dsw-alias-label-primary);
-  text-align: center;
+}
+
+.importChoices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.importChoice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: start;
+  gap: 1px 6px;
+  padding: 8px;
+  border: 1px solid var(--fs-line);
+  border-radius: 11px;
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+  line-height: 1.45;
+  transition: background-color 150ms var(--fs-ease-out), border-color 150ms var(--fs-ease-out);
+  overflow-wrap: anywhere;
+}
+
+.importChoiceSelected {
+  border-color: var(--fs-accent-line);
+  background: var(--fs-accent-wash);
+}
+
+.importChoice input {
+  margin: 0;
+  accent-color: var(--fs-accent-fill);
+}
+
+.importChoice time,
+.importChoiceTitle {
+  grid-column: 1 / -1;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.importChoiceTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.importReplacementNote {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
 }
 
 .importDone {
@@ -890,6 +939,7 @@ button.row:active:not(:disabled),
 
 .importActions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -967,25 +1017,12 @@ button.row:active:not(:disabled),
   color: var(--dsw-alias-label-tertiary);
 }
 
-.importError {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-state-error-primary);
-}
-
 .importErrorBox {
   margin-top: 12px;
   padding: 12px 14px;
   border-radius: 13px;
   border: 1px solid var(--dsw-alias-state-error-primary);
   background: var(--dsw-alias-interactive-bg-hover-danger);
-}
-
-.importErrorTitle {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--dsw-alias-state-error-primary);
 }
 
 .importErrorBody {

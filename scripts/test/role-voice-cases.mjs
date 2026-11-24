@@ -5,6 +5,82 @@ import assert from 'node:assert/strict'
  * 对应 docs/role-voice-plan.md 第 4.2 节的每一种情况。
  */
 export const runRoleVoiceCases = async (run) => {
+  await run('ASR retries the same recording and adds the Chinese transcript to the draft', async (page) => {
+    const recordings = []
+    await page.route('**/v1/tools/asr', async (route) => {
+      const body = route.request().postDataBuffer()
+      const start = body.indexOf('RIFF')
+      assert.ok(start >= 0, 'upload contains a WAV file')
+      const end = start + body.readUInt32LE(start + 4) + 8
+      recordings.push(body.subarray(start, end))
+      const failed = recordings.length === 1
+      await route.fulfill({
+        status: failed ? 503 : 200,
+        headers: { 'access-control-allow-origin': '*' },
+        contentType: 'application/json',
+        body: failed ? '{}' : '{"text":"语音转写成功。"}',
+      })
+    })
+    await page.evaluate(() => {
+      window.__audit.settings.setApiKey('asr-fixture')
+      const counts = { captures: 0, stopped: 0, samples: 0 }
+      window.__microphoneFixture = counts
+      const track = new EventTarget()
+      track.stop = () => counts.stopped++
+      Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async () => {
+        counts.captures++
+        return { getTracks: () => [track], getAudioTracks: () => [track] }
+      } })
+      const createNode = () => ({ connect() {}, disconnect() {} })
+      window.AudioContext = class {
+        state = 'running'
+        sampleRate = 48000
+        destination = {}
+        createMediaStreamSource() { return createNode() }
+        createAnalyser() {
+          return {
+            ...createNode(), context: this, frequencyBinCount: 256,
+            getFloatFrequencyData(values) { values.fill(-45) },
+          }
+        }
+        createScriptProcessor() {
+          const processor = createNode()
+          setTimeout(() => {
+            processor.onaudioprocess?.({
+              inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.15) },
+            })
+            counts.samples++
+          }, 80)
+          return processor
+        }
+        close() { this.state = 'closed'; return Promise.resolve() }
+      }
+    })
+    const composer = page.getByTestId('chat-composer')
+    const input = composer.locator('textarea')
+    await input.fill('补充一下，')
+    await input.press('End')
+    await composer.getByRole('button', { name: '语音输入', exact: true }).click()
+    await page.waitForFunction(() => window.__microphoneFixture.samples === 1)
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/voice-capture-zh.png', animations: 'disabled' })
+    }
+    await composer.getByRole('button', { name: '结束录音并转写' }).click()
+    const retry = composer.getByRole('button', { name: '重试转写' })
+    await retry.waitFor()
+    await composer.getByRole('button', { name: '丢弃录音' }).waitFor()
+    assert.equal(await input.inputValue(), '补充一下，', 'failure keeps the draft')
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/voice-retry-zh.png', animations: 'disabled' })
+    }
+    await retry.click()
+    await page.waitForFunction(() => document.querySelector('[data-testid="chat-composer"] textarea')?.value === '补充一下，语音转写成功。')
+    assert.equal(recordings.length, 2)
+    assert.deepEqual(recordings[0], recordings[1], 'retry uploads the same WAV audio')
+    assert.equal(recordings[0].readUInt32LE(24), 16000, 'native capture was resampled for ASR')
+    assert.deepEqual(await page.evaluate(() => window.__microphoneFixture), { captures: 1, stopped: 1, samples: 1 })
+  })
+
   const parse = async (page, text, existing = [], options) =>
     page.evaluate(
       async ({ text, existing, options }) => {
@@ -50,6 +126,34 @@ export const runRoleVoiceCases = async (run) => {
       assert.equal(r.plain, '你别管我。')
     }
   )
+
+  await run('role markers preserve literal tags inside Markdown code', async (page) => {
+    const tick = String.fromCharCode(96)
+    const code = ['解释 ' + tick + '⟦新角色：示例⟧' + tick, '', '~~~text', '⟦新角色：代码⟧', '~~~'].join('\n')
+    const input = code + '\n\n⟦旁白⟧故事开始。'
+    const r = await parse(page, input)
+    assert.equal(r.plain, code + '\n\n故事开始。')
+    assert.deepEqual(r.newRoles.map(({ name }) => name), ['旁白'])
+    const visible = await page.evaluate((value) => window.__audit.roleMarkers.stripRoleMarkers(value), input)
+    assert.equal(visible, r.plain)
+  })
+
+  await run('role markers understand the English dialogue protocol and full aliases', async (page) => {
+    const input =
+      '「New character：Lin Daiyu｜Aliases：Lin Meimei, Pin’er｜Voice：Chloe｜Nature：gentle｜Importance：lead」\n' +
+      'I heard you.\n\n「Lin Meimei｜Tone: surprised」\nReally?\n\n' +
+      '「Narrator｜Voice：Milo｜Tone：calm」\nShe waited.'
+    const result = await parse(page, input)
+    const [lead, narrator] = result.newRoles
+    assert.deepEqual(result.newRoles.map(({ name }) => name), ['Lin Daiyu', 'Narrator'])
+    assert.deepEqual(lead.aliases, ['Lin Meimei', 'Pin’er'])
+    assert.equal(lead.preset, 'Chloe')
+    assert.equal(lead.importance, 'lead')
+    assert.equal(narrator.importance, 'supporting')
+    assert.equal(result.segments[1].roleId, lead.id)
+    assert.equal(result.segments[1].tone, 'surprised')
+    assert.doesNotMatch(result.plain, /Voice|Tone|Aliases/)
+  })
 
   await run(
     'role markers: a described voice is kept as description for leads and supporting roles',
@@ -616,7 +720,8 @@ export const runRoleVoiceCases = async (run) => {
       if (result.status) {
         return route.fulfill({ status: result.status, contentType: 'application/json', body: JSON.stringify(result.body ?? {}) })
       }
-      const sse = result.chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n'
+      const sse = result.chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') +
+        (result.truncated ? '' : 'data: [DONE]\n\n')
       return route.fulfill({ status: 200, contentType: 'text/event-stream', body: sse })
     })
   const audioChunk = (bytes, extra = {}) => ({
@@ -683,6 +788,34 @@ export const runRoleVoiceCases = async (run) => {
     }
   )
 
+  await run('mimo tts sends the dedicated service model configured in settings', async (page) => {
+    const models = []
+    await mimoRoute(page.context(), (body) => {
+      models.push(body.model)
+      return { chunks: [audioChunk([0, 1])] }
+    })
+    await page.evaluate(async () => {
+      const a = window.__audit
+      const profile = a.roleVoiceProfile.roleVoiceProfile([], {
+        source: 'custom',
+        providerId: null,
+        custom: { url: 'https://mimo.example/v1', apiKey: 'test-speech', model: 'my-custom-speech' },
+      })
+      for (const voice of [{ preset: '白桦' }, { description: '清冷少女音' }]) {
+        const stream = await a.speech.synthesizeMiMo({
+          profile,
+          ...voice,
+          text: '测试。',
+          style: '',
+          signal: new AbortController().signal,
+        })
+        const reader = stream.getReader()
+        while (!(await reader.read()).done) {}
+      }
+    })
+    assert.deepEqual(models, ['my-custom-speech', 'my-custom-speech'])
+  })
+
   await run(
     'mimo tts: an empty style omits the user message so nothing stray is spoken',
     async (page) => {
@@ -702,7 +835,7 @@ export const runRoleVoiceCases = async (run) => {
   )
 
   await run(
-    'mimo tts: an HTTP error carries the status and the server message',
+    'mimo tts: an HTTP error preserves the status and gives a localized playback error',
     async (page) => {
       const context = page.context()
       await mimoRoute(context, () => ({ status: 400, body: { error: { message: 'Param Incorrect: Unknown voice' } } }))
@@ -711,13 +844,18 @@ export const runRoleVoiceCases = async (run) => {
           await window.__audit.speech.synthesizeMiMo({ profile, text: 'x', preset: '白桦', style: '', signal: new AbortController().signal })
           return { ok: true }
         } catch (error) {
-          return { name: error.name, kind: error.kind, status: error.status, message: error.message }
+          return {
+            name: error.name,
+            status: error.status,
+            notice: window.__audit.readAloud.describeReadAloudError(error),
+          }
         }
       }, profile())
       assert.equal(r.ok, undefined)
       assert.equal(r.name, 'ApiError')
       assert.equal(r.status, 400)
-      assert.match(r.message, /Unknown voice/, 'server message is surfaced')
+      assert.equal(r.notice.key, 'ttsUnavailable')
+      assert.doesNotMatch(JSON.stringify(r.notice), /Unknown voice/)
     }
   )
 
@@ -744,6 +882,45 @@ export const runRoleVoiceCases = async (run) => {
       assert.equal(r.kind, 'protocol')
     }
   )
+
+  await run('mimo tts accepts full JSON audio and detects an incomplete audio stream', async (page) => {
+    const models = []
+    await mimoRoute(page.context(), (body) => {
+      models.push(body.model)
+      if (body.model === 'designed-voice') {
+        return { status: 200, body: { choices: [{ message: { audio: { data: 'AQI=' } }, finish_reason: 'stop' }] } }
+      }
+      return { chunks: [audioChunk([3, 4])], truncated: true }
+    })
+    const result = await page.evaluate(async (profile) => {
+      const a = window.__audit
+      const results = []
+      for (const voice of [{ description: '说话轻柔' }, { preset: '白桦' }]) {
+        const bytes = []
+        try {
+          const stream = await a.speech.synthesizeMiMo({
+            profile: { ...profile, speechModel: 'preset-voice', speechDesignModel: 'designed-voice' },
+            ...voice,
+            text: '测试。',
+            style: '',
+            signal: new AbortController().signal,
+          })
+          const reader = stream.getReader()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            bytes.push(...value)
+          }
+          results.push({ bytes })
+        } catch (error) {
+          results.push({ notice: a.readAloud.describeReadAloudError(error).key })
+        }
+      }
+      return results
+    }, profile())
+    assert.deepEqual(models, ['designed-voice', 'preset-voice'])
+    assert.deepEqual(result, [{ bytes: [1, 2] }, { notice: 'ttsInterrupted' }])
+  })
 
   // ---------- 多段播放队列 ----------
   /** 假的 AudioContext：记录每次排程的时间和时长，onended 手动触发 */
@@ -870,7 +1047,7 @@ export const runRoleVoiceCases = async (run) => {
       assert.ok(r.starts[1].when >= r.starts[0].when + r.starts[0].duration + 0.2, 'a gap separates speakers')
       assert.ok(r.starts[2].when >= r.starts[1].when + r.starts[1].duration + 0.2)
       assert.equal(r.playingStatus, 'playing')
-      assert.equal(r.speaking, '店小二', 'reports the role currently being read')
+      assert.equal(r.speaking, '旁白', 'queued voices never replace the audible speaker')
       assert.equal(r.status, 'idle', 'returns to idle once every source ended')
       assert.deepEqual(r.errors, [])
     }
@@ -1301,7 +1478,7 @@ export const runRoleVoiceCases = async (run) => {
       await list.waitFor()
       const text = await list.innerText()
       assert.match(text, /林黛玉/)
-      assert.match(text, /林妹妹、颦儿/)
+      assert.match(text, /林妹妹 · 颦儿/)
       assert.match(text, /旁白/)
       assert.match(text, /王熙凤/)
       assert.match(text, /其他角色 2 人/, 'extras fold into one row')
@@ -1311,8 +1488,24 @@ export const runRoleVoiceCases = async (run) => {
       const expanded = await list.innerText()
       assert.match(expanded, /店小二/)
       assert.match(expanded, /路人甲/)
+      if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+        await page.screenshot({ path: 'tmp/regression/role-voice-list-zh.png', animations: 'disabled' })
+      }
     }
   )
+
+  await run('role voice panel accepts pointer input on a dark desktop', async (page) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await seedRoles(page, [named('r1', '林黛玉', { aliases: ['林妹妹'] })])
+    await page.evaluate(() => window.__audit.settings.setThemePreference('dark'))
+    await page.locator('[data-role-voice-trigger]').click()
+    const list = page.getByTestId('role-voice-list')
+    await list.waitFor()
+    assert.match(await list.innerText(), /林黛玉/)
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/role-voice-list-desktop-zh.png', animations: 'disabled' })
+    }
+  })
 
   await run(
     'role voice ui: the button stays hidden while the feature is off or the session has no roles',
@@ -1357,6 +1550,9 @@ export const runRoleVoiceCases = async (run) => {
       await page.getByRole('button', { name: '编辑 林黛玉 的声音' }).click()
       const dialog = page.getByRole('dialog', { name: '编辑角色' })
       await dialog.waitFor()
+      if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+        await page.screenshot({ path: 'tmp/regression/role-voice-editor-zh.png', animations: 'disabled' })
+      }
       // 改成白桦并加一个别名
       await dialog.getByRole('radio', { name: /白桦/ }).check()
       const alias = dialog.getByLabel('添加别名')
@@ -1374,6 +1570,30 @@ export const runRoleVoiceCases = async (run) => {
       assert.equal(saved?.source, 'user', 'a user edit locks the voice against the model')
     }
   )
+
+  await run('role voice keeps an extras-only conversation editable on a narrow screen without MiMo', async (page) => {
+    await page.setViewportSize({ width: 320, height: 640 })
+    await seedRoles(page, [named('r1', '路人甲', { importance: 'extra', preset: 'Milo' })])
+    await page.evaluate(() => window.__audit.settings.setRoleVoice({
+      source: 'custom', custom: { url: '', apiKey: '', model: '' },
+    }))
+    const trigger = page.locator('[data-role-voice-trigger]')
+    await trigger.click()
+    await page.getByRole('button', { name: /其他角色 1 人/ }).click()
+    const list = page.getByTestId('role-voice-list')
+    assert.equal(await list.getByRole('button', { name: '试听 路人甲' }).count(), 0)
+    await list.getByRole('button', { name: '编辑 路人甲 的声音' }).click()
+    const editor = page.getByRole('dialog', { name: '编辑角色' })
+    const bounds = await editor.boundingBox()
+    assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 320)
+    await editor.getByLabel('名字').fill('过路人')
+    await editor.getByRole('button', { name: '保存', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    const saved = await page.evaluate(() => window.__audit.store.useChatStore.getState().sessionCache['rv-ui'].voiceRoles[0])
+    assert.equal(saved.name, '过路人')
+    assert.deepEqual(saved.aliases, ['路人甲'], 'old dialogue keeps matching this role')
+    assert.equal(saved.preset, 'Milo', 'editing while sharing a voice keeps the role’s own sound')
+  })
 
   // ---------- 回答朗读按钮 ----------
   /** 装好角色配音环境：MiMo 配置 + 角色表 + 一条带标注的回答 */
@@ -1449,32 +1669,51 @@ export const runRoleVoiceCases = async (run) => {
     }
   )
 
+  await run('role voice reads untagged narration before, between and after dialogue', async (page) => {
+    await seedReply(page, [
+      '开场。', '', '⟦林黛玉⟧你来了。', '', '竹影微动。', '', '⟦店小二⟧请进。', '', '天色转暗。',
+    ].join('\n'), [named('d', '林黛玉'), named('x', '店小二', { importance: 'extra', preset: 'Dean' })])
+    await page.getByRole('button', { name: '朗读' }).first().click()
+    await page.waitForFunction(() => window.__ttsRequests.length === 5)
+    const requests = await page.evaluate(() => window.__ttsRequests)
+    assert.deepEqual(requests.map(({ voice, text }) => [voice, text]), [
+      ['白桦', '开场。'], ['茉莉', '你来了。'], ['白桦', '竹影微动。'],
+      ['苏打', '请进。'], ['白桦', '天色转暗。'],
+    ])
+  })
+
   await run(
     'role voice read-aloud: an untagged reply still uses the plain single-request path',
     async (page) => {
       await seedReply(page, '今天天气不错，适合出去走走。', [named('d', '林黛玉')])
-      // 聊天模型切回官方：没有角色段时走官方单段朗读，按钮保持可见
-      await page.evaluate(() => window.__audit.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' }))
-      await page.waitForTimeout(600)
-      const button = page.getByRole('button', { name: '朗读' }).first()
-      await button.waitFor({ timeout: 15000 })
-      await button.click()
-      await page.waitForTimeout(800)
+      const deepseek = []
+      await page.route('**/v1/tools/tts', async (route) => {
+        deepseek.push(route.request().postDataJSON())
+        await route.fulfill({ contentType: 'audio/pcm', body: Buffer.alloc(2400 * 2) })
+      })
+      await page.evaluate(() => {
+        window.__audit.settings.setApiKey('fixture-official')
+        window.__audit.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' })
+      })
+      const synthesis = page.waitForResponse('**/v1/tools/tts')
+      await page.getByRole('button', { name: '朗读' }).first().click()
+      await synthesis
       const requests = await page.evaluate(() => window.__ttsRequests)
       assert.equal(requests.length, 0, 'no MiMo request for an untagged reply')
+      assert.equal(deepseek.length, 1)
+      assert.equal(deepseek[0].text, '今天天气不错，适合出去走走。')
     }
   )
 
   await run(
-    'role voice read-aloud: with a third-party chat model the button only appears when the reply has tagged characters',
+    'role voice read-aloud: a configured MiMo voice reads untagged replies under a third-party chat model',
     async (page) => {
       await seedReply(page, '今天天气不错。', [named('d', '林黛玉')])
-      await page.waitForTimeout(600)
-      assert.equal(
-        await page.getByRole('button', { name: '朗读' }).count(),
-        0,
-        'untagged reply under a third-party chat model has no read-aloud path'
-      )
+      await page.getByRole('button', { name: '朗读' }).first().click()
+      await page.waitForFunction(() => window.__ttsRequests.length === 1)
+      assert.deepEqual(await page.evaluate(() => window.__ttsRequests), [
+        { voice: '白桦', text: '今天天气不错。' },
+      ])
     }
   )
 
@@ -1490,6 +1729,7 @@ export const runRoleVoiceCases = async (run) => {
         const follow = resolve([mimo], { source: 'follow', providerId: null, custom: { url: '', apiKey: '', model: '' } })
         // 2) 跟随模式但没有 MiMo
         const noMimo = resolve([{ ...mimo, url: 'https://other.example/v1', preset: undefined }], { source: 'follow', providerId: null, custom: { url: '', apiKey: '', model: '' } })
+        const unrelatedHost = resolve([{ ...mimo, url: 'https://other.example/v1/xiaomimimo.com', preset: undefined }], { source: 'follow', providerId: null, custom: { url: '', apiKey: '', model: '' } })
         // 3) 单独配置：不依赖供应商列表
         const custom = resolve([], { source: 'custom', providerId: null, custom: { url: ' https://tts.example/v1 ', apiKey: ' k2 ', model: 'my-tts' } })
         // 4) 单独配置但缺项
@@ -1497,12 +1737,14 @@ export const runRoleVoiceCases = async (run) => {
         return {
           follow: follow?.id,
           noMimo: noMimo,
+          unrelatedHost,
           custom: custom && { url: custom.url, apiKey: custom.apiKey, model: custom.model, id: custom.id },
           customMissing,
         }
       })
       assert.equal(resolved.follow, 'p1', 'follow uses the configured MiMo')
       assert.equal(resolved.noMimo, null, 'follow without MiMo resolves to nothing')
+      assert.equal(resolved.unrelatedHost, null)
       assert.deepEqual(resolved.custom, {
         url: 'https://tts.example/v1',
         apiKey: 'k2',
@@ -1532,14 +1774,16 @@ export const runRoleVoiceCases = async (run) => {
       await row.click()
       await page.waitForTimeout(500)
       // 切到单独配置并填写
-      const dialog = page.locator('[data-settings-page="providerSpeech"]')
       const sourceSelect = page.getByRole('button', { name: '语音服务' })
       await sourceSelect.click()
       await page.getByRole('option', { name: /单独配置/ }).click()
       await page.waitForTimeout(300)
       await page.getByLabel('服务地址').fill('https://tts.example/v1')
       await page.getByLabel('API 密钥').fill('sk-speech-only')
-      await page.getByLabel('模型名').fill('custom-tts')
+      await page.getByLabel('预置音色模型').fill('custom-tts')
+      await page.getByLabel('描述音色模型').fill('custom-design')
+      assert.equal(await page.getByLabel('服务地址').getAttribute('type'), 'url')
+      assert.equal(await page.getByLabel('API 密钥').getAttribute('type'), 'password')
       await page.getByRole('button', { name: '保存语音设置' }).click()
       await page.waitForTimeout(600)
       const saved = await page.evaluate(() => window.__audit.settings.useSettings.getState().roleVoice)
@@ -1547,6 +1791,7 @@ export const runRoleVoiceCases = async (run) => {
       assert.equal(saved.custom.url, 'https://tts.example/v1')
       assert.equal(saved.custom.apiKey, 'sk-speech-only')
       assert.equal(saved.custom.model, 'custom-tts')
+      assert.equal(saved.custom.designModel, 'custom-design')
     }
   )
 }

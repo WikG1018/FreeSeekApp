@@ -733,7 +733,9 @@ export const runTaskModeCases = async (run) => {
       const restored = await page.evaluate(async () => {
         const a = window.__audit
         const { blob } = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([blob], 'task-roundtrip.zip'))
+        await a.backup.importHistory(new File([blob], 'task-roundtrip.zip'), undefined, async () =>
+          new Set(['task-session'])
+        )
         const session = await a.db.loadSession('task-session')
         const files = session.messages.at(-1).task.artifacts
         return {
@@ -853,7 +855,9 @@ export const runTaskModeCases = async (run) => {
         const output = first.task.artifacts[0]
         const blob = await a.db.loadFile(output.id)
         const pack = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([pack.blob], 'agent-link-roundtrip.zip'))
+        await a.backup.importHistory(new File([pack.blob], 'agent-link-roundtrip.zip'), undefined, async () =>
+          new Set([session.id])
+        )
         const restored = (await a.db.loadSession(session.id)).messages.find(
           (message) => message.id === first.id
         )
@@ -1228,7 +1232,9 @@ export const runTaskModeCases = async (run) => {
         a.store.sendMessage(id)
         await a.waitIdle()
         const pack = await a.backup.exportHistory()
-        await a.backup.importHistory(new File([pack.blob], 'export.zip'))
+        await a.backup.importHistory(new File([pack.blob], 'export.zip'), undefined, async () =>
+          new Set([id])
+        )
         const reply = (await a.db.loadSession(id)).messages.at(-1)
         const output = await Promise.all(
           reply.task.artifacts.map(async ({ id, name }) => ({

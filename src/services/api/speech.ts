@@ -1,7 +1,7 @@
 import { ApiError, API_ORIGIN, request } from './client.js'
 import { postMultipart } from './multipart.js'
-import { providerFetch } from './providerTransport.js'
-import { readServerSentEvents } from './sse.js'
+import { fetchProviderResponse, providerEndpoint, readApiJson } from './providerClient.js'
+import { readServerSentEvents, StreamIdleTimeoutError, StreamReadError } from './sse.js'
 import type { ProviderProfile } from '../providers.js'
 import type { MiMoPresetVoice } from '../speech/roleMarkers.js'
 
@@ -38,7 +38,7 @@ export const transcribe = async (
     !('text' in body) ||
     typeof body.text !== 'string'
   ) {
-    throw new ApiError('protocol', 'Invalid ASR response')
+    throw new ApiError('protocol', { key: 'voiceInputInvalidResponse' })
   }
   return body.text
 }
@@ -56,8 +56,10 @@ export const synthesize = async (
     body: JSON.stringify({ text, voice_id: voice, format: 'pcm', filter_markdown: true }),
     signal,
   })
-  if (!response.body) {
-    throw new ApiError('protocol', await response.text())
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!response.body || /(?:json|text\/|audio\/wav)/i.test(contentType)) {
+    void response.body?.cancel().catch(() => {})
+    throw new ApiError('protocol', { key: 'ttsNoAudio' })
   }
   return response.body
 }
@@ -74,10 +76,14 @@ export const synthesize = async (
  */
 export const MIMO_TTS_MODEL = 'mimo-v2.5-tts'
 export const MIMO_TTS_DESIGN_MODEL = 'mimo-v2.5-tts-voicedesign'
-const MIMO_CHAT_COMPLETIONS = '/chat/completions'
+const MAX_MIMO_AUDIO_PAYLOAD = 8 * 1024 * 1024
+export type MiMoSpeechProfile = ProviderProfile & {
+  speechModel?: string
+  speechDesignModel?: string
+}
 
 export type MiMoSpeechRequest = {
-  profile: ProviderProfile
+  profile: MiMoSpeechProfile
   text: string
   /** 预置音色；和 description 二选一 */
   preset?: MiMoPresetVoice
@@ -88,75 +94,86 @@ export type MiMoSpeechRequest = {
   signal: AbortSignal
 }
 
-const mimoHeaders = (profile: ProviderProfile): Record<string, string> => {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'text/event-stream, application/json',
-  }
-  // 与聊天同一套鉴权：同一个 MiMo 配置能聊天就能朗读，用户不用再配一遍
-  if (profile.apiKey) {
-    headers.Authorization = `Bearer ${profile.apiKey}`
-  }
-  for (const [key, value] of Object.entries(profile.headers ?? {})) {
-    headers[key] = value
-  }
-  return headers
-}
-
-/** 走 SSE 取出 base64 的 pcm16 分片，拼成字节流；和 DeepSeek TTS 一样是 24kHz / 16-bit / 单声道 */
-const mimoAudioStream = async (response: Response, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> => {
-  if (!response.ok) {
-    // 把服务端的说明带出来，方便区分「音色 ID 写错」「额度」这类错误
-    const detail = await response.text().catch(() => '')
-    throw new ApiError('http', `MiMo TTS ${response.status}: ${detail.slice(0, 300)}`, response.status)
-  }
-  if (!response.body) {
-    throw new ApiError('protocol', 'MiMo TTS returned no body')
-  }
-  const events = readServerSentEvents(response.body, signal)
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        let sawAudio = false
-        for await (const event of events) {
-          signal.throwIfAborted()
-          if (event.data === '[DONE]') {
-            break
-          }
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(event.data)
-          } catch {
-            continue
-          }
-          const chunk = parsed as { choices?: Array<{ delta?: { audio?: { data?: string } } }> }
-          const data = chunk.choices?.[0]?.delta?.audio?.data
-          if (typeof data === 'string' && data.length) {
-            sawAudio = true
-            controller.enqueue(base64ToBytes(data))
-          }
-        }
-        if (!sawAudio) {
-          throw new ApiError('protocol', 'MiMo TTS stream contained no audio')
-        }
-        controller.close()
-      } catch (error) {
-        controller.error(error)
-      }
-    },
-    cancel() {
-      void response.body?.cancel().catch(() => {})
-    },
-  })
-}
-
 const base64ToBytes = (base64: string): Uint8Array => {
-  const binary = atob(base64)
+  let binary: string
+  try {
+    binary = atob(base64)
+  } catch {
+    throw new ApiError('protocol', { key: 'ttsInvalidAudio' })
+  }
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+type AudioResult = {
+  error?: unknown
+  choices?: Array<{
+    delta?: { audio?: { data?: string } }
+    message?: { audio?: { data?: string } }
+    finish_reason?: string | null
+  }>
+}
+
+const audioResult = (value: unknown) => {
+  const result = value as AudioResult | null
+  const choice = result?.choices?.[0]
+  if (result?.error || (choice?.finish_reason && choice.finish_reason !== 'stop')) {
+    throw new ApiError('protocol', { key: 'ttsInterrupted' })
+  }
+  const data = choice?.delta?.audio?.data ?? choice?.message?.audio?.data
+  return {
+    bytes: typeof data === 'string' && data ? base64ToBytes(data) : undefined,
+    stopped: choice?.finish_reason === 'stop',
+  }
+}
+
+/** Some compatible endpoints return the whole waveform as JSON, including with stream enabled. */
+async function* readMiMoAudio(response: Response, signal: AbortSignal) {
+  if (/\/json\b/i.test(response.headers.get('content-type') ?? '')) {
+    const { bytes } = audioResult(await readApiJson(response, signal, MAX_MIMO_AUDIO_PAYLOAD))
+    if (!bytes?.length) {
+      throw new ApiError('protocol', { key: 'ttsNoAudio' })
+    }
+    yield bytes
+    return
+  }
+  if (!response.body) {
+    throw new ApiError('protocol', { key: 'ttsNoAudio' })
+  }
+  let receivedAudio = false
+  let done = false
+  for await (const event of readServerSentEvents(
+    response.body,
+    signal,
+    undefined,
+    MAX_MIMO_AUDIO_PAYLOAD
+  )) {
+    if (event.data === '[DONE]') {
+      done = true
+      break
+    }
+    let data: unknown
+    try {
+      data = JSON.parse(event.data)
+    } catch {
+      throw new ApiError('protocol', { key: 'ttsInvalidAudio' })
+    }
+    const { bytes, stopped } = audioResult(data)
+    if (bytes?.length) {
+      receivedAudio = true
+      yield bytes
+    }
+    if (stopped) {
+      done = true
+      break
+    }
+  }
+  if (!receivedAudio || !done) {
+    throw new ApiError('protocol', { key: receivedAudio ? 'ttsInterrupted' : 'ttsNoAudio' })
+  }
 }
 
 /** 用 MiMo 合成一段台词；返回裸 pcm16 流 */
@@ -168,12 +185,17 @@ export const synthesizeMiMo = async ({
   style,
   signal,
 }: MiMoSpeechRequest): Promise<ReadableStream<Uint8Array>> => {
-  const url = `${profile.url.replace(/\/+$/, '')}${MIMO_CHAT_COMPLETIONS}`
   const described = description?.trim()
   const useDesign = !preset && Boolean(described)
+  const selected = profile.speechModel?.trim()
+  const presetModel = selected && selected !== MIMO_TTS_DESIGN_MODEL ? selected : MIMO_TTS_MODEL
+  const designModel =
+    profile.speechDesignModel === undefined && selected !== MIMO_TTS_MODEL
+      ? selected || MIMO_TTS_DESIGN_MODEL
+      : profile.speechDesignModel?.trim() || MIMO_TTS_DESIGN_MODEL
   const body = useDesign
     ? {
-        model: MIMO_TTS_DESIGN_MODEL,
+        model: designModel,
         messages: [
           { role: 'user', content: [described, style].filter(Boolean).join('。') },
           { role: 'assistant', content: text },
@@ -182,7 +204,7 @@ export const synthesizeMiMo = async ({
         stream: true,
       }
     : {
-        model: MIMO_TTS_MODEL,
+        model: presetModel,
         messages: [
           // user 消息可选：风格指令，不会出现在语音里
           ...(style.trim() ? [{ role: 'user', content: style.trim() }] : []),
@@ -191,11 +213,34 @@ export const synthesizeMiMo = async ({
         audio: { format: 'pcm16', voice: preset ?? 'mimo_default' },
         stream: true,
       }
-  const response = await providerFetch(
-    url,
-    { method: 'POST', headers: mimoHeaders(profile), body: JSON.stringify(body), signal },
-    undefined,
-    false
-  )
-  return mimoAudioStream(response, signal)
+  const connection = { ...profile, protocol: 'openai' as const }
+  const url = providerEndpoint(connection, 'chat', body.model)
+  const { response, dispose } = await fetchProviderResponse(connection, url, body, signal)
+  const audio = readMiMoAudio(response, signal)
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await audio.next()
+        if (!next.done) {
+          controller.enqueue(next.value)
+          return
+        }
+        dispose()
+        controller.close()
+      } catch (error) {
+        dispose()
+        controller.error(
+          error instanceof StreamIdleTimeoutError
+            ? new ApiError('network', { key: 'ttsServiceTimeout' })
+            : error instanceof StreamReadError
+              ? new ApiError('interrupted', { key: 'ttsInterrupted' })
+              : error
+        )
+      }
+    },
+    cancel() {
+      dispose()
+      void audio.return(undefined).catch(() => {})
+    },
+  })
 }
