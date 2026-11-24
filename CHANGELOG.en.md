@@ -1,5 +1,10 @@
 # Release notes
 
+## v3.1.5
+
+### Stability fixes
+- Fixed a crash when opening a file preview from the workspace on Android 7.0 to 10. The preview screen used several APIs that only exist in Android 9 and 10 (the data directory suffix, status and navigation bar contrast, the render process callback and the animator switch), and calling them on older releases crashed the screen. They are now used only where they exist; the preview itself still opens.
+
 ## v3.1.4
 
 ### Stability fixes

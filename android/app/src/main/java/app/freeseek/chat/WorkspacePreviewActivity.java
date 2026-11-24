@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.webkit.CookieManager;
@@ -43,8 +44,11 @@ public final class WorkspacePreviewActivity extends Activity {
         root = new File(new File(getCacheDir(), "project-stage"), id + ".preview");
         if (!new File(root, entry).isFile()) { finish(); return; }
         if (!storageConfigured) {
-            WebView.setDataDirectorySuffix("workbench-preview");
             storageConfigured = true;
+            // setDataDirectorySuffix 是 API 28 才有的；低版本没有数据目录隔离这个能力，直接跳过。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                WebView.setDataDirectorySuffix("workbench-preview");
+            }
         }
         boolean dark = getIntent().getBooleanExtra("dark", false);
         int background = dark ? 0xff1c1e22 : Color.WHITE;
@@ -53,8 +57,11 @@ public final class WorkspacePreviewActivity extends Activity {
         getWindow().setBackgroundDrawable(new ColorDrawable(background));
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
-        getWindow().setStatusBarContrastEnforced(false);
-        getWindow().setNavigationBarContrastEnforced(false);
+        // 对比度强制开关是 API 29 才有的；低版本保持系统默认。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            getWindow().setStatusBarContrastEnforced(false);
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
         WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         bars.setAppearanceLightStatusBars(!dark);
         bars.setAppearanceLightNavigationBars(!dark);
@@ -134,7 +141,10 @@ public final class WorkspacePreviewActivity extends Activity {
                         @Override public void onComplete(long request) {
                             if (failed || isFinishing() || page != view) return;
                             status.setVisibility(android.view.View.GONE);
-                            if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                            // areAnimatorsEnabled 是 API 26 才有的；更低的版本按系统默认开启动画处理。
+                            boolean animate = Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                                    || android.animation.ValueAnimator.areAnimatorsEnabled();
+                            if (animate) {
                                 view.animate().alpha(1f).setDuration(145).start();
                             } else {
                                 view.setAlpha(1f);
@@ -180,14 +190,17 @@ public final class WorkspacePreviewActivity extends Activity {
                         && uri.getPath() != null && uri.getPath().startsWith("/" + id + "/");
             }
         });
-        page.setWebViewRenderProcessClient(new android.webkit.WebViewRenderProcessClient() {
-            @Override public void onRenderProcessUnresponsive(WebView view, android.webkit.WebViewRenderProcess process) {
-                if (process != null) process.terminate();
-                status.setVisibility(android.view.View.VISIBLE);
-                status.setText(getIntent().getStringExtra("failed"));
-            }
-            @Override public void onRenderProcessResponsive(WebView view, android.webkit.WebViewRenderProcess process) {}
-        });
+        // 渲染进程客户端是 API 29 才有的；低版本没有这个回调，页面失败时由下面的超时兜底。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            page.setWebViewRenderProcessClient(new android.webkit.WebViewRenderProcessClient() {
+                @Override public void onRenderProcessUnresponsive(WebView view, android.webkit.WebViewRenderProcess process) {
+                    if (process != null) process.terminate();
+                    status.setVisibility(android.view.View.VISIBLE);
+                    status.setText(getIntent().getStringExtra("failed"));
+                }
+                @Override public void onRenderProcessResponsive(WebView view, android.webkit.WebViewRenderProcess process) {}
+            });
+        }
         viewport.addView(page, 0, new FrameLayout.LayoutParams(-1, -1));
         Uri.Builder url = new Uri.Builder().scheme("https").authority(HOST).appendPath(id);
         for (String segment : entry.split("/")) url.appendPath(segment);
