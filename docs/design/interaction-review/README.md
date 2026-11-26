@@ -1,6 +1,8 @@
 # FreeSeek 输入框与模型切换评审
 
-已采用方案 A。实际应用中，模型入口、深度思考和智能搜索并排放在输入框上方。两个工具始终显示，模型名优先缩短，完整名称可在模型列表中查看。关闭设置里的模型入口后，两项工具仍可使用。第三方连接保留工具位置，点击会说明能力由服务商配置。[查看实际输入区](composer-toolbar.png)
+记录于 2026-11-18，界面对应 FreeSeek v2.5.0。[查看当前功能和截图](../../../README.md)
+
+已采用方案 A。实际应用中，模型入口、深度思考和智能搜索并排放在输入框上方。两个工具始终显示，模型名优先缩短，完整名称可在模型列表中查看。关闭设置里的模型入口后，两项工具仍可使用。第三方连接保留工具位置，点击会说明能力由服务商配置。[查看实际输入区](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/composer-toolbar.png)
 
 可以在[离线交互稿](index.html)中试写、切换模型和模拟发送。B 保留作对照。
 
@@ -10,7 +12,7 @@
 | 适合 | 写到一半，经常需要换模型 | 以阅读长对话为主，偶尔切换模型 |
 | 取舍 | 开启开关后，输入区上方多占一行 | 输入框周围更干净，单手切换要够到屏幕上方 |
 
-写半句，把光标移到句子中间，然后切到 V4 Pro 接着写。打开模拟键盘可以比较输入区剩余高度。[浅色对照](composer-comparison.png) · [深色与键盘对照](composer-keyboard.png)
+写半句，把光标移到句子中间，然后切到 V4 Pro 接着写。打开模拟键盘可以比较输入区剩余高度。[浅色对照](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/composer-comparison.png) · [深色与键盘对照](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/composer-keyboard.png)
 
 ## 两套方案共用的交互
 
@@ -28,7 +30,7 @@
 | 人设、附件、API 选项、对话更多 | 菜单贴近触发控件。短列表按内容取高，长选择列表可滚动，超过八项提供筛选。系统返回和 Esc 先收起当前菜单 |
 | 搜索来源 | 手机上按资料条数展开底部面板，长列表在面板内滚动。宽屏使用侧边阅读区 |
 | 打赏开发者 | 侧边栏使用玫红心形按钮。打赏页使用红粉配色，微信和支付宝分别采用绿色和蓝色，同时以文字和勾选标明当前渠道。选择后可保存收款码并打开支付应用 |
-| 官方 API 配置 | 官方 Key 验证并保存后显示就绪弹窗。可以直接回到对话或留在设置。高级自定义页说明适用的服务，并提供返回官方设置的入口。[查看设置提示](api-setup-guidance.png) |
+| 官方 API 配置 | 官方 Key 验证并保存后显示就绪弹窗。可以直接回到对话或留在设置。高级自定义页说明适用的服务，并提供返回官方设置的入口。[查看设置提示](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/api-setup-guidance.png) |
 | API 教程、用量明细与数据导入 | API 教程位于顶部并默认展开，高级自定义位于底部。API 教程、更多参数与官方导入说明在当前页面展开，支持快速反向收放。设置中的选项列表对齐字段宽度，长列表支持筛选和分批显示。导入覆盖和删除使用单独确认 |
 
-[实际界面截图](settings-and-panels.png) · [设置、打赏与选项的操作录像](settings-motion.mp4)
+[实际界面截图](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/settings-and-panels.png) · [设置、打赏与选项的操作录像](https://github.com/WikG1018/FreeSeekApp/blob/26aa1beb902f661b478a8fb960233a845aa2b086/docs/design/interaction-review/settings-motion.mp4)

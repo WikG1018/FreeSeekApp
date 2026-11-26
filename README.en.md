@@ -1,81 +1,66 @@
 # FreeSeek
 
-**An Android chat client for DeepSeek with your own API key: no message limits, no daily quota, no cleanup of inactive chats — data stays on your phone.**
+[简体中文](README.md) · [Download](https://github.com/WikG1018/FreeSeekApp/releases/latest) · [Open the web app](https://wikg1018.github.io/FreeSeekApp/) · [User guide](docs/guides/user-guide.en.md)
 
-Built on DeepSeek's open-source [chat-demo](https://github.com/deepseek-ai/chat-demo) (MIT), with the official look plus chat continuation, a persona library, a usage/cost dashboard and in-app updates.
+FreeSeek is an open-source chat client for Android, Windows, and the web. Connect DeepSeek or another supported model service with your own API key. Chats and attachments are stored in the current app or browser and can be moved using ZIP backups.
 
-<p>
-  <img src="docs/screenshots/mobile-welcome.png" width="23.5%" alt="Welcome" />
-  <img src="docs/screenshots/mobile-sider.png" width="23.5%" alt="Sidebar with pinned chats" />
-  <img src="docs/screenshots/mobile-persona-manager.png" width="23.5%" alt="Personas" />
-  <img src="docs/screenshots/mobile-usage-panel.png" width="23.5%" alt="Usage" />
-</p>
+[![Latest release](https://img.shields.io/github/v/release/WikG1018/FreeSeekApp.svg)](https://github.com/WikG1018/FreeSeekApp/releases/latest) [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Why
+## Get FreeSeek
 
-DeepSeek's official app throttles heavy users: daily quotas, long conversations dropped, limited regenerate/edit. FreeSeek flips it — **bring your own key, pay per token**, and keep control of your history.
+| Platform | How to open |
+| --- | --- |
+| **Android** | Download `freeseek-v…-release.apk` from the [latest release](https://github.com/WikG1018/FreeSeekApp/releases/latest). Allow your installer to install the APK if prompted. The minimum is Android 7.0, with Android 10–17 as the main compatibility target. |
+| **Windows** | Download `freeseek-v…-windows-x64-setup.exe` from the [latest release](https://github.com/WikG1018/FreeSeekApp/releases/latest). Open FreeSeek from Start after installing. |
+| **Web** | [Open FreeSeek](https://wikg1018.github.io/FreeSeekApp/) in a browser. The model endpoint must allow cross-origin requests. |
+| **iPhone / iPad** | Open the same website in Safari and [add it to your Home Screen](docs/guides/user-guide.en.md#install-and-update). |
 
-## Features
-
-- **Continue from any chat** — a new conversation inherits all context of an old one
-- **Model selection** — choose DeepSeek Flash or V4 Pro in API settings. Advanced settings support OpenAI Chat Completions, Responses, Anthropic Messages and Gemini endpoints, model discovery and a test request. Enable the model switcher in Settings → Chat preferences. The original API key guide is at the top of API service; advanced third-party configuration is at the bottom.
-- **Personas** — built-in writer / translator / coder / copywriter / brainstorm presets, plus your own
-- **Usage & cost** — per-reply tokens and cost, per-conversation totals, 14-day chart, session ranking at official peak/off-peak rates
-- **Thinking & web search**, attachments, speech input and read-aloud
-- **Local history** — chats and files live in IndexedDB, with no cloud conversation sync
-- **Long conversations** — compress older turns into an editable summary and retain the full transcript and attachments locally. Summaries use the current model and incur additional token usage. Automatic compression is off by default in Settings → Chat preferences.
-- **In-app updates** — shows the new version in the sidebar, opens release notes first, then downloads and verifies the APK when requested. About also includes offline notes for the installed version
-- **Mobile navigation** — swipe right from the middle of the main screen to open chat history. Chat content and the drawer extend behind Android system bars while controls respect cutouts and navigation. Pin chats from their menus. The footer places donations on the left and settings on the right. Messages fade around the opaque composer, and the attachment menu keeps the keyboard and caret in place.
-- **Backup import** — streams official DeepSeek chat records up to 128 MiB each. Existing data is replaced after the archive and record counts pass validation. Older Android WebViews can restore multiple chats and attachments.
-
-## Install
-
-Download the latest `freeseek-v*-release.apk` from [Releases](https://github.com/WikG1018/FreeSeekApp/releases/latest) and allow installing from unknown sources (Android 7.0+).
+Install updates over the existing app to keep its local data. Export a backup under Settings → Data management before moving devices, reinstalling, or clearing storage. [Installation, checksums, and updates](docs/guides/user-guide.en.md#install-and-update)
 
 ## Get started
 
-After the first-use notice, choose **Chat with AI** to open the API tutorial or **Bring my old chats here** to open Data management. You can import and read a backup without a key. The guide and disclaimer are also available in About FreeSeek.
+1. **Chat with DeepSeek.** Go to Settings → API service. Follow the setup steps at the top, enter your API key, verify and save it, then select Flash or V4 Pro.
+2. **Connect another service.** Open the advanced custom configuration at the bottom of API service. Enter the endpoint, key, and model. A connection can contain multiple models.
+3. **Read your existing chats.** Choose **Bring my old chats here** on first launch or import a DeepSeek or FreeSeek ZIP under Settings → Data management. Importing and reading existing conversations requires no API key.
 
-1. Create an API key at [platform.deepseek.com](https://platform.deepseek.com/), top up a little
-2. Settings → API service → paste and save (the key stays in local storage)
-3. Chat — pick a persona if you like
+[Connect a model](docs/guides/user-guide.en.md#connect-a-model) · [Back up and restore](docs/guides/user-guide.en.md#backup-import-and-restore)
 
-To bring history over from the official app: official app → Settings → Data management → Export all conversations, then import the `.zip` here.
+## Features
 
-FreeSeek 2.4.0 writes v2 backups with message branches, available attachment originals, inherited context, personas, pinned chats, model references, usage and custom pricing. Restore them with 2.4.0 or later. FreeSeek also reads v1 backups and official DeepSeek chat exports. API credentials stay on the device. In Settings → About FreeSeek, you can share a diagnostic ZIP with another app or save it to a file.
+| What you can do | Where to find it |
+| --- | --- |
+| **Change models, thinking, and search** | Configure DeepSeek or a custom provider in API service. Enable model and thinking controls in Chat preferences. With Smart search enabled, compatible models can search when needed and cite sources. |
+| **Search and organize chats** | Search titles and messages in the sidebar, expand multiple matches in a conversation, and jump to each one. Pin chats, sort by date or type, edit prompts, and switch reply versions. |
+| **Work with long conversations** | The ring beside the composer shows estimated context use. Compress older turns from a conversation's menu, or enable automatic compression in Chat preferences. |
+| **Read attachments and results** | Use the composer’s plus button to attach files or photos. Supported inputs depend on the model. Zoom into images and preview supported PDF, Word, Excel, PowerPoint, and 3D results. |
+| **Use voice and character voices** | Transcribe microphone input or play a reply aloud. Set up Xiaomi MiMo and choose Character voices in Chat preferences to give narration and characters separate voices. |
+| **Use personas, memory, and agents** | Manage personas and automatic memory in Settings. Enable Agent on Android or the web for multi-step tasks and file creation. Available tools and background behavior depend on the platform. |
+| **Review usage and time** | Usage & cost shows tokens, cache hit rates, and estimated charges by chat and model. Screen time shows activity and conversation rankings. |
+| **Move chats and report issues** | Back up or merge chat history in Data management. Choose which copy to keep when a conversation is duplicated. Save or share diagnostics from About FreeSeek. |
 
-## Build
+## Screenshots
 
-Requires Node 24+, pnpm 10, JDK 21 and Android SDK 37.
+Screenshots show the FreeSeek v3.1.11 Android and Windows release builds with sample conversations. Open an image for the full-resolution view.
 
-```sh
-pnpm install
-pnpm exec playwright install chromium
-pnpm type && pnpm lint
-pnpm test:smoke && pnpm test
-pnpm build
-npx cap sync android
-cd android && ./gradlew assembleDebug
-```
+| Android chat | Message search | Character voices |
+| :---: | :---: | :---: |
+| <a href="docs/screenshots/current/android-chat.png"><img src="docs/screenshots/current/android-chat.png" alt="Android chat with a table in the reply" width="240" /></a> | <a href="docs/screenshots/current/android-history-search.png"><img src="docs/screenshots/current/android-history-search.png" alt="Multiple search results grouped by conversation" width="240" /></a> | <a href="docs/screenshots/current/android-role-voices.png"><img src="docs/screenshots/current/android-role-voices.png" alt="Character list and voice settings" width="240" /></a> |
 
-Release builds read signing config from `android/keystore.properties` (gitignored). Icons are generated by `scripts/make_icons.py` from `assets/icon-source.png`.
+| API service | Agent results | Merge import |
+| :---: | :---: | :---: |
+| <a href="docs/screenshots/current/android-api-service.png"><img src="docs/screenshots/current/android-api-service.png" alt="DeepSeek API key and model settings" width="240" /></a> | <a href="docs/screenshots/current/android-agent-results.png"><img src="docs/screenshots/current/android-agent-results.png" alt="Agent artifact preview with round and save controls" width="240" /></a> | <a href="docs/screenshots/current/android-backup-duplicates.png"><img src="docs/screenshots/current/android-backup-duplicates.png" alt="Choosing a version of a duplicate chat during import" width="240" /></a> |
 
-## Privacy
+<a href="docs/screenshots/current/windows-chat.png"><img src="docs/screenshots/current/windows-chat.png" alt="FreeSeek for Windows with the conversation sidebar open" width="840" /></a>
 
-History and attachments are stored on the device. Messages and context summaries are sent to the configured model provider. Update checks contact GitHub and fallback mirrors, and source icons may contact their websites. Provider credentials are excluded from chat backups and diagnostic ZIPs.
+*Conversation and sidebar on Windows*
 
-Before installation, updates are checked for the expected length, upstream SHA-256 when available, a valid APK signature, the installed app's signing certificate, package name and a higher version.
+## Documentation and feedback
+
+- [User guide](docs/guides/user-guide.en.md) covers installation, providers, chats, speech, backups, troubleshooting, and data storage.
+- [Build and development](docs/guides/development.md) lists commands for the web app, Android, and Windows.
+- [Changelog](CHANGELOG.en.md) records release changes. You can also read the current release notes under About FreeSeek.
+- [Report an issue](https://github.com/WikG1018/FreeSeekApp/issues/new) with your platform, version, and reproduction steps. Review any diagnostic bundle before sharing it.
 
 ## License
 
-MIT, inherited from the upstream project — see [LICENSE](LICENSE). Not affiliated with DeepSeek; follow their API terms.
-
-Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The UI font is [MiSans](https://hyperos.mi.com/font/) (Xiaomi).
-
-## Reporting problems
-
-Include the app version, device OS version and relevant steps in an issue. Share diagnostic materials with personal information privately with the maintainer.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md).
+FreeSeek is an independent client based on [DeepSeek chat-demo](https://github.com/deepseek-ai/chat-demo), released under the [MIT license](LICENSE). See the [third-party notices](THIRD_PARTY_NOTICES.md) and [MiSans font license](docs/fonts/MiSans-License.pdf).
