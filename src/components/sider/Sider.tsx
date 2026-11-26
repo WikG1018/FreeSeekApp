@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useAssistantLibrary } from '../../services/assistants/library.js'
 import {
@@ -27,6 +27,7 @@ import { SupportMark, useDocumentVisible } from '../donate/SupportMark.js'
 import { SidebarUpdate } from '../update/Update.js'
 import { closeMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
+import { SessionSearchResults } from './SessionSearchResults.js'
 import { SiderOrderPicker } from './SiderOrderPicker.js'
 import { useSessionSearch } from './useSessionSearch.js'
 import styles from './Sider.module.css'
@@ -36,10 +37,12 @@ export const Sider = ({
   mobile = false,
   donationOpen,
   onDonate,
+  onSearchActive,
 }: {
   mobile?: boolean
   donationOpen: boolean
   onDonate: () => void
+  onSearchActive?: (active: boolean) => void
 }) => {
   const t = useTranslate()
   const sessions = useChatStore((state) => state.sessions)
@@ -57,6 +60,10 @@ export const Sider = ({
   const [now, setNow] = useState(Date.now)
   const [query, setQuery] = useState('')
   const keyword = query.trim()
+  const searchingHistory = Boolean(keyword)
+  useLayoutEffect(() => {
+    onSearchActive?.(searchingHistory)
+  }, [onSearchActive, searchingHistory])
   const composing = useRef(false)
   const search = useSessionSearch(sessions, keyword)
   const listRef = useRef<HTMLDivElement>(null)
@@ -275,18 +282,29 @@ export const Sider = ({
             {groups.map((group) => (
               <section key={group.key} className={styles.section} data-session-group={group.key}>
                 <h3 className={styles.sectionHeader}>{group.label}</h3>
-                {group.sessions.map((session) => (
-                  <SessionItem
-                    key={session.id}
-                    session={session}
-                    active={session.id === activeId}
-                    match={search.matches?.get(session.id)}
-                    onDelete={() => {
-                      setDeleteLinkedMemory(false)
-                      setDeleting(session)
-                    }}
-                  />
-                ))}
+                {group.sessions.map((session) => {
+                  const matches = search.matches?.get(session.id)
+                  return (
+                    <Fragment key={session.id}>
+                      <SessionItem
+                        session={session}
+                        active={session.id === activeId}
+                        onDelete={() => {
+                          setDeleteLinkedMemory(false)
+                          setDeleting(session)
+                        }}
+                      />
+                      {matches && (
+                        <SessionSearchResults
+                          key={[keyword, session.updatedAt].join(':')}
+                          sessionId={session.id}
+                          matches={matches}
+                          readPage={search.readPage}
+                        />
+                      )}
+                    </Fragment>
+                  )
+                })}
               </section>
             ))}
             {visibleCount < ordered.length && (
@@ -294,10 +312,16 @@ export const Sider = ({
                 {t('sessionShowMore')}
               </button>
             )}
-            {(search.searching || search.failed) && (
-              <p className={styles.emptyList} role="status">
-                {t(search.searching ? 'siderSearching' : 'siderSearchFailed')}
-              </p>
+            {search.searching && (
+              <p className={styles.emptyList} role="status">{t('siderSearching')}</p>
+            )}
+            {search.failed && !search.searching && (
+              <>
+                <p className={styles.emptyList} role="status">{t('siderSearchFailed')}</p>
+                <button type="button" className={styles.showMore} onClick={search.retry}>
+                  {t('siderSearchRetry')}
+                </button>
+              </>
             )}
           </div>
         </div>

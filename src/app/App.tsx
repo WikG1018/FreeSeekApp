@@ -2,7 +2,13 @@ import { ContextSummaryDialog } from '../components/messages/ContextSummaryDialo
 import { ImageViewer } from '../components/messages/ImageViewer.js'
 import { useImageViewer } from '../components/messages/imageViewerState.js'
 import { Onboarding } from '../components/onboarding/Onboarding.js'
-import { initialOnboardingStep } from '../services/onboarding.js'
+import { RoleVoiceIntro } from '../components/onboarding/RoleVoiceIntro.js'
+import {
+  initialOnboardingStep,
+  initialRoleVoiceIntro,
+  markRoleVoiceIntroHandled,
+} from '../services/onboarding.js'
+import { isStartupVisible, startupEndedEvent } from '../services/startup.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { MemoryDialogs } from '../components/settings/MemoryDialogs.js'
 import { refreshAssistantLibrary } from '../services/assistants/library.js'
@@ -108,6 +114,15 @@ export const App = () => {
   const [onboarding, setOnboarding] = useState(() =>
     initialOnboardingStep(Boolean(hasChatConnection() || useSettings.getState().apiKey))
   )
+  const [roleVoiceIntro, setRoleVoiceIntro] = useState<'pending' | 'fresh-install' | 'open' | null>(
+    () => initialRoleVoiceIntro(Boolean(hasChatConnection() || useSettings.getState().apiKey))
+  )
+  useLayoutEffect(() => {
+    if (roleVoiceIntro === 'fresh-install') {
+      markRoleVoiceIntroHandled('fresh-install')
+      setRoleVoiceIntro(null)
+    }
+  }, [roleVoiceIntro])
   const [donationOpen, setDonationOpen] = useState(false)
   const [donationFullscreen, setDonationFullscreen] = useState(false)
   const openDonation = () => setDonationOpen(true)
@@ -136,7 +151,13 @@ export const App = () => {
   )
   const activeId = useChatStore((state) => state.activeId)
   useAutomaticScreenTimeMilestones(
-    ready && activeId === null && !siderOpen && !settingsOpen && !donationOpen && !onboarding
+    ready &&
+      activeId === null &&
+      !siderOpen &&
+      !settingsOpen &&
+      !donationOpen &&
+      !onboarding &&
+      roleVoiceIntro === null
   )
   const visibleChat =
     ready &&
@@ -145,7 +166,8 @@ export const App = () => {
     !siderOpen &&
     !settingsOpen &&
     !donationOpen &&
-    !onboarding
+    !onboarding &&
+    roleVoiceIntro !== 'open'
       ? (session?.id ?? null)
       : null
 
@@ -179,8 +201,6 @@ export const App = () => {
 
   // 搜索结果面板只属于当前会话
   useEffect(closeSearchPanel, [activeId])
-  // 切换会话时停止朗读
-  useEffect(stopReadAloud, [activeId])
   useEffect(() => {
     const onHidden = () => {
       if (document.visibilityState === 'hidden') {
@@ -200,6 +220,31 @@ export const App = () => {
   // 系统栏图标跟随当前覆盖层。应用配色单独持久化，打开弹窗时无需重设。
   const theme = useTheme()
   const previewImage = useImageViewer((state) => state.image)
+  const canOpenRoleVoiceIntro =
+    roleVoiceIntro === 'pending' &&
+    ready &&
+    (activeId === null || !!session) &&
+    !onboarding &&
+    !importingHistory &&
+    !sessionLoadError &&
+    !siderOpen &&
+    !settingsOpen &&
+    !donationOpen &&
+    !previewImage &&
+    milestone === null
+  useEffect(() => {
+    if (!canOpenRoleVoiceIntro) {
+      return
+    }
+    const show = () => {
+      if (!isStartupVisible() && !hasOpenModal()) {
+        setRoleVoiceIntro(markRoleVoiceIntroHandled('shown') ? 'open' : null)
+      }
+    }
+    show()
+    window.addEventListener(startupEndedEvent, show)
+    return () => window.removeEventListener(startupEndedEvent, show)
+  }, [canOpenRoleVoiceIntro])
   const nativeTheme = useRef<{ dark: boolean; ready: Promise<void> }>()
   const appDark = theme === 'dark'
   const darkMilestone = milestone !== null && milestone > 100
@@ -398,7 +443,12 @@ export const App = () => {
             ) : (
               <Welcome
                 motionActive={
-                  !siderOpen && !settingsOpen && !donationOpen && !onboarding && milestone === null
+                  !siderOpen &&
+                  !settingsOpen &&
+                  !donationOpen &&
+                  !onboarding &&
+                  roleVoiceIntro !== 'open' &&
+                  milestone === null
                 }
               />
             )}
@@ -430,6 +480,7 @@ export const App = () => {
           onDone={() => setOnboarding(null)}
         />
       ) : null}
+      {roleVoiceIntro === 'open' && <RoleVoiceIntro onDone={() => setRoleVoiceIntro(null)} />}
       {previewImage && <ImageViewer image={previewImage} />}
       <Toast />
     </>

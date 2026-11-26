@@ -26,6 +26,7 @@ import {
   type ProviderProfile,
 } from '../../services/providers.js'
 import { useSettings } from '../../services/settings.js'
+import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
 import {
   IconAddOutline16,
   IconBrowseOutline16,
@@ -94,9 +95,10 @@ export const providerErrorText = (error: unknown, t: ReturnType<typeof useTransl
     storage: 'providerErrorStorage',
     missing: 'providerConfigMissing',
     changed: 'providerConfigChanged',
+    'output-limit': 'providerErrorOutputLimit',
   }
   return error instanceof ProviderConfigError
-    ? t(config[error.reason])
+    ? t(config[error.reason], error.reason === 'output-limit' ? { limit: error.outputLimit?.toLocaleString() ?? '' } : undefined)
     : error instanceof ApiError && error.localMessage
       ? t(error.localMessage.key, error.localMessage.params)
       : t('providerNetworkError')
@@ -257,6 +259,7 @@ export const ProviderSettingsPage = ({
   const { profiles, selection } = useProviders()
   const configured = useSettings((s) => s.thirdPartySearch.enabled)
   const roleVoice = useSettings((s) => s.roleVoice)
+  const speechConfigured = !!roleVoiceProfile(profiles, roleVoice)
   const officialConfigured = useSettings((s) => Boolean(s.apiKey))
   const [removingId, setRemovingId] = useState<string | null>(null)
   const removing = profiles.find((profile) => profile.id === removingId)
@@ -324,7 +327,7 @@ export const ProviderSettingsPage = ({
           }
           icon={<ProviderMark id="xiaomimimo" />}
           prominent
-          detail={roleVoice.enabled ? t('providerSpeechOn') : t('providerSpeechOff')}
+          detail={t(speechConfigured ? 'settingsApiKeyConfigured' : 'settingsApiKeyMissing')}
           onClick={speech}
           target="providerSpeech"
         />

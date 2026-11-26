@@ -192,7 +192,7 @@ export const runAssistantCases = async (run) => {
       await page.getByRole('button', { name: /最近记住了什么/ }).click()
       await page.getByRole('button', { name: /验收报告用 Markdown/ }).click()
       await page.getByRole('button', { name: '查看来源', exact: true }).click()
-      await page.getByText('以后改用 Markdown', { exact: true }).waitFor()
+      await page.getByTestId('settings-scroll').getByText('以后改用 Markdown', { exact: true }).waitFor()
       await page.getByRole('button', { name: '撤销这次记忆', exact: true }).click()
       await page.waitForFunction(
         () =>

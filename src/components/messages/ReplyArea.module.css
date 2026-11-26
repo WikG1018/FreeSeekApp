@@ -2,34 +2,108 @@
   margin-bottom: 10px;
 }
 
+.replySummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.summaryStatus,
+.title {
+  min-width: 0;
+}
+
+.title,
+.summaryStatus {
+  margin-right: 8px;
+}
+
 .title {
   display: flex;
   align-items: center;
-  height: 34px;
-  margin-bottom: 2px;
-  color: var(--dsw-alias-label-secondary);
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fs-secondary-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: start;
   cursor: pointer;
-  user-select: none;
-  transition: color 0.2s;
+}
 
-  &:hover {
-    color: var(--dsw-alias-label-primary);
-  }
+.title:disabled {
+  color: var(--fs-secondary-text);
+  cursor: default;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 2px;
+}
+
+.titleIcon,
+.title > svg {
+  display: inline-flex;
+  flex: none;
 }
 
 .titleIcon {
-  display: flex;
   margin-right: 6px;
-  color: var(--dsw-alias-brand-primary);
+  color: var(--fs-accent-text);
+}
+
+.title > svg {
+  margin-left: 4px;
 }
 
 .stoppedIcon {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--fs-secondary-text);
 }
 
-.titleText {
-  margin-right: 6px;
-  font: var(--dsw-font-markdown-base);
+.titleText,
+.replySummary .activity,
+.replySummary .activity > [role='status'] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title[data-thinking] .activityDots {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .title[data-thinking] .titleIcon {
+    animation: thought-icon 1.6s ease-in-out infinite;
+  }
+}
+
+.replySummary + .steps:empty {
+  display: none;
+}
+
+.thoughtPreview {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 7.5em;
+  overflow: hidden;
+  margin: 2px 0 7px 7px;
+  padding-left: 13px;
+  border-left: 1px solid var(--fs-line);
+  color: var(--fs-secondary-text);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.thoughtPreview > div {
+  flex: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .shimmer {

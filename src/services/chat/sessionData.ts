@@ -1,4 +1,5 @@
 import type { FileAttachment, Message, Session } from './types.js'
+import type { VoiceRole } from '../speech/roleMarkers.js'
 
 export const messageFiles = (message: Message): FileAttachment[] =>
   message.role === 'user' ? message.files : (message.task?.artifacts ?? [])
@@ -7,6 +8,14 @@ export const messageFiles = (message: Message): FileAttachment[] =>
 export const allSessionMessages = (session: Session): Message[] => [
   ...(session.inherited?.messages ?? []),
   ...session.messages,
+]
+
+export const sessionOriginalIds = (session: Session): string[] => [
+  ...new Set([
+    ...allSessionMessages(session).flatMap((message) => messageFiles(message).map(({ id }) => id)),
+    ...(session.voiceRoles ?? []).flatMap((role) => role.voiceSample ? [role.voiceSample.id] : []),
+    ...(session.inherited?.voiceRoles ?? []).flatMap((role) => role.voiceSample ? [role.voiceSample.id] : []),
+  ]),
 ]
 
 export const mapSessionMessages = (
@@ -40,5 +49,24 @@ export const mapSessionFileIds = (session: Session, mapId: (id: string) => strin
     }
     return message
   })
-  return changed ? mapped : session
+  const mapRoles = (roles?: VoiceRole[]) => roles?.map((role) => {
+    if (!role.voiceSample) {
+      return role
+    }
+    const id = mapId(role.voiceSample.id)
+    if (id === role.voiceSample.id) {
+      return role
+    }
+    changed = true
+    return { ...role, voiceSample: { ...role.voiceSample, id } }
+  })
+  const voiceRoles = mapRoles(mapped.voiceRoles)
+  const inheritedRoles = mapRoles(mapped.inherited?.voiceRoles)
+  return changed ? {
+    ...mapped,
+    ...(voiceRoles && { voiceRoles }),
+    ...(mapped.inherited && inheritedRoles && {
+      inherited: { ...mapped.inherited, voiceRoles: inheritedRoles },
+    }),
+  } : session
 }

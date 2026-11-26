@@ -3,6 +3,19 @@ import { useEffect, useRef, type RefObject } from 'react'
 const SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+/** Restore the previous control only if focus was lost while dismissing the dialog. */
+export const restoreDialogFocus = (previous: HTMLElement | null) => {
+  window.setTimeout(() => {
+    const active = document.activeElement
+    if (
+      previous?.isConnected &&
+      (!active || active === document.body || active === document.documentElement)
+    ) {
+      previous.focus({ preventScroll: true })
+    }
+  }, 0)
+}
+
 /** 全屏设置的焦点进入、Tab 循环和关闭后的焦点恢复。 */
 export const useDialogFocus = (ref: RefObject<HTMLElement>, isTop: () => boolean = () => true) => {
   const isTopRef = useRef(isTop)
@@ -44,11 +57,7 @@ export const useDialogFocus = (ref: RefObject<HTMLElement>, isTop: () => boolean
     document.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
-      window.setTimeout(() => {
-        if (previous?.isConnected) {
-          previous.focus({ preventScroll: true })
-        }
-      }, 0)
+      restoreDialogFocus(previous)
     }
   }, [ref])
 }

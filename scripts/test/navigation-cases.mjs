@@ -338,7 +338,7 @@ export const runNavigationCases = async ({ run }) => {
       const mobile = await openDrawerIfMobile(page)
       const drawer = mobile ? page.getByRole('dialog', { name: '历史对话', exact: true }) : page
       const field = drawer.getByRole('searchbox')
-      const body = drawer.locator('[data-session-id="long-body"]')
+      const body = drawer.locator('[data-session-search-results="long-body"]')
       await field.fill('海边书店')
       await body.locator('mark').getByText('海边书店', { exact: true }).waitFor()
       assert.equal(await drawer.locator('[data-session-id]').count(), 1)
@@ -363,7 +363,7 @@ export const runNavigationCases = async ({ run }) => {
         ),
         0
       )
-      await body.getByRole('button', { name: /已存档的长对话/ }).click()
+      await body.locator('[data-search-message-id="message-5"]').click()
       if (mobile) {
         await drawer.waitFor({ state: 'hidden' })
       }
@@ -380,6 +380,251 @@ export const runNavigationCases = async ({ run }) => {
       await page.getByRole('button', { name: '回到最新消息', exact: true }).click()
       await page.locator('[data-message-id="message-159"]').waitFor()
       assert.ok((await page.locator('[data-message-id]').count()) <= 40)
+    }
+  )
+
+  await run(
+    'sidebar shows every matching message in pages and keeps the search after opening an older hit',
+    async (page) => {
+      await page.setViewportSize({ width: 360, height: 720 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const history = Array.from({ length: 260 }, (_, index) => {
+          const keyword = index >= 4 && index < 245 && (index - 4) % 17 === 0
+          const text = keyword
+            ? '岸线巡查，第 ' + index + ' 条。岸线巡查。'
+            : '查阅资料第 ' + index + ' 条。'
+          return index % 2 === 0
+            ? f.user('search-many-' + index, text)
+            : f.assistant('search-many-' + index, text)
+        })
+        await a.seed([f.session({ id: 'many-matches', title: '档案整理', messages: history })])
+        a.store.newChat()
+        a.store.useChatStore.setState({ sessionCache: {} })
+      })
+      await openDrawerIfMobile(page)
+      const drawer = page.getByRole('dialog', { name: '历史对话' })
+      const field = drawer.getByRole('searchbox')
+      const results = drawer.locator('[data-session-search-results="many-matches"]')
+      const items = results.locator('[data-search-message-id]')
+      await field.fill('岸线巡查')
+      const expand = results.getByRole('button', { name: '查看全部 15 条', exact: true })
+      await expand.waitFor()
+      assert.equal(await items.count(), 2)
+      assert.deepEqual(await items.evaluateAll((nodes) => nodes.map((node) => node.dataset.searchMessageId)),
+        ['search-many-242', 'search-many-225'])
+      await expand.click()
+      await results.getByText('第 1 / 2 页', { exact: true }).waitFor()
+      assert.equal(await items.count(), 12)
+      if (process.env.FREESEEK_SEARCH_PREVIEWS) {
+        await page.screenshot({ path: 'tmp/search-history-qa/search-matches-zh.png', animations: 'disabled' })
+      }
+      const nextPage = results.getByRole('button', { name: '下一页匹配结果' })
+      const previousPage = results.getByRole('button', { name: '上一页匹配结果' })
+      await nextPage.click()
+      await results.getByText('第 2 / 2 页', { exact: true }).waitFor()
+      assert.equal(await items.count(), 3)
+      assert.equal(await nextPage.isDisabled(), true)
+      await previousPage.click()
+      await results.getByText('第 1 / 2 页', { exact: true }).waitFor()
+      await nextPage.click()
+      await results.getByText('第 2 / 2 页', { exact: true }).waitFor()
+      assert.equal(await page.evaluate(
+        () => Object.keys(window.__audit.store.useChatStore.getState().sessionCache).length
+      ), 0, 'paging search results does not hydrate entire chats')
+
+      await results.locator('[data-search-message-id="search-many-4"]').click()
+      await drawer.waitFor({ state: 'hidden' })
+      const target = page.locator('[data-message-id="search-many-4"]')
+      await target.waitFor()
+      assert.ok(await target.evaluate((node) => node.getBoundingClientRect().top < innerHeight / 2))
+      // The drawer normally unmounts its contents after the closing transition.
+      await page.waitForTimeout(320)
+      await openDrawerIfMobile(page)
+      assert.equal(await field.inputValue(), '岸线巡查')
+      await results.getByText('第 2 / 2 页', { exact: true }).waitFor()
+      await results.locator('[data-search-message-id="search-many-21"]').click()
+      await drawer.waitFor({ state: 'hidden' })
+      await page.waitForFunction(() => {
+        const node = document.querySelector('[data-message-id="search-many-21"]')
+        const top = node?.getBoundingClientRect().top
+        return top !== undefined && top >= 0 && top < innerHeight / 2
+      })
+      await openDrawerIfMobile(page)
+      await field.fill('第 151 条')
+      await results.locator('[data-search-message-id="search-many-151"]').waitFor()
+      assert.equal(await items.count(), 1, 'replacing the query clears old previews and page state')
+    }
+  )
+
+  await run(
+    'sidebar search refreshes when the selected reply version changes',
+    async (page) => {
+      await page.setViewportSize({ width: 360, height: 720 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const original = f.session({
+          id: 'version-search',
+          title: '版本切换',
+          messages: [f.user('version-q', '请分两种方法说明。'), f.assistant('version-one', '第一种是回流测试。')],
+        })
+        const withVersions = a.branches.appendBranch(original, 'version-q', [
+          f.assistant('version-two', '第二种是静压测试。'),
+        ])
+        await a.seed([a.branches.selectVersion(withVersions, 'version-one')])
+        a.store.newChat()
+      })
+      await openDrawerIfMobile(page)
+      const drawer = page.getByRole('dialog', { name: '历史对话' })
+      const field = drawer.getByRole('searchbox')
+      await field.fill('回流测试')
+      await drawer.locator('[data-search-message-id="version-one"]').click()
+      await page.getByTestId('mobile-sider').waitFor({ state: 'hidden' })
+      await page.getByRole('button', { name: '下一个版本', exact: true }).click()
+      await page.locator('[data-message-id="version-two"]').waitFor()
+      await openDrawerIfMobile(page)
+      assert.equal(await field.inputValue(), '回流测试')
+      await drawer.getByText('没有匹配的对话', { exact: true }).waitFor()
+      await field.fill('静压测试')
+      await drawer.locator('[data-search-message-id="version-two"]').click()
+      await page.locator('[data-message-id="version-two"]').waitFor()
+    }
+  )
+
+  await run(
+    'reading after a history search automatically joins adjacent pages and preserves the visible message',
+    async (page) => {
+      await page.setViewportSize({ width: 360, height: 720 })
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const messages = Array.from({ length: 245 }, (_, index) => {
+          const text = index === 4 ? '旧消息的唯一词：临水书屋。' : '继续阅读第 ' + index + ' 条消息。'
+          return index % 2 === 0 ? f.user('scroll-history-' + index, text) : f.assistant('scroll-history-' + index, text)
+        })
+        await a.seed([f.session({ id: 'scroll-history', title: '长对话翻页', messages })])
+        a.store.newChat()
+        a.store.useChatStore.setState({ sessionCache: {} })
+      })
+      await openDrawerIfMobile(page)
+      const drawer = page.getByRole('dialog', { name: '历史对话' })
+      await drawer.getByRole('searchbox').fill('临水书屋')
+      await drawer.locator('[data-search-message-id="scroll-history-4"]').click()
+      await page.getByTestId('mobile-sider').waitFor({ state: 'hidden' })
+      const scroll = page.getByTestId('message-scroll')
+      const message = (index) => scroll.locator('[data-message-id="scroll-history-' + index + '"]')
+      await message(4).waitFor()
+      await page.evaluate(async () => {
+        await document.fonts.ready
+        await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+      })
+      const loadLater = scroll.getByRole('button', { name: /^加载后续消息/ })
+      assert.equal(await loadLater.count(), 1, 'the next page has a manual fallback')
+      assert.equal(await message(40).count(), 0)
+      for (const end of [79, 119, 159, 199, 239, 244]) {
+        const anchor = await scroll.evaluate((element, hold) => {
+          if (hold) {
+            const finger = new Touch({ identifier: 7, target: element, clientX: 96, clientY: 300 })
+            element.dispatchEvent(new TouchEvent('touchstart', { touches: [finger] }))
+          }
+          element.scrollTop = element.scrollHeight
+          const viewportTop = element.getBoundingClientRect().top
+          const inset = parseFloat(getComputedStyle(element).scrollPaddingTop)
+          const first = Array.from(element.querySelectorAll('[data-message-id]'))
+            .find((node) => node.getBoundingClientRect().bottom > viewportTop + inset)
+          return { id: first.dataset.messageId, top: first.getBoundingClientRect().top }
+        }, end === 79)
+        if (end === 79) {
+          await page.waitForTimeout(200)
+          assert.equal(await message(40).count(), 0, 'hold the current range while the touch is active')
+          await scroll.evaluate((element) => element.dispatchEvent(new TouchEvent('touchend')))
+        }
+        await message(end).waitFor()
+        const newPosition = await scroll.locator('[data-message-id="' + anchor.id + '"]')
+          .evaluate((node) => node.getBoundingClientRect().top)
+        assert.ok(Math.abs(newPosition - anchor.top) < 3, JSON.stringify({ end, anchor, newPosition }))
+        assert.ok((await scroll.locator('[data-message-id]').count()) <= 120)
+        if (end !== 244) assert.equal(await message(244).count(), 0)
+      }
+      assert.equal(await loadLater.count(), 0)
+      // Once the older page has been released, swiping back restores earlier messages in place.
+      assert.equal(await message(124).count(), 0)
+      await scroll.evaluate((element) => { element.scrollTop = 0 })
+      await message(124).waitFor()
+      await page.getByRole('button', { name: '回到最新消息', exact: true }).click()
+      await message(244).waitFor()
+      assert.ok((await scroll.locator('[data-message-id]').count()) <= 40)
+    }
+  )
+
+  await run(
+    'chat title tap reaches the first page and long press opens the assistant without moving the chat',
+    async (page) => {
+      await page.evaluate(async () => {
+        const a = window.__audit,
+          f = a.fixtures
+        document.documentElement.style.setProperty('--fs-safe-top', '24px')
+        const messages = Array.from({ length: 52 }, (_, index) =>
+          index % 2 === 0
+            ? f.user('memory-history-' + index, '历史消息 ' + index)
+            : f.assistant('memory-history-' + index, '历史回复 ' + index)
+        )
+        await a.seed([f.session({ id: 'memory-title', title: '长篇故事', messages })])
+      })
+      const header = page.getByTestId('chat-header')
+      const scroll = page.getByTestId('message-scroll')
+      const first = scroll.locator('[data-message-id="memory-history-0"]')
+      const title = header.getByRole('button', { name: '长篇故事，回到对话顶部', exact: true })
+      const dialog = page.getByRole('dialog', { name: '对话助手', exact: true })
+      await page.waitForFunction(() =>
+        document.querySelector('[data-testid="message-scroll"]')?.scrollTop > 100
+      )
+      const previousPosition = await scroll.evaluate((element) => element.scrollTop)
+      assert.equal(await first.count(), 0)
+
+      // Use real touch events, including the release after the dialog has appeared.
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+      const bounds = await title.boundingBox()
+      assert.ok(bounds)
+      const point = [{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }]
+      const touch = (type) =>
+        cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchStart' ? point : [] })
+      await touch('touchStart')
+      await dialog.waitFor()
+      await touch('touchEnd')
+      await dialog.waitFor()
+      assert.equal(await scroll.evaluate((element) => element.scrollTop), previousPosition)
+      await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+      await dialog.waitFor({ state: 'detached' })
+
+      await page.evaluate(() => window.__audit.assistantLibrary.setMemoryEnabled(true))
+      await title.press('Shift+F10')
+      const pause = dialog.getByRole('switch', { name: /暂停使用记忆/ })
+      assert.equal(await pause.getAttribute('aria-checked'), 'false')
+      await pause.click()
+      assert.equal(
+        await page.evaluate(() =>
+          window.__audit.store.useChatStore.getState().sessionCache['memory-title'].memoryPaused
+        ),
+        true
+      )
+      await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+      await dialog.waitFor({ state: 'detached' })
+
+      await touch('touchStart')
+      await touch('touchEnd')
+      await first.waitFor()
+      await page.waitForFunction(() =>
+        document.querySelector('[data-testid="message-scroll"]')?.scrollTop === 0
+      )
+      assert.equal(await dialog.count(), 0)
+      assert.ok((await scroll.locator('[data-message-id]').count()) <= 40)
+      await scroll.getByRole('button', { name: /加载后/ }).click()
+      await scroll.locator('[data-message-id="memory-history-51"]').waitFor()
     }
   )
 

@@ -1,5 +1,5 @@
 import * as db from '../db.js'
-import { mapSessionMessages, allSessionMessages, mapSessionFileIds, messageFiles } from '../sessionData.js'
+import { mapSessionMessages, allSessionMessages, mapSessionFileIds, sessionOriginalIds } from '../sessionData.js'
 import { getVisibleMessages, normalizeSession } from '../branches.js'
 import { contextRounds, rebaseContextSummary } from '../contextCompression.js'
 import { logEvent, diagnosticError } from '../../diagnostics/log.js'
@@ -323,13 +323,11 @@ export const exportNativeArchive = async (
       splitSessions.push({ id: session.id, parts: parts.length - 1 })
     }
     entries.push(...parts)
-    for (const message of messages) {
-      for (const file of messageFiles(message)) {
-        if (!files.has(file.id)) {
-          const original = await loadOriginal(file.id)
-          if (original) {
-            files.set(file.id, original)
-          }
+    for (const id of sessionOriginalIds(session)) {
+      if (!files.has(id)) {
+        const original = await loadOriginal(id)
+        if (original) {
+          files.set(id, original)
         }
       }
     }

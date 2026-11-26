@@ -1,7 +1,7 @@
 import { useTranslate } from '../../i18n/index.js'
 import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import clsx from 'clsx'
-import { memo, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
 import { contextWasRejected } from '../../services/chat/contextCompression.js'
@@ -11,6 +11,7 @@ import {
   regenerateReply,
   newChat,
   retryContextReply,
+  setConversationRoleVoiceLive,
   useChatStore,
 } from '../../services/chat/store.js'
 import { stopReadAloud, useReadAloud } from '../../services/speech/readAloud.js'
@@ -22,7 +23,12 @@ import { Markdown } from '../markdown/Markdown.js'
 import { ExpandableContent } from './ExpandableContent.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
-import { ReadAloudButton } from './ReadAloudButton.js'
+import { playReplyRoles, ReadAloudButton } from './ReadAloudButton.js'
+import { useSettings } from '../../services/settings.js'
+import { useProviders } from '../../services/providers.js'
+import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
+import { roleVoiceActive } from '../../services/speech/roleVoiceBridge.js'
+import { RoleSpeechControls, RoleSpeechDetails } from './RoleSpeechControls.js'
 import { CopyButton } from './CopyButton.js'
 import { ReplyArea } from './ReplyArea.js'
 import { ReplyActivity } from './ReplyActivity.js'
@@ -68,10 +74,13 @@ export const AssistantMessage = memo(function AssistantMessage({
   const sessionAgent = useChatStore((state) => state.sessionCache[sessionId]?.mode === 'agent')
   const agentMode = sessionAgent || Boolean(message.task)
   const view = useReplyView(message, streaming, agentMode)
-  // 角色配音朗读时显示「正在读：谁」，跟着播放进度变；不是这条在读就为空
-  const speakingRole = useReadAloud((state) =>
-    state.messageId === message.id ? state.speakingRole : null
-  )
+  const roleVoice = useSettings((state) => state.roleVoice)
+  const providers = useProviders((state) => state.profiles)
+  const speechProfile = !agentMode && roleVoiceActive(roleVoice, message.agent)
+    ? roleVoiceProfile(providers, roleVoice)
+    : null
+  const roleSpeaking = useReadAloud((state) => state.messageId === message.id && state.roleReply)
+  const root = useRef<HTMLDivElement>(null)
   const playback = useReadAloud((state) => state.messageId === message.id ? state.status : 'idle')
   // 新回复（含重新生成）挂载时创建不足 800ms 播放一次入场动画
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
@@ -79,6 +88,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const notice = streaming ? null : describeReply(message)
   const compressionPrompt = message.error?.localMessage?.key === 'compressionSuggested'
   const rejectedContext = contextWasRejected(message.error?.localMessage)
+  const compressionRefused = message.error?.localMessage?.key === 'compressionFailedRefused'
   const summaryExhausted = message.error?.localMessage?.key === 'compressionStillTooLong'
   const projection = compressionPrompt ? message.error?.localMessage?.params : undefined
   // 安全拒绝：已下发的思考与正文按协议丢弃，只显示模板答复。
@@ -87,11 +97,22 @@ export const AssistantMessage = memo(function AssistantMessage({
   const responseText = [answer?.text, notice?.presentation === 'response' ? notice.text : null]
     .filter(Boolean)
     .join('\n\n')
+  const hasRoleSpeech = !refused && (roleSpeaking || !!speechProfile && (streaming || !!responseText))
+  const startRoleSpeech = () => {
+    if (streaming) {
+      setConversationRoleVoiceLive(sessionId, true)
+    } else if (speechProfile) {
+      playReplyRoles(sessionId, message, speechProfile, roleVoice, responseText)
+    }
+  }
+  const outputExhausted = !agentMode && !streaming && !notice && message.status === 'done' &&
+    message.stopReason === 'max_tokens'
+  const thinkingOnly = !responseText.trim() && message.blocks.some((block) => block.type === 'thinking')
   const copyText = responseText || message.task?.run?.question || notice?.text
   const compressing = useChatStore((s) => (streaming ? s.compressing[sessionId] : undefined))
   const summaryEntry = `${message.id}-summary`
   return (
-    <div className={clsx(styles.message, fresh && styles.fresh)} data-message-id={message.id}>
+    <div ref={root} className={clsx(styles.message, fresh && styles.fresh)} data-message-id={message.id}>
       {!refused &&
         (agentMode ? (
           <div data-testid="assistant-task">
@@ -111,6 +132,10 @@ export const AssistantMessage = memo(function AssistantMessage({
             streaming={streaming}
             hasResponse={!!responseText}
             activityPaused={!!compressing}
+            voiceControl={hasRoleSpeech ? (
+              <RoleSpeechControls messageId={message.id} streaming={streaming} onStart={startRoleSpeech} />
+            ) : undefined}
+            voiceDetails={roleSpeaking ? <RoleSpeechDetails messageId={message.id} root={root} /> : undefined}
           />
         ))}
       {answer ? (
@@ -129,6 +154,12 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         />
       ) : null}
+      {outputExhausted && (
+        <div className={clsx(styles.notice, styles.outputNotice)} role="status">
+          <IconWarningOutline16 />
+          <div>{t(thinkingOnly ? 'replyThinkingOutputExhausted' : 'replyOutputExhausted')}</div>
+        </div>
+      )}
       {!refused && agentMode && streaming && !compressing && (
         <ReplyActivity message={message} view={view} transcriptTail />
       )}
@@ -217,7 +248,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             ) : null}
             {(notice.action === 'compression' || notice.action === 'newChat') && (
               <div className={styles.contextActions}>
-                {!summaryExhausted &&
+                {!summaryExhausted && !compressionRefused &&
                   message.error?.localMessage?.key !== 'compressionUnavailable' && (
                     <Button
                       size="s"
@@ -234,7 +265,17 @@ export const AssistantMessage = memo(function AssistantMessage({
                       )}
                     </Button>
                   )}
-                {rejectedContext ? (
+                {compressionRefused && (
+                  <Button
+                    size="s"
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() => retryContextReply(sessionId, message.id, 'send')}
+                  >
+                    {t('compressionRetryWithHistory')}
+                  </Button>
+                )}
+                {rejectedContext && !compressionRefused && (
                   <Button
                     size="s"
                     variant={summaryExhausted ? 'primary' : 'outlined'}
@@ -243,22 +284,23 @@ export const AssistantMessage = memo(function AssistantMessage({
                   >
                     {t('compressionUseRecent')}
                   </Button>
-                ) : (
-                  notice.action === 'compression' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      className={styles.noticeAction}
-                      onClick={() => retryContextReply(sessionId, message.id, 'send')}
-                    >
-                      {t('compressionSendOnce')}
-                    </button>
-                  )
+                )}
+                {!rejectedContext && !compressionRefused && notice.action === 'compression' && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className={styles.noticeAction}
+                    onClick={() => retryContextReply(sessionId, message.id, 'send')}
+                  >
+                    {t('compressionSendOnce')}
+                  </button>
                 )}
               </div>
             )}
-            {rejectedContext && (
-              <div className={styles.compressionEstimate}>{t('compressionRecentHint')}</div>
+            {(rejectedContext || compressionRefused) && (
+              <div className={styles.compressionEstimate}>
+                {t(compressionRefused ? 'compressionRefusalKeepHint' : 'compressionRecentHint')}
+              </div>
             )}
             {notice.action === 'newChat' ? (
               <button
@@ -296,13 +338,13 @@ export const AssistantMessage = memo(function AssistantMessage({
           <div
             className={clsx(styles.actions, (isLast || playback !== 'idle') && styles.alwaysShow)}
           >
-            {playback === 'loading' || speakingRole ? (
+            {playback === 'loading' && !roleSpeaking ? (
               <span className={styles.speakingRole} role="status">
-                {speakingRole ? t('roleVoiceNowReading', { name: speakingRole }) : t('ttsPreparing')}
+                {t('ttsPreparing')}
               </span>
             ) : null}
             {copyText ? <CopyButton text={copyText} /> : null}
-            {responseText && !refused ? (
+            {responseText && !refused && !hasRoleSpeech ? (
               <ReadAloudButton message={message} text={responseText} sessionId={sessionId} />
             ) : null}
             <IconButton
@@ -310,10 +352,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               tooltip={t('regenerate')}
               tooltipPlacement="bottom"
               disabled={busy || refused}
-              onClick={() => {
-                stopReadAloud()
-                regenerateReply(sessionId, message.id)
-              }}
+              onClick={() => void regenerateReply(sessionId, message.id)}
             />
           </div>
           {isLast && !message.task?.run && canContinueReply(message) ? (

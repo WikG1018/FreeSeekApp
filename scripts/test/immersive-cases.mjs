@@ -73,6 +73,160 @@ export const runImmersiveCases = async ({ run }) => {
       assert.ok(end.last <= end.dock - 20, JSON.stringify(end))
     }
   )
+  await run('streaming reply previews five thought lines and holds the opening of a long answer', async (page) => {
+    await page.evaluate(async () => {
+      const a = window.__audit
+      const f = a.fixtures
+      a.settings.setApiKey('fixture')
+      a.settings.setRoleVoice({ enabled: true })
+      a.providers.saveProvider({
+        ...a.providers.emptyProfile(), name: '小米 MiMo', protocol: 'openai',
+        url: 'https://api.xiaomimimo.com/v1', apiKey: 'fixture-voice',
+        model: 'mimo-v2.5-tts', models: ['mimo-v2.5-tts'],
+      }, false)
+      await a.seed([f.session({
+        id: 'streaming-viewport',
+        title: '长回复验收',
+        messages: [
+          f.user('history-question', '请先介绍这个故事的背景。'),
+          f.assistant('history-answer', Array.from({ length: 24 }, (_, index) =>
+            '故事发生在雨后的街角。' + (index + 1)
+          ).join('\n\n')),
+        ],
+      })])
+      const original = window.fetch
+      window.fetch = async (url, init) => {
+        if (!String(url).endsWith('/messages')) return original(url, init)
+        return new Response(new ReadableStream({ start(controller) {
+          const encoder = new TextEncoder()
+          const emit = (event) =>
+            controller.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'))
+          const paragraphs = (count) =>
+            Array(count).fill('雨刚停，街灯映在水洼里。巷口还亮着一盏灯。').join('\n\n')
+          const add = (text) => emit({
+            type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text },
+          })
+          emit({ type: 'message_start', message: { usage: { input_tokens: 15, output_tokens: 0 } } })
+          emit({ type: 'content_block_start', index: 0, content_block: {
+            type: 'thinking',
+            thinking: Array.from({ length: 9 }, (_, index) => '推敲故事第 ' + (index + 1) + ' 处细节。').join('\n'),
+          } })
+          window.__streamingView = {
+            answer: () => {
+              emit({ type: 'content_block_stop', index: 0 })
+              emit({ type: 'content_block_start', index: 1, content_block: {
+                type: 'text', text: '故事从这里开始。',
+              } })
+            },
+            extend: (marker) => add('\n\n' + paragraphs(16) + '\n\n' + marker),
+            finish: () => {
+              emit({ type: 'content_block_stop', index: 1 })
+              emit({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 512 } })
+              emit({ type: 'message_stop' })
+              controller.close()
+            },
+          }
+        } }), { headers: { 'Content-Type': 'text/event-stream' } })
+      }
+    })
+    const question = '请继续写这个雨夜的故事。'
+    await page.getByTestId('chat-composer').locator('textarea').fill(question)
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    const scroll = page.getByTestId('message-scroll')
+    const summary = page.getByTestId('reply-summary').last()
+    const thought = summary.locator('button[aria-expanded]')
+    const voice = summary.getByRole('button', { name: '边生成边朗读', exact: true })
+    const preview = page.getByTestId('thought-preview')
+    await preview.waitFor()
+    const questionTop = () => scroll.evaluate((element, prompt) => {
+      const question = [...element.querySelectorAll('[data-message-id]')]
+        .find((node) => node.textContent.includes(prompt))
+      const inset = parseFloat(getComputedStyle(element).scrollPaddingTop)
+      return question.getBoundingClientRect().top - element.getBoundingClientRect().top - inset
+    }, question)
+    const thinkingPosition = await questionTop()
+    assert.ok(Math.abs(thinkingPosition) < 4, 'latest question is aligned below the chat header')
+    assert.equal(await thought.getAttribute('aria-expanded'), 'false')
+    const lines = await preview.evaluate((element) => {
+      const clip = element.getBoundingClientRect()
+      const textNode = element.firstElementChild.firstChild
+      const firstLine = document.createRange()
+      firstLine.setStart(textNode, 0)
+      firstLine.setEnd(textNode, 1)
+      const lastLine = document.createRange()
+      lastLine.setStart(textNode, textNode.length - 1)
+      lastLine.setEnd(textNode, textNode.length)
+      return {
+        capacity: clip.height / parseFloat(getComputedStyle(element).lineHeight),
+        clipped: firstLine.getBoundingClientRect().bottom <= clip.top,
+        newestVisible: lastLine.getBoundingClientRect().bottom <= clip.bottom,
+      }
+    })
+    assert.deepEqual(lines, { capacity: 5, clipped: true, newestVisible: true })
+    const thoughtBox = await thought.boundingBox()
+    const voiceBox = await voice.boundingBox()
+    assert.ok(thoughtBox && voiceBox && thoughtBox.x + thoughtBox.width < voiceBox.x)
+    assert.ok(Math.abs(voiceBox.y + voiceBox.height / 2 - thoughtBox.y - thoughtBox.height / 2) < 1)
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/reply-thinking-preview-zh.png', animations: 'disabled' })
+    }
+
+    await thought.click()
+    await scroll.locator('.ds-think-content').waitFor()
+    await page.evaluate(() => window.__streamingView.answer())
+    const start = scroll.getByText('故事从这里开始。', { exact: true })
+    await start.waitFor()
+    assert.equal(await scroll.locator('.ds-think-content').count(), 0)
+    assert.equal(await preview.count(), 0)
+    assert.equal(await thought.isDisabled(), true)
+    assert.ok(Math.abs(await questionTop() - thinkingPosition) < 2)
+    assert.ok(await start.evaluate((element) =>
+      element.getBoundingClientRect().bottom <
+        document.querySelector('[data-testid="chat-dock"]').getBoundingClientRect().top
+    ))
+    await page.evaluate(() => window.__streamingView.extend('后续段落已到达。'))
+    await scroll.getByText('后续段落已到达。', { exact: true }).waitFor()
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector('[data-testid="message-scroll"]')
+      const reply = [...viewport.querySelectorAll('[data-message-id]')].at(-1)
+      const inset = parseFloat(getComputedStyle(viewport).scrollPaddingTop)
+      const top = reply.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+      return Math.abs(top - inset) < 3
+    })
+    const anchoredPosition = await scroll.evaluate((element) => element.scrollTop)
+    assert.ok(anchoredPosition > 0)
+    const opening = await start.evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      const header = document.querySelector('[data-testid="chat-header"]').getBoundingClientRect()
+      const dock = document.querySelector('[data-testid="chat-dock"]').getBoundingClientRect()
+      return bounds.top >= header.bottom && bounds.bottom < dock.top
+    })
+    assert.equal(opening, true, 'the first sentence stays between the floating header and dock')
+    await page.evaluate(() => window.__streamingView.extend('更多段落已到达。'))
+    await scroll.getByText('更多段落已到达。', { exact: true }).waitFor()
+    assert.ok(Math.abs(await scroll.evaluate((element) => element.scrollTop) - anchoredPosition) < 2)
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/reply-turn-beginning-zh.png', animations: 'disabled' })
+    }
+
+    await page.getByRole('button', { name: '回到底部', exact: true }).click()
+    await page.waitForFunction(() => {
+      const element = document.querySelector('[data-testid="message-scroll"]')
+      return element.scrollHeight - element.scrollTop - element.clientHeight < 2
+    })
+    await page.evaluate(() => {
+      window.__streamingView.extend('最后一段仍然可见。')
+      window.__streamingView.finish()
+    })
+    await page.evaluate(() => window.__audit.waitIdle())
+    await page.waitForFunction(() => {
+      const element = document.querySelector('[data-testid="message-scroll"]')
+      return element.scrollHeight - element.scrollTop - element.clientHeight < 2
+    })
+    assert.equal(await preview.count(), 0)
+    assert.equal(await thought.getAttribute('aria-expanded'), 'false')
+  })
+
   await run(
     'attachment chooser preserves compact composer height and keeps every action usable with large text',
     async (page) => {

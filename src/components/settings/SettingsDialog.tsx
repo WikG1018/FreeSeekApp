@@ -227,9 +227,10 @@ const SettingsRoot = () => {
             case 'providerSearch':
               return <ProviderSearchPage onDone={() => finish()} />
             case 'providerSpeech':
-              return <ProviderSpeechPage onDone={() => finish()} onSwitch={() => open('chat')} />
+            case 'chatSpeech':
+              return <ProviderSpeechPage onDone={() => finish()} />
             case 'chat':
-              return <ChatPreferencesPage />
+              return <ChatPreferencesPage openSpeech={() => open('chatSpeech')} />
             case 'personas':
               return (
                 <PersonaLibrary

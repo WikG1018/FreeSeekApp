@@ -14,6 +14,12 @@ export const describeKnownApiError = (
   code = ''
 ): TranslationMessage | undefined => {
   if (
+    /\bcontent exists risk\b/i.test(message) ||
+    /^(?:content_policy_violation|content_filter|safety_violation)$/i.test(code)
+  ) {
+    return { key: 'replyRefused' }
+  }
+  if (
     /\blatest_reminder\b/i.test(message) &&
     /\bdeepseek-v4-pro\b/i.test(message) &&
     /unavailable|not supported|does not support/i.test(message)

@@ -7,7 +7,7 @@ import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { TranslationKey, TranslationMessage, TranslationParams } from '../../i18n/index.js'
 import { abortableDelay } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
-import { providerOutputBudget, type Connection } from '../providers.js'
+import { providerModelContextWindow, providerOutputBudget, type Connection } from '../providers.js'
 import { customReasoning, disabledReasoning } from '../reasoning.js'
 import { getContextRounds, getReplyText } from './reply.js'
 import type {
@@ -54,9 +54,7 @@ export const contextRounds = (history: Message[], inherited?: { messages: Messag
 export const contextLength = (connection: ContextModel): number | undefined =>
   connection.kind === 'deepseek'
     ? 1048576
-    : Object.hasOwn(connection.profile.contextWindows ?? {}, connection.model)
-      ? connection.profile.contextWindows?.[connection.model]
-      : undefined
+    : providerModelContextWindow(connection.profile, connection.model)
 
 export const contextReplyReserve = (connection: ContextModel) =>
   connection.kind === 'custom' ? providerOutputBudget(connection.profile, connection.model) : 8192
@@ -92,9 +90,12 @@ export const contextWasRejected = (message?: TranslationMessage) =>
   isContextRejection(message?.key) ||
   message?.key === 'compressionStillTooLong' ||
   (message?.params?.recoverContext === 1 &&
-    !['compressionInputLarge', 'replyDocumentInputLimit', 'replyOutputLimitInvalid'].includes(
-      message.key
-    ))
+    ![
+      'compressionInputLarge',
+      'compressionRefusalTooLong',
+      'replyDocumentInputLimit',
+      'replyOutputLimitInvalid',
+    ].includes(message.key))
 
 export const describeCompressionFailure = (error: unknown): TranslationMessage => {
   if (!(error instanceof ApiError)) {
@@ -109,12 +110,12 @@ export const describeCompressionFailure = (error: unknown): TranslationMessage =
   ) {
     return local
   }
+  if (local?.key === 'replyRefused' || /\bcontent exists risk\b/i.test(error.message)) {
+    return { key: 'compressionFailedRefused' }
+  }
   const statusKey = compressionStatus[classifyApiError(error)]
   if (statusKey) {
     return { key: statusKey }
-  }
-  if (/\bcontent exists risk\b/i.test(error.message)) {
-    return { key: 'compressionFailedRefused' }
   }
   if (error.kind === 'stream' && /\b(?:timeout|timed out)\b/i.test(error.message)) {
     return { key: 'compressionFailedNetwork' }
@@ -184,6 +185,47 @@ function* prefixParts(rounds: ContextRound[], count: number) {
 }
 const prefixSignature = (rounds: ContextRound[], count: number) =>
   textSignature(prefixParts(rounds, count))
+const compressionScope = (
+  connection: Connection,
+  start: number,
+  end: number,
+  signature: string,
+  prior: ContextSummary | undefined
+) =>
+  textSignature([
+    'compression-1',
+    connection.kind,
+    connection.model,
+    connection.kind === 'custom' ? connection.profile.id : '',
+    connection.kind === 'custom' ? connection.profile.revision : '',
+    String(start),
+    String(end),
+    signature,
+    prior?.text ?? '',
+  ])
+
+/** Match the declined prefix independently of a new plan's end or an appended turn. */
+export const refusedCompressionBoundary = (
+  connection: Connection,
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  checkpoint?: CompressionCheckpoint
+): number | undefined => {
+  const start = prior?.coveredRounds ?? 0
+  const end = checkpoint?.targetRounds
+  if (
+    !checkpoint?.refused ||
+    end === undefined ||
+    !Number.isSafeInteger(end) ||
+    end <= start ||
+    end > rounds.length
+  ) {
+    return undefined
+  }
+  return checkpoint.scope === compressionScope(connection, start, end, prefixSignature(rounds, end), prior)
+    ? end
+    : undefined
+}
 export const applicableSummary = (summary: ContextSummary | undefined, rounds: ContextRound[]) =>
   summary &&
   summary.coveredRounds > 0 &&
@@ -259,7 +301,7 @@ export const recentChatContext = (
   }
   const coveredRounds = Math.max(1, rounds.length - keep, prior?.coveredRounds ?? 0)
   return {
-    text: '[Earlier messages retained locally]',
+    text: prior?.text ?? '[Earlier messages retained locally]',
     recentOnly: true,
     coveredRounds,
     signature: prefixSignature(rounds, coveredRounds),
@@ -324,6 +366,76 @@ function* transcriptParts(rounds: ContextRound[], start: number, end: number) {
         yield block.text
       }
     }
+  }
+}
+
+const transcriptProgress = (
+  rounds: ContextRound[],
+  start: number,
+  end: number,
+  offset: number
+) => {
+  let coveredRounds = start
+  let chars = 0
+  while (coveredRounds < end && chars < offset) {
+    let next = chars
+    for (const piece of transcriptParts(rounds, coveredRounds, coveredRounds + 1)) {
+      next += piece.length
+    }
+    if (next > offset) {
+      return { coveredRounds, chars, through: coveredRounds + 1 }
+    }
+    chars = next
+    coveredRounds++
+  }
+  return { coveredRounds, chars, through: coveredRounds }
+}
+
+/** A refusal can follow successful segments. Replace only the fully summarized turns. */
+export const approvedPrefixBeforeRefusal = (
+  connection: Connection,
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  checkpoint?: CompressionCheckpoint
+) => {
+  if (
+    !checkpoint ||
+    !Number.isSafeInteger(checkpoint.offset) ||
+    checkpoint.offset <= 0 ||
+    typeof checkpoint.text !== 'string' ||
+    !checkpoint.text.trim() ||
+    checkpoint.text.length > MAX_SUMMARY_CHARS
+  ) {
+    return undefined
+  }
+  const end = refusedCompressionBoundary(connection, rounds, prior, checkpoint)
+  if (end === undefined) {
+    return undefined
+  }
+  const start = prior?.coveredRounds ?? 0
+  const { coveredRounds, chars } = transcriptProgress(rounds, start, end, checkpoint.offset)
+  if (coveredRounds <= start || coveredRounds >= end) {
+    return undefined
+  }
+  const summary: ContextSummary = {
+    text: checkpoint.text,
+    coveredRounds,
+    signature: prefixSignature(rounds, coveredRounds),
+    updatedAt: Date.now(),
+  }
+  const before = estimateContextHistory(rounds, prior).tokens
+  const after = estimateContextHistory(rounds, summary).tokens
+  if (after >= before) {
+    return undefined
+  }
+  summary.historyEstimate = { before, after }
+  return {
+    summary,
+    checkpoint: {
+      ...checkpoint,
+      offset: checkpoint.offset - chars,
+      scope: compressionScope(connection, coveredRounds, end, prefixSignature(rounds, end), summary),
+    },
   }
 }
 
@@ -444,6 +556,12 @@ async function summarizeChunk(
         }
         break
       } catch (error) {
+        if (
+          reason === 'refusal' ||
+          describeCompressionFailure(error).key === 'compressionFailedRefused'
+        ) {
+          throw new ApiError('protocol', { key: 'compressionFailedRefused' })
+        }
         if (attempt === 0 && reasoning && rejectsReasoningParams(error)) {
           logEvent(
             'chat',
@@ -482,7 +600,7 @@ async function summarizeChunk(
     }
     return summary.trim()
   } catch (error) {
-    const failure = timedOut
+    const failure = timedOut && describeCompressionFailure(error).key !== 'compressionFailedRefused'
       ? new ApiError('network', {
           key: timeoutMs < MAX_SEGMENT_MS ? 'compressionFailedPaused' : 'compressionFailedNetwork',
         })
@@ -548,19 +666,19 @@ export async function generateContextSummary(
   if (connection.kind === 'deepseek' && !connection.apiKey) {
     throw new ApiError('protocol', { key: 'compressionNoKey' })
   }
-  const scopeFor = (end: number, signature: string) =>
-    textSignature([
-      'compression-1',
-      connection.kind,
-      connection.model,
-      connection.kind === 'custom' ? connection.profile.id : '',
-      connection.kind === 'custom' ? connection.profile.revision : '',
-      String(plan.start),
-      String(end),
-      signature,
-      prior?.text ?? '',
-    ])
   const saved = job.checkpoint
+  const refusedThrough = refusedCompressionBoundary(connection, rounds, prior, saved)
+  if (refusedThrough !== undefined) {
+    logEvent('chat', 'compression.refusal.retained', {
+      sessionId: job.sessionId,
+      coveredRounds: plan.start,
+      targetRounds: refusedThrough,
+      processedChars: saved?.offset,
+    })
+    throw new ApiError('protocol', { key: 'compressionFailedRefused' })
+  }
+  const scopeFor = (end: number, signature: string) =>
+    compressionScope(connection, plan.start, end, signature, prior)
   const legacyEnd = plan.legacyEnd ?? plan.end
   let end = plan.end
   if (
@@ -595,10 +713,13 @@ export async function generateContextSummary(
     scope = scopeFor(end, signature)
   }
   let windowTokens = Math.min(plan.limit ?? DEFAULT_CUSTOM_WINDOW, MAX_SEGMENT_WINDOW)
-  let outputTokens = Math.min(2048, summaryOutputBudget(connection, windowTokens))
+  let previous = prior?.recentOnly ? '' : (prior?.text ?? '')
+  let outputTokens = Math.min(
+    Math.max(2048, Math.ceil(estimatedTokens(previous) * 1.5)),
+    summaryOutputBudget(connection, windowTokens)
+  )
   let segmentLimit = MAX_SEGMENT_CHARS
   let offset = 0
-  let previous = prior?.recentOnly ? '' : (prior?.text ?? '')
   let readRetries = 0,
     lastRetryOffset = -1
   const deadline = performance.now() + MAX_PASS_MS
@@ -626,6 +747,15 @@ export async function generateContextSummary(
     logEvent('chat', 'compression.resumed', { processedChars: offset, totalChars: total })
   }
 
+  const checkpointAtProgress = () => ({
+    scope,
+    text: previous,
+    offset,
+    segmentLimit,
+    outputTokens,
+    windowTokens,
+    targetRounds: end,
+  })
   const showProgress = () => job.progress(Math.floor((offset * 100) / total))
   showProgress()
   for (const source of transcriptChunks(
@@ -665,7 +795,17 @@ export async function generateContextSummary(
             }
           )
         } catch (error) {
-          if (charge) {
+          const refused =
+            !signal.aborted && describeCompressionFailure(error).key === 'compressionFailedRefused'
+          if (refused) {
+            const { through } = transcriptProgress(rounds, plan.start, end, offset + chunk.length)
+            await job.record(charge, {
+              ...checkpointAtProgress(),
+              targetRounds: through,
+              scope: scopeFor(through, prefixSignature(rounds, through)),
+              refused: true,
+            })
+          } else if (charge) {
             await job.record(charge)
           }
           signal.throwIfAborted()
@@ -690,8 +830,8 @@ export async function generateContextSummary(
           }
           if (local?.key === 'compressionFailedOutput') {
             const cap = summaryOutputBudget(connection, windowTokens)
-            if (!local.params?.summarySizeLimit && outputTokens <= 2048 && outputTokens < cap) {
-              outputTokens = Math.min(outputTokens * 2, cap)
+            if (!local.params?.summarySizeLimit && outputTokens < cap) {
+              outputTokens = cap
               pending.push(chunk)
               continue
             }
@@ -713,15 +853,7 @@ export async function generateContextSummary(
         if (summarized !== undefined) {
           previous = summarized
           offset += chunk.length
-          await job.record(charge, {
-            scope,
-            text: previous,
-            offset,
-            segmentLimit,
-            outputTokens,
-            windowTokens,
-            targetRounds: end,
-          })
+          await job.record(charge, checkpointAtProgress())
           reductions = 0
           showProgress()
           continue

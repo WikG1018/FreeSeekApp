@@ -47,7 +47,7 @@ export const SettingsShell = ({
 }) => {
   const t = useTranslate(),
     wideLayout = useSyncExternalStore(subscribe, () => wide.matches)
-  const { page: requested, closing } = useSettingsDialog()
+  const { page: requested, closing, backToConversation } = useSettingsDialog()
   const page = wideLayout && requested === 'home' ? 'account' : requested
   useLayoutEffect(() => {
     if (wideLayout && requested === 'home' && !closing) {
@@ -56,6 +56,8 @@ export const SettingsShell = ({
   }, [wideLayout, requested, closing])
   const parent = backTarget ?? parentSettingsPage(page)
   const canGoBack = page !== 'home' && (!wideLayout || parent !== 'home')
+  const speechDetail = page === 'chatSpeech' || page === 'providerSpeech'
+  const showBack = canGoBack && (!wideLayout || (speechDetail && !backToConversation))
   const scale = useSettings((s) => s.fontScale)
   const layer = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : scale)
   const dialog = useRef<HTMLDivElement>(null),
@@ -100,11 +102,19 @@ export const SettingsShell = ({
   }
   const close = () => leave(closeSettings)
   const back = () => {
-    if (canGoBack) {
+    if (canGoBack && !backToConversation) {
       go(parent, 'back')
     } else {
       close()
     }
+  }
+  const finish = (next?: SettingsPageId) => {
+    if (next === undefined && backToConversation) {
+      closeSettings()
+      return
+    }
+    const target = next ?? parent
+    navigate(target, target === parent ? 'back' : 'forward')
   }
   const backRef = useRef(back)
   backRef.current = back
@@ -204,13 +214,7 @@ export const SettingsShell = ({
               data-directory={home}
               data-api-settings={page === 'account' || page.startsWith('provider') || undefined}
             >
-              {/*
-                手机版：首页没有返回键，就给一个关闭键——iPhone 主屏幕版没有系统返回，
-                没有它设置页就是进得去出不来。二级页显示返回箭头。
-                电脑版：不用头部返回键——左栏底部已有「返回对话」，
-                再放一个箭头会造成两个返回入口。
-              */}
-              {canGoBack && !wideLayout ? (
+              {showBack ? (
                 <button className={styles.back} aria-label={t('back')} type="button" onClick={back}>
                   <IconChevronLeftOutline16 />
                 </button>
@@ -257,11 +261,7 @@ export const SettingsShell = ({
                 {home ? (
                   <SettingsDirectory active={page} open={(next) => go(next, 'forward')} />
                 ) : (
-                  children(
-                    page,
-                    (next) => go(next, 'forward'),
-                    (next = parent) => navigate(next, next === parent ? 'back' : 'forward')
-                  )
+                  children(page, (next) => go(next, 'forward'), finish)
                 )}
               </div>
             </div>

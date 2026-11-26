@@ -62,6 +62,11 @@
   padding: 0;
 }
 
+.livePreference {
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding-bottom: 3px;
+}
+
 .row + .row {
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
@@ -146,7 +151,7 @@
   line-height: 1.35;
 }
 .copyVoice {
-  flex: 0 1 auto;
+  flex: none;
   max-width: 38%;
 }
 
@@ -189,30 +194,53 @@
   text-align: end;
 }
 
-.form {
+.editor {
+  --modal-header-gap: 14px;
+  --modal-footer-gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .editor {
+    width: 440px;
+  }
+}
+
+.editorHeading {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.4;
+  font-weight: 650;
+  outline: none;
+}
+
+.form,
+.roleDetails {
   display: grid;
   gap: 12px;
   min-width: 0;
-  padding: 2px 0 4px;
 }
+
+.form {
+  padding: 2px 2px 4px;
+}
+
 .field,
-.fieldset {
+.voiceEditor {
   display: grid;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
 }
+
+.voiceEditor > button {
+  justify-self: start;
+}
+
 .fieldLabel {
-  padding: 0;
+  margin: 0;
   color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 0.875rem;
+  font-weight: 600;
   line-height: 1.45;
-}
-legend.fieldLabel {
-  margin: 0 0 6px;
 }
 
 .input,
@@ -220,37 +248,74 @@ legend.fieldLabel {
 .aliasInput {
   width: 100%;
   box-sizing: border-box;
-  padding: 9px 10px;
-  border: 1px solid var(--fs-field-line);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-base);
+  padding: 9px 11px;
+  border: 1px solid var(--fs-line);
+  border-radius: 11px;
+  background: var(--fs-settings-canvas);
   color: var(--dsw-alias-label-primary);
   font: inherit;
-  font-size: 15px;
-}
-.input:focus-visible,
-.textarea:focus-visible,
-.aliasInput:focus-visible {
-  outline: 1px solid var(--fs-accent-fill);
-  outline-offset: 1px;
-}
-.textarea {
-  min-height: 60px;
-  resize: vertical;
+  font-size: 1rem;
   line-height: 1.45;
 }
+
+.input,
+.aliasInput {
+  min-height: 44px;
+}
+
+.input:focus,
+.textarea:focus,
+.aliasInput:focus {
+  outline: 1px solid var(--fs-focus);
+  border-color: var(--fs-focus);
+}
+
+.textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.voiceRows {
+  border: 1px solid var(--fs-line);
+  border-radius: 13px;
+  background: var(--fs-settings-surface);
+  overflow: hidden;
+}
+
+.form .voiceRows [data-setting-row],
+.roleDetails > [data-setting-row] {
+  min-height: 46px;
+}
+
+.voiceRows [data-setting-row] + [data-setting-row] {
+  border-top: 1px solid var(--fs-line);
+}
+
+.roleDetails > [data-setting-row] {
+  padding-inline: 0;
+}
+
+.form > section[data-setting-row] {
+  border-top: 1px solid var(--fs-line);
+}
+
+.form > section[data-setting-row] > h3 > button {
+  padding-inline: 0;
+}
+
 .aliasRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  margin: -6px 0 0 -6px;
 }
+
 .alias {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   max-width: 100%;
-  min-height: 34px;
-  padding: 4px 8px;
+  min-height: 40px;
+  margin: 6px 0 0 6px;
+  padding: 4px 9px;
   border: 0;
   border-radius: 999px;
   background: var(--fs-accent-wash);
@@ -259,120 +324,77 @@ legend.fieldLabel {
   font-size: 13px;
   cursor: pointer;
 }
+
 .alias > span {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .alias > svg {
   flex: none;
-}
-.aliasInput {
-  width: 128px;
-  max-width: 100%;
-  min-height: 34px;
-  padding: 5px 8px;
+  width: 13px;
+  margin-left: 4px;
 }
 
-.segmented {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--fs-floating-border);
-  border-radius: 18px;
-  background: var(--fs-accent-wash);
-}
-.segmented label {
-  position: relative;
-  flex: 1 1 0%;
-  min-width: 0;
-  cursor: pointer;
-}
-.segmented input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: inherit;
-}
-.segmented span {
-  display: grid;
-  min-height: 34px;
-  align-items: center;
-  padding: 2px 5px;
-  border-radius: 14px;
-  color: var(--fs-secondary-text);
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.3;
-}
-.segmented input:checked + span {
-  background: var(--dsw-alias-bg-base);
-  color: var(--fs-accent-text);
-}
-.segmented input:focus-visible + span {
-  outline: 2px solid var(--fs-accent-fill);
-}
-
-.presetChoices {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px 8px;
-}
-.choice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 1px 3px;
-  cursor: pointer;
-}
-.choice input {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--fs-accent-fill);
-}
-.choice strong,
-.choice small {
-  display: block;
-}
-.choice strong {
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
-}
-.choice small {
-  color: var(--fs-secondary-text);
-  font-size: 11px;
-  line-height: 1.3;
-}
 .hint,
 .error {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.8125rem;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
+
 .hint {
   color: var(--fs-secondary-text);
 }
+
 .error {
   color: var(--dsw-alias-state-error-primary);
 }
-.rewriteRow,
+
+.voiceActions,
 .editorActions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
-.editorActions {
+
+.voiceAction,
+.editorAction {
+  min-width: 0;
+  height: auto;
+  padding: 7px 10px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.voiceAction {
+  min-height: 42px;
+  color: var(--fs-accent-text);
+}
+
+.voiceAction > svg {
+  flex: none;
+  margin-right: 5px;
+}
+
+.editorAction {
+  min-height: 44px;
+}
+
+.auditionRow,
+.editorFooter {
+  display: grid;
+  gap: 7px;
+}
+
+.auditionRow > button {
+  justify-self: start;
+}
+
+.editorFooter {
   width: 100%;
-  justify-content: flex-end;
 }
 
 @media (max-width: 359px) {

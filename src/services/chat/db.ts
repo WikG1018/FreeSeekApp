@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { toSessionSummary, type ChatMode, type Session, type SessionSummary } from './types.js'
-import { allSessionMessages, messageFiles } from './sessionData.js'
+import { sessionOriginalIds } from './sessionData.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import { blobChunks, jsonBlob } from './history/jsonBlob.js'
 import {
@@ -88,13 +88,7 @@ let dbPromise: Promise<IDBPDatabase<ChatDB>> | null = null
 const storedSummary = (session: Session): StoredSessionSummary => ({
   ...toSessionSummary(session),
   mode: session.mode ?? 'chat',
-  fileIds: [
-    ...new Set(
-      allSessionMessages(session)
-        .flatMap(messageFiles)
-        .map(({ id }) => id)
-    ),
-  ],
+  fileIds: sessionOriginalIds(session),
   goalRunIds: session.messages.flatMap((message) =>
     message.role === 'assistant' && message.task?.run?.mode === 'goal' ? [message.task.run.id] : []
   ),

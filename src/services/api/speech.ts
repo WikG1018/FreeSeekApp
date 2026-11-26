@@ -76,6 +76,7 @@ export const synthesize = async (
  */
 export const MIMO_TTS_MODEL = 'mimo-v2.5-tts'
 export const MIMO_TTS_DESIGN_MODEL = 'mimo-v2.5-tts-voicedesign'
+const MIMO_TTS_CLONE_MODEL = 'mimo-v2.5-tts-voiceclone'
 const MAX_MIMO_AUDIO_PAYLOAD = 8 * 1024 * 1024
 export type MiMoSpeechProfile = ProviderProfile & {
   speechModel?: string
@@ -89,6 +90,7 @@ export type MiMoSpeechRequest = {
   preset?: MiMoPresetVoice
   /** 一段话描述的音色；和 preset 二选一 */
   description?: string
+  sample?: string
   /** 风格指令：性格底色 + 本段语气 */
   style: string
   signal: AbortSignal
@@ -133,7 +135,10 @@ const audioResult = (value: unknown) => {
 /** Some compatible endpoints return the whole waveform as JSON, including with stream enabled. */
 async function* readMiMoAudio(response: Response, signal: AbortSignal) {
   if (/\/json\b/i.test(response.headers.get('content-type') ?? '')) {
-    const { bytes } = audioResult(await readApiJson(response, signal, MAX_MIMO_AUDIO_PAYLOAD))
+    const { bytes } = audioResult(await readApiJson(response, signal, MAX_MIMO_AUDIO_PAYLOAD, {
+      idleMs: 60_000,
+      maxMs: 120_000,
+    }))
     if (!bytes?.length) {
       throw new ApiError('protocol', { key: 'ttsNoAudio' })
     }
@@ -182,11 +187,12 @@ export const synthesizeMiMo = async ({
   text,
   preset,
   description,
+  sample,
   style,
   signal,
 }: MiMoSpeechRequest): Promise<ReadableStream<Uint8Array>> => {
   const described = description?.trim()
-  const useDesign = !preset && Boolean(described)
+  const useDesign = !sample && !preset && Boolean(described)
   const selected = profile.speechModel?.trim()
   const presetModel = selected && selected !== MIMO_TTS_DESIGN_MODEL ? selected : MIMO_TTS_MODEL
   const designModel =
@@ -204,14 +210,14 @@ export const synthesizeMiMo = async ({
         stream: true,
       }
     : {
-        model: presetModel,
+        model: sample ? MIMO_TTS_CLONE_MODEL : presetModel,
         messages: [
           // user 消息可选：风格指令，不会出现在语音里
           ...(style.trim() ? [{ role: 'user', content: style.trim() }] : []),
           { role: 'assistant', content: text },
         ],
-        audio: { format: 'pcm16', voice: preset ?? 'mimo_default' },
-        stream: true,
+        audio: { format: 'pcm16', voice: sample ?? preset ?? 'mimo_default' },
+        stream: !sample,
       }
   const connection = { ...profile, protocol: 'openai' as const }
   const url = providerEndpoint(connection, 'chat', body.model)

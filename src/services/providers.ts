@@ -2,7 +2,13 @@ import { create } from 'zustand'
 import { createId } from '../utils/id.js'
 import { logEvent, registerLogSecret } from './diagnostics/log.js'
 import { useSettings } from './settings.js'
-import { providerAccess, providerPreset } from './providerPresets.js'
+import {
+  isOfficialMiMoV26,
+  MIMO_V26_CONTEXT_WINDOW,
+  MIMO_V26_OUTPUT_LIMIT,
+  providerAccess,
+  providerPreset,
+} from './providerPresets.js'
 import {
   customReasoning,
   isReasoningAdapter,
@@ -25,6 +31,7 @@ export type ProviderModelParameters = {
 }
 export type ProviderModelSettings = Partial<ProviderModelParameters> & {
   name?: string
+  advertisedOutputLimit?: number
   reasoningAdapter?: ReasoningAdapter | 'none'
   reasoningLevels?: ReasoningLevel[]
   defaultReasoning?: ReasoningLevel
@@ -78,10 +85,13 @@ const validOutputBudget = (value: number) =>
 const validTemperature = (value: number | null) =>
   value === null || (Number.isFinite(value) && value >= 0 && value <= 2)
 export class ProviderConfigError extends Error {
-  constructor(readonly reason: 'url' | 'model' | 'parameters' | 'storage' | 'missing' | 'changed') {
+  constructor(
+    readonly reason: 'url' | 'model' | 'parameters' | 'storage' | 'missing' | 'changed' | 'output-limit',
+    readonly outputLimit?: number
+  ) {
     super(`Provider configuration: ${reason}`)
     this.name = 'ProviderConfigError'
-    logEvent('settings', 'provider.configuration-rejected', { reason }, 'warn')
+    logEvent('settings', 'provider.configuration-rejected', { reason, outputLimit }, 'warn')
   }
 }
 export const validModel = (value: unknown): value is string =>
@@ -134,12 +144,34 @@ export const modelSettingsFor = (profile: ProviderProfile | undefined, model: st
     ? profile.modelSettings?.[model]
     : undefined
 
+export const providerModelContextWindow = (profile: ProviderProfile, model: string) =>
+  Object.hasOwn(profile.contextWindows ?? {}, model)
+    ? profile.contextWindows?.[model]
+    : isOfficialMiMoV26(profile.url, model) ? MIMO_V26_CONTEXT_WINDOW : undefined
+
+export const providerModelOutputLimit = (profile: ProviderProfile, model: string) => {
+  const advertised = modelSettingsFor(profile, model)?.advertisedOutputLimit
+  return isOfficialMiMoV26(profile.url, model)
+    ? Math.min(MIMO_V26_OUTPUT_LIMIT, advertised ?? MIMO_V26_OUTPUT_LIMIT)
+    : advertised
+}
+
+export const validateProviderModelOutput = (profile: ProviderProfile, model: string) => {
+  const limit = providerModelOutputLimit(profile, model)
+  const configured = modelSettingsFor(profile, model)?.maxOutputTokens
+  if (limit !== undefined && configured !== undefined && configured > limit) {
+    throw new ProviderConfigError('output-limit', limit)
+  }
+}
+
 const defaultModelParameters = (profile: ProviderProfile): ProviderModelParameters => {
   const access = providerAccess(profile.preset?.id, profile.preset?.access)
   return {
     maxOutputTokens: 4096,
     temperature: null,
-    tokenParameter: access?.completionTokens ? 'max_completion_tokens' : 'max_tokens',
+    tokenParameter: access?.completionTokens || /^https:\/\/api\.openai\.com(?:\/|$)/i.test(profile.url)
+      ? 'max_completion_tokens'
+      : 'max_tokens',
     stream: true,
     streamUsage: access ? (access.streamUsage ?? false) : true,
     vision: false,
@@ -153,13 +185,22 @@ export const providerModelParameters = (
 ): ProviderModelParameters => {
   const defaults = defaultModelParameters(profile)
   const options = modelSettingsFor(profile, model)
+  const mimo = isOfficialMiMoV26(profile.url, model)
+  const modelDefault = mimo ? MIMO_V26_OUTPUT_LIMIT : defaults.maxOutputTokens
+  const context = providerModelContextWindow(profile, model)
+  // If a user sets a smaller total window, leave space for input as well as model output.
+  const defaultOutput = mimo && context !== undefined && context <= modelDefault
+    ? Math.floor(context / 2) : modelDefault
   return {
-    maxOutputTokens: options?.maxOutputTokens ?? defaults.maxOutputTokens,
+    maxOutputTokens: options?.maxOutputTokens ?? Math.min(
+      defaultOutput,
+      providerModelOutputLimit(profile, model) ?? defaultOutput
+    ),
     temperature: options?.temperature ?? defaults.temperature,
-    tokenParameter: options?.tokenParameter ?? defaults.tokenParameter,
+    tokenParameter: options?.tokenParameter ?? (mimo ? 'max_completion_tokens' : defaults.tokenParameter),
     stream: options?.stream ?? defaults.stream,
     streamUsage: options?.streamUsage ?? defaults.streamUsage,
-    vision: options?.vision ?? defaults.vision,
+    vision: options?.vision ?? (mimo && profile.protocol === 'openai'),
     pdf: options?.pdf ?? defaults.pdf,
   }
 }
@@ -234,6 +275,7 @@ export const validateProfile = (
           typeof item !== 'object' ||
           Array.isArray(item) ||
           (item.name !== undefined && !validModel(item.name)) ||
+          (item.advertisedOutputLimit !== undefined && !validOutputBudget(item.advertisedOutputLimit)) ||
           (item.maxOutputTokens !== undefined && !validOutputBudget(item.maxOutputTokens)) ||
           (item.temperature !== undefined && !validTemperature(item.temperature)) ||
           (item.tokenParameter !== undefined && !tokenParameters.includes(item.tokenParameter)) ||
@@ -408,9 +450,28 @@ export const saveProvider = (
   input: ProviderProfileInput,
   activate: boolean | string = false
 ): ProviderProfile => {
-  const value = validateProfile(input, Boolean(activate))
-  const state = useProviders.getState(),
-    previous = state.profiles.find((p) => p.id === value.id)
+  const state = useProviders.getState()
+  const previous = state.profiles.find((p) => p.id === input.id)
+  let value = validateProfile(input, Boolean(activate))
+  const changedEndpoint = previous && (previous.url !== value.url || previous.protocol !== value.protocol)
+  if (changedEndpoint && value.modelSettings) {
+    // Catalog limits from the previous endpoint don't describe models served by the new one.
+    value = {
+      ...value,
+      modelSettings: Object.fromEntries(Object.entries(value.modelSettings).map(([model, options]) => [
+        model, { ...options, advertisedOutputLimit: undefined },
+      ])),
+    }
+  }
+  for (const model of modelsInProfile(value)) {
+    if (
+      !previous || changedEndpoint || model === activate || (activate === true && model === value.model) ||
+      modelSettingsFor(value, model)?.maxOutputTokens !== modelSettingsFor(previous, model)?.maxOutputTokens ||
+      providerModelOutputLimit(value, model) !== providerModelOutputLimit(previous, model)
+    ) {
+      validateProviderModelOutput(value, model)
+    }
+  }
   if (!previous && state.profiles.length >= 20) {
     throw new ProviderConfigError('parameters')
   }

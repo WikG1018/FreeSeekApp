@@ -4,6 +4,7 @@ import type { FileAttachment, Message, ReplyBlock, Session } from '../types.js'
 import {
   MAX_ROLE_ALIASES,
   MAX_ROLE_NAME,
+  MAX_ROLE_SAMPLE_BYTES,
   MAX_ROLE_TEXT,
   MAX_ROLES,
   type VoiceRole,
@@ -717,6 +718,14 @@ const voiceRole = (value: unknown): VoiceRole => {
   if (nature.length > MAX_ROLE_TEXT) {
     return invalid()
   }
+  const reference = optional(raw.voiceSample, record)
+  const sampleSize = reference ? number(reference.size) : 0
+  if (reference && (
+    preset || !description?.trim() || !Number.isSafeInteger(sampleSize) ||
+    sampleSize <= 44 || sampleSize > MAX_ROLE_SAMPLE_BYTES
+  )) {
+    return invalid()
+  }
   return {
     id: id(raw.id),
     name,
@@ -726,9 +735,12 @@ const voiceRole = (value: unknown): VoiceRole => {
     }).slice(0, MAX_ROLE_ALIASES),
     ...(preset !== undefined && { preset }),
     ...(description !== undefined && { description }),
+    ...(reference && { voiceSample: { id: id(reference.id), size: sampleSize } }),
+    ...((raw.voiceGender === 'female' || raw.voiceGender === 'male') && { voiceGender: raw.voiceGender }),
     nature,
     importance,
     source,
+    ...(raw.introducedBy !== undefined && { introducedBy: id(raw.introducedBy) }),
     createdAt: number(raw.createdAt),
   }
 }
@@ -834,5 +846,6 @@ export const readNativeSession = (value: unknown): Session => {
       : inherited,
     persona: persona ? { name: string(persona.name), prompt: string(persona.prompt) } : persona,
     ...(item.voiceRoles !== undefined && { voiceRoles: voiceRoles(item.voiceRoles) }),
+    ...(item.roleVoiceLive === true && { roleVoiceLive: true }),
   }
 }

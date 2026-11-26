@@ -29,11 +29,26 @@ const api = (url: string, docs: string, protocol: ProviderProtocol = 'openai'): 
 })
 const plan = (url: string, docs: string): ProviderAccess => ({ ...api(url, docs), id: 'tokenPlan' })
 const mimoDocs = 'https://mimo.mi.com/docs/tokenplan/integration'
+export const MIMO_API_BASE_URL = 'https://api.xiaomimimo.com/v1'
+export const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1'
 const miniMaxApi = 'https://api.minimax.cn/v1'
 const openCodeOrigin = 'https://opencode.ai'
 export const OPEN_CODE_GO_PATH = '/inference/go'
 export const isOpenCodeGoUrl = (url: URL) =>
   url.origin === openCodeOrigin && /^\/(?:zen|inference)\/go(?:\/|$)/.test(url.pathname)
+export const isMiMoHost = (host: string) => /^(?:api|token-plan-[\w-]+)\.xiaomimimo\.com$/.test(host)
+export const MIMO_V26_CONTEXT_WINDOW = 1_000_000
+export const MIMO_V26_OUTPUT_LIMIT = 131_072
+export const isOfficialMiMoV26 = (address: string, model: string): boolean => {
+  if (!/^mimo-v2\.6-(?:flash|pro(?:-ultraspeed)?)$/i.test(model)) {
+    return false
+  }
+  try {
+    return isMiMoHost(new URL(address).hostname)
+  } catch {
+    return false
+  }
+}
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
@@ -42,8 +57,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     nameEn: 'Xiaomi MiMo',
     region: 'domestic',
     access: [
-      api('https://api.xiaomimimo.com/v1', mimoDocs),
-      plan('https://token-plan-cn.xiaomimimo.com/v1', mimoDocs),
+      api(MIMO_API_BASE_URL, mimoDocs),
+      plan(MIMO_TOKEN_PLAN_BASE_URL, mimoDocs),
     ],
   },
   {

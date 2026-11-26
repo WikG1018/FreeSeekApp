@@ -5,7 +5,6 @@ import { useIsMobile } from '../../app/viewport.js'
 import { IconBookOutline16, IconEditOutline16 } from '../base/icons.js'
 import { editMessage, retryUpload, useChatStore } from '../../services/chat/store.js'
 import { useAssistantLibrary } from '../../services/assistants/library.js'
-import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
@@ -67,7 +66,6 @@ export const UserMessage = memo(function UserMessage({
       (agent?.model || ensureApiKey()) &&
       editMessage(sessionId, message.id, draft.trim())
     ) {
-      stopReadAloud()
       setEditing(false)
     }
   }

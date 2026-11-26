@@ -52,7 +52,9 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
       return { text: message, action: 'compression' }
     }
     // 单条消息/附件本身超限时压缩帮不上忙，但仍要把服务端计数说清楚。
-    if (contextWasRejected(localMessage) || localMessage?.key === 'compressionInputLarge') {
+    const lengthWithoutRecovery =
+      localMessage?.key === 'compressionInputLarge' || localMessage?.key === 'compressionRefusalTooLong'
+    if (contextWasRejected(localMessage) || lengthWithoutRecovery) {
       const { requestedTokens, contextLimitTokens, requestDocumentCount, documentLimit } =
         localMessage?.params ?? {}
       const detail =
@@ -71,7 +73,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
               : ''
       return {
         text: detail ? message + ' ' + detail : message,
-        action: localMessage?.key === 'compressionInputLarge' ? undefined : 'newChat',
+        action: lengthWithoutRecovery ? undefined : 'newChat',
       }
     }
     switch (classifyStatus(status)) {

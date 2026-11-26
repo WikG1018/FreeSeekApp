@@ -93,6 +93,10 @@
   }
 }
 
+.outputNotice {
+  color: var(--dsw-alias-label-secondary);
+}
+
 /* 一条回复的底部工具行：引用、用量、操作按钮共用一行，窄屏自动换行 */
 .footer {
   display: flex;

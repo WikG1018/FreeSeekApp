@@ -1,63 +1,122 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import { loadSession, reportStorageError } from '../../services/chat/db.js'
 import { useChatStore } from '../../services/chat/store.js'
 import { beginDiagnosticOperation } from '../../services/diagnostics/log.js'
-import type { Session, SessionSummary } from '../../services/chat/types.js'
+import { stripRoleMarkers } from '../../services/speech/roleMarkers.js'
+import type { Message, Session, SessionSummary } from '../../services/chat/types.js'
+
+export const SEARCH_PREVIEW_SIZE = 2
+export const SEARCH_PAGE_SIZE = 12
 
 export type MessageMatch = {
   messageId: string
+  role: Message['role']
+  createdAt: number
   before: string
   keyword: string
   after: string
 }
 
-const makeMatcher = (keyword: string) =>
-  new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu')
-
-const findMessage = (session: Session, matcher: RegExp): MessageMatch | undefined => {
-  const visible = getVisibleMessages(session)
-  for (let index = visible.length - 1; index >= 0; index--) {
-    const message = visible[index]
-    const texts =
-      message.role === 'user'
-        ? [message.content]
-        : message.blocks.flatMap((block) =>
-            block.type === 'text' && !block.isTemplate ? [block.text] : []
-          )
-    for (const content of texts) {
-      const match = matcher.exec(content)
-      if (match) {
-        const start = Math.max(0, match.index - 9)
-        const end = Math.min(content.length, match.index + match[0].length + 42)
-        return {
-          messageId: message.id,
-          before: (start > 0 ? '…' : '') + content.slice(start, match.index),
-          keyword: match[0].slice(0, 96),
-          after:
-            match[0].length > 96
-              ? '…'
-              : content.slice(match.index + match[0].length, end) +
-                (end < content.length ? '…' : ''),
-        }
-      }
-    }
-  }
-  return undefined
-}
+export type SessionMatches = { total: number; items: MessageMatch[] }
+export type ReadMatchPage = (id: string, offset: number, signal: AbortSignal) => Promise<MessageMatch[]>
 
 type Scan = {
   sourceKey: string
+  branchRevision: number
   query: string
-  matches: Map<string, MessageMatch>
+  matches: Map<string, SessionMatches>
   complete: boolean
   failed: boolean
 }
 
+const makeMatcher = (keyword: string) =>
+  new RegExp(keyword.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&'), 'iu')
+
+const findText = (message: Message, matcher: RegExp) => {
+  if (message.role === 'user') {
+    const match = matcher.exec(message.content)
+    return match && { content: message.content, match }
+  }
+  if (message.stopReason === 'refusal') {
+    return null
+  }
+  for (const block of message.blocks) {
+    if (block.type === 'text' && !block.isTemplate && matcher.test(block.text)) {
+      const content = stripRoleMarkers(block.text)
+      const match = matcher.exec(content)
+      if (match) {
+        return { content, match }
+      }
+    }
+  }
+  return null
+}
+
+const matchExcerpt = (message: Message, content: string, match: RegExpExecArray): MessageMatch => {
+  const start = Math.max(0, match.index - 12)
+  const matchEnd = match.index + match[0].length
+  const end = Math.min(content.length, matchEnd + 56)
+  return {
+    messageId: message.id,
+    role: message.role,
+    createdAt: message.createdAt,
+    before: (start > 0 ? '…' : '') + content.slice(start, match.index).replace(/\s+/g, ' '),
+    keyword: match[0].slice(0, 96).replace(/\s+/g, ' '),
+    after: match[0].length > 96
+      ? '…'
+      : content.slice(matchEnd, end).replace(/\s+/g, ' ') + (end < content.length ? '…' : ''),
+  }
+}
+
+const readSessionForSearch = (id: string) => {
+  const cache = useChatStore.getState().sessionCache
+  return Object.hasOwn(cache, id) ? cache[id] : loadSession(id)
+}
+
+const yieldToInput = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+const findMatches = async (
+  session: Session,
+  matcher: RegExp,
+  signal: AbortSignal,
+  offset: number,
+  limit: number,
+  countAll: boolean
+): Promise<SessionMatches> => {
+  if (signal.aborted) {
+    return { total: 0, items: [] }
+  }
+  const visible = getVisibleMessages(session)
+  const items: MessageMatch[] = []
+  let total = 0
+  let yieldAfter = performance.now() + 8
+  for (let index = visible.length - 1; index >= 0 && !signal.aborted; index--) {
+    const message = visible[index]
+    const result = findText(message, matcher)
+    if (result) {
+      if (total >= offset && items.length < limit) {
+        items.push(matchExcerpt(message, result.content, result.match))
+      }
+      total++
+      if (!countAll && items.length === limit) {
+        break
+      }
+    }
+    if (performance.now() > yieldAfter) {
+      await yieldToInput()
+      yieldAfter = performance.now() + 8
+    }
+  }
+  return { total, items }
+}
+
 export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
   const [scan, setScan] = useState<Scan | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const replacing = useChatStore((state) => state.importingHistory)
   const ready = useChatStore((state) => state.ready)
+  const branchRevision = useChatStore((state) => state.historyBranchRevision)
   const streaming = useChatStore((state) => state.streaming)
   const matcher = useMemo(() => (query ? makeMatcher(query) : null), [query])
   // Sorting, pinning and filling missing type metadata do not change the messages.
@@ -71,41 +130,41 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
   )
 
   useEffect(() => {
-    if (replacing) {
+    if (!matcher || replacing || !ready || searchIds.length === 0) {
       setScan(null)
       return
     }
-    if (!matcher || !ready || searchIds.length === 0) {
-      return
-    }
-    let cancelled = false
+    const controller = new AbortController()
+    const { signal } = controller
     let failed = false
     let changed = false
-    const matches = new Map<string, MessageMatch>()
+    let matchedMessages = 0
+    const matches = new Map<string, SessionMatches>()
     const report = reportStorageError('search conversation')
     const publish = (complete: boolean) => {
-      if (!cancelled) {
-        setScan({ sourceKey, query, matches: new Map(matches), failed, complete })
+      if (!signal.aborted) {
+        setScan({ sourceKey, branchRevision, query, matches: new Map(matches), failed, complete })
         changed = false
       }
     }
     const search = async () => {
-      const finish = beginDiagnosticOperation('search', 'history', {
-        sessionCount: searchIds.length,
-      })
-      // One record at a time keeps imported history out of the open-chat cache.
-      for (let index = 0; index < searchIds.length && !cancelled; index++) {
+      const finish = beginDiagnosticOperation('search', 'history', { sessionCount: searchIds.length })
+      // Read one session at a time and keep only the two previews per session.
+      for (let index = 0; index < searchIds.length && !signal.aborted; index++) {
         const id = searchIds[index]
         try {
-          const cache = useChatStore.getState().sessionCache
-          const session = Object.hasOwn(cache, id) ? cache[id] : await loadSession(id)
-          const match = !cancelled && session ? findMessage(session, matcher) : undefined
-          if (match) {
-            matches.set(id, match)
+          const session = await readSessionForSearch(id)
+          if (!session) {
+            throw Error('Search session could not be read')
+          }
+          const group = await findMatches(session, matcher, signal, 0, SEARCH_PREVIEW_SIZE, true)
+          if (group.total && !signal.aborted) {
+            matches.set(id, group)
+            matchedMessages += group.total
             changed = true
           }
         } catch (error) {
-          if (!failed && !cancelled) {
+          if (!failed && !signal.aborted) {
             report(error)
           }
           failed = true
@@ -114,22 +173,35 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
           publish(false)
         }
         if (index % 24 === 23) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          await yieldToInput()
         }
       }
       publish(true)
-      finish(cancelled ? 'cancelled' : failed ? 'failed' : 'completed', {
+      finish(signal.aborted ? 'cancelled' : failed ? 'failed' : 'completed', {
         matchedSessionCount: matches.size,
+        matchedMessageCount: matchedMessages,
       })
     }
     const timer = window.setTimeout(() => void search(), 160)
     return () => {
-      cancelled = true
+      controller.abort()
       clearTimeout(timer)
     }
-  }, [matcher, ready, replacing, searchIds, sourceKey, query, streaming])
+  }, [matcher, ready, replacing, searchIds, sourceKey, branchRevision, query, streaming, attempt])
 
-  const current = scan?.query === query && scan.sourceKey === sourceKey && !replacing ? scan : null
+  const readPage: ReadMatchPage = useCallback(async (id, offset, signal) => {
+    if (!matcher || signal.aborted || replacing) {
+      return []
+    }
+    const session = await readSessionForSearch(id)
+    if (!session) {
+      throw Error('Search session could not be read')
+    }
+    return (await findMatches(session, matcher, signal, offset, SEARCH_PAGE_SIZE, false)).items
+  }, [matcher, replacing])
+
+  const current = scan?.query === query && scan.sourceKey === sourceKey &&
+    scan.branchRevision === branchRevision && !replacing ? scan : null
   const matches = current?.matches
   const filtered = useMemo(
     () =>
@@ -141,9 +213,12 @@ export const useSessionSearch = (sessions: SessionSummary[], query: string) => {
   return {
     sessions: filtered,
     matches,
-    searching: Boolean(
-      matcher && (!ready || replacing || (sessions.length > 0 && !current?.complete))
-    ),
+    readPage,
+    searching: Boolean(matcher && (!ready || replacing || (sessions.length > 0 && !current?.complete))),
     failed: current?.failed ?? false,
+    retry: () => {
+      setScan(null)
+      setAttempt((value) => value + 1)
+    },
   }
 }

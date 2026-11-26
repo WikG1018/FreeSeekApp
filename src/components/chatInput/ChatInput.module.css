@@ -94,7 +94,7 @@
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
-  min-height: 29px;
+  min-height: var(--fs-chat-chip-height);
   padding: 4px 7px;
   border-radius: 15px;
   border: 1px solid var(--fs-line);

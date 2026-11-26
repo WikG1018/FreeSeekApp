@@ -8,8 +8,14 @@ import {
   type RoleImportance,
   type VoiceRole,
   createRoleLookup,
+  isNarratorRole,
+  presetForGender,
+  presetVoiceGender,
+  roleNameKey,
+  voiceGenderLabel,
 } from './roleMarkers.js'
-import type { Session } from '../chat/types.js'
+import { getVisibleMessages } from '../chat/branches.js'
+import type { Message, Session } from '../chat/types.js'
 
 /**
  * 会话角色表的纯操作：合并、应用一次回答的解析结果、排序、格式化成提示词。
@@ -18,17 +24,46 @@ import type { Session } from '../chat/types.js'
 
 const RANK: Record<RoleImportance, number> = { lead: 0, supporting: 1, extra: 2 }
 
-/** 会话当前生效的角色表：自身没有就看接续快照 */
-export const sessionRoles = (session: Pick<Session, 'voiceRoles' | 'inherited'>): VoiceRole[] =>
-  session.voiceRoles ?? session.inherited?.voiceRoles ?? []
+export const storedSessionRoles = (session?: Session): VoiceRole[] =>
+  session?.voiceRoles ?? session?.inherited?.voiceRoles ?? []
+
+/** Keep the cast local to the selected path, with explicit user edits shared across versions. */
+export const sessionRoles = (session?: Session, path?: readonly Message[]): VoiceRole[] => {
+  const roles = storedSessionRoles(session)
+  if (!session?.messages?.length || !roles.length) {
+    return roles
+  }
+  const selected = (path ?? getVisibleMessages(session)).filter((message) => message.role === 'assistant')
+  const selectedIds = new Set(selected.map(({ id }) => id))
+  const selectedTimes = new Set(selected.map(({ createdAt }) => createdAt))
+  const replies = session.messages.filter((message) => message.role === 'assistant')
+  const replyIds = new Set(replies.map(({ id }) => id))
+  const replyTimes = new Set(replies.map(({ createdAt }) => createdAt))
+  const manualNames = new Set(
+    roles.filter((role) => role.source === 'user').flatMap((role) => [role.name, ...role.aliases].map(roleNameKey))
+  )
+  return roles.filter((role) => {
+    if (role.source === 'user') {
+      return true
+    }
+    if (manualNames.has(roleNameKey(role.name))) {
+      return false
+    }
+    if (role.introducedBy) {
+      return selectedIds.has(role.introducedBy) || !replyIds.has(role.introducedBy)
+    }
+    const legacyGenerated = role.id.startsWith(`role-${role.createdAt}-`)
+    return !legacyGenerated || !replyTimes.has(role.createdAt) || selectedTimes.has(role.createdAt)
+  })
+}
 
 /**
  * 把一次回答的解析结果应用到角色表，返回新数组（入参不变）。
  * 没有任何变更时返回原引用，避免无意义的会话写入。
  */
-export const applyParsedRoles = (roles: VoiceRole[], parsed: ParsedReply): VoiceRole[] => {
+export const applyParsedRoles = (roles: VoiceRole[], parsed: ParsedReply, limit = MAX_ROLES): VoiceRole[] => {
   const next = [...roles.map((role) => ({ ...role }))]
-  const remaining = Math.max(0, MAX_ROLES - next.length)
+  const remaining = Math.max(0, limit - next.length)
   next.push(...parsed.newRoles.slice(0, remaining).map((role) => ({ ...role, aliases: [...role.aliases] })))
   for (const { roleId, aliases } of parsed.aliasAdditions) {
     const role = next.find((item) => item.id === roleId)
@@ -38,11 +73,11 @@ export const applyParsedRoles = (roles: VoiceRole[], parsed: ParsedReply): Voice
   }
   for (const { roleId, to } of parsed.promotions) {
     const role = next.find((item) => item.id === roleId)
-    if (role && RANK[to] < RANK[role.importance]) {
+    if (role?.source === 'model' && RANK[to] < RANK[role.importance]) {
       role.importance = to
       // 路人升级后不再受「路人共用音色」约束，给它一个自己的预置音色
       if (role.preset === undefined && !role.description) {
-        role.preset = DEFAULT_EXTRA_VOICE
+        role.preset = presetForGender(DEFAULT_EXTRA_VOICE, role.voiceGender)
       }
     }
   }
@@ -59,7 +94,7 @@ export const applyParsedRoles = (roles: VoiceRole[], parsed: ParsedReply): Voice
 
 /** 接续新对话时的初始角色表：源会话自身 + 它继承来的，按 id 去重，自身优先 */
 export const mergeInheritedRoles = (session: Session): VoiceRole[] => {
-  const own = session.voiceRoles ?? []
+  const own = sessionRoles(session)
   const inherited = session.inherited?.voiceRoles ?? []
   if (!inherited.length) {
     return own
@@ -72,37 +107,17 @@ export const mergeInheritedRoles = (session: Session): VoiceRole[] => {
 export const sortRoles = (roles: ReadonlyArray<VoiceRole>): VoiceRole[] =>
   [...roles].sort((a, b) => RANK[a.importance] - RANK[b.importance] || a.createdAt - b.createdAt)
 
-/** 路人共用音色：开了之后所有 extra 朗读时用同一个预置 */
+/** 自动分配的路人按声线共用音色，用户手动选择的音色优先。 */
 export const effectiveVoice = (
   role: VoiceRole,
   options: { extrasShareVoice: boolean; extraVoice: MiMoPresetVoice }
 ): Pick<VoiceRole, 'preset' | 'description'> => {
-  if (role.importance === 'extra' && options.extrasShareVoice) {
-    return { preset: options.extraVoice }
+  if (role.importance === 'extra' && options.extrasShareVoice && role.source === 'model' && !isNarratorRole(role)) {
+    return { preset: presetForGender(options.extraVoice, role.voiceGender ?? presetVoiceGender(role.preset)) }
   }
-  return role.preset ? { preset: role.preset } : { description: role.description ?? '' }
-}
-
-const PRESET_LABEL: Record<MiMoPresetVoice, string> = {
-  冰糖: '冰糖',
-  茉莉: '茉莉',
-  苏打: '苏打',
-  白桦: '白桦',
-  Mia: 'Mia',
-  Chloe: 'Chloe',
-  Milo: 'Milo',
-  Dean: 'Dean',
-  mimo_default: 'mimo_default',
-}
-
-const voiceLabel = (role: VoiceRole, extraVoice: MiMoPresetVoice, extrasShareVoice: boolean) => {
-  if (role.importance === 'extra' && extrasShareVoice) {
-    return PRESET_LABEL[extraVoice]
-  }
-  if (role.preset) {
-    return PRESET_LABEL[role.preset]
-  }
-  return role.description?.trim() || PRESET_LABEL[extraVoice]
+  return role.preset
+    ? { preset: presetForGender(role.preset, role.voiceGender) }
+    : { description: role.description ?? '' }
 }
 
 /**
@@ -126,16 +141,21 @@ export const formatRolesForPrompt = (
   const lines = named.map((role) => {
     const aliases = role.aliases.length ? `（别名：${role.aliases.join('、')}）` : ''
     const nature = role.nature.trim() ? `｜性格：${role.nature.trim()}` : ''
+    const gender = role.voiceGender ? `｜声线：${voiceGenderLabel(role.voiceGender)}` : ''
+    const voice = effectiveVoice(role, options)
+    const label = voice.preset ?? (voice.description?.trim() || options.extraVoice)
     const locked = role.source === 'user' ? '｜用户设定，不可更改' : ''
-    return `- ${role.name}${aliases}｜音色：${voiceLabel(role, options.extraVoice, options.extrasShareVoice)}${nature}｜重要性：${importanceWord[role.importance]}${locked}`
+    return `- ${role.name}${aliases}${gender}｜音色：${label}${nature}｜重要性：${importanceWord[role.importance]}${locked}`
   })
   if (extras.length) {
     const voice = options.extrasShareVoice
-      ? `共用音色：${PRESET_LABEL[options.extraVoice]}`
+      ? `按声线共用音色，未指定时用 ${options.extraVoice}`
       : '各用自己的预置音色'
     lines.push(`- 其他角色 ${extras.length} 人｜${voice}`)
     // 模型需要知道这些名字属于路人，才不会把他们当新角色重新设计
-    const names = extras.map((role) => [role.name, ...role.aliases].join('/')).slice(0, 60)
+    const names = extras.slice(0, 60).map((role) =>
+      [role.name, ...role.aliases].join('/') + (role.voiceGender ? `（${voiceGenderLabel(role.voiceGender)}）` : '')
+    )
     lines.push(`  （${names.join('、')}${extras.length > 60 ? '…' : ''}）`)
   }
   return lines.join('\n')
@@ -144,10 +164,10 @@ export const formatRolesForPrompt = (
 /** 朗读某段时给 MiMo 的风格指令：性格底色 + 本段语气 */
 export const styleInstruction = (role: VoiceRole | undefined, tone: string): string => {
   const nature = role?.nature.trim()
-  if (nature && tone) {
-    return `${nature}。${tone}`
-  }
-  return tone || nature || ''
+  const keepVoice = role?.description && !role.preset && role.voiceGender
+    ? `保持${voiceGenderLabel(role.voiceGender)}`
+    : ''
+  return [keepVoice, nature, tone].filter(Boolean).join('。')
 }
 
 /** 面板里显示用的角色数：不含折叠的路人 */

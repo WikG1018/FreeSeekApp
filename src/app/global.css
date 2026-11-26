@@ -55,6 +55,7 @@
   --fs-glass-border: rgba(15, 23, 42, 0.07);
   --fs-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.09);
   --fs-floating-surface: rgba(247, 248, 250, 0.985);
+  --fs-chat-chip-height: 29px;
   --fs-composer-surface: #f7f8fa;
   --fs-floating-border: rgba(15, 23, 42, 0.09);
   --fs-floating-shadow: 0 4px 18px rgba(15, 23, 42, 0.08);

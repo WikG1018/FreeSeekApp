@@ -15,6 +15,7 @@ export type SettingsPageId =
   | 'providerSearch'
   | 'providerSpeech'
   | 'chat'
+  | 'chatSpeech'
   | 'personas'
   | 'personaEdit'
   | 'assistantSettings'
@@ -39,7 +40,7 @@ export type SettingsPageId =
   | 'disclaimer'
   | 'guide'
 
-/** 可直接打开任意设置，返回路径始终与从目录进入时一致。 */
+/** 设置目录中各页面所属的上一级。 */
 export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   if (page === 'agentExtensions') {
     return 'agentTools'
@@ -62,6 +63,9 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   }
   if (page === 'providers') {
     return 'account'
+  }
+  if (page === 'chatSpeech') {
+    return 'chat'
   }
   if (page === 'providerCatalog' || page === 'providerModels' || page === 'providerSearch' || page === 'providerSpeech') {
     return 'providers'
@@ -93,6 +97,7 @@ export const useSettingsDialog = create(() => ({
   closing: false,
   page: 'home' as SettingsPageId,
   showTutorial: false,
+  backToConversation: false,
 }))
 
 useSettingsDialog.subscribe((current, previous) => {
@@ -103,8 +108,10 @@ useSettingsDialog.subscribe((current, previous) => {
   }
 })
 
-export const openSettings = (page: SettingsPageId = 'home', { showTutorial = false } = {}) =>
-  useSettingsDialog.setState({ open: true, closing: false, page, showTutorial })
+export const openSettings = (
+  page: SettingsPageId = 'home',
+  { showTutorial = false, backToConversation = false } = {}
+) => useSettingsDialog.setState({ open: true, closing: false, page, showTutorial, backToConversation })
 
 /** 关闭：先进入 closing 相位（播放退出动画），由 SettingsRoot 在动画结束后真正卸载 */
 export const closeSettings = () => {

@@ -10,7 +10,8 @@
   background: var(--fs-accent-wash);
   border-color: var(--fs-accent-line);
 }
-.disclosure h2 {
+.disclosure > h2,
+.disclosure > h3 {
   margin: 0;
   font: inherit;
 }
@@ -75,9 +76,12 @@
 .trigger[aria-expanded='true'] .arrow svg {
   transform: rotate(180deg);
 }
-.trigger:focus-visible {
+.trigger:focus {
   outline: 2px solid var(--fs-focus);
   outline-offset: -3px;
+}
+.trigger:focus:not(:focus-visible) {
+  outline: none;
 }
 @media (hover: hover) {
   .trigger:hover .arrow {
@@ -100,6 +104,37 @@
   border-top: 1px solid var(--fs-line);
   font: inherit;
   color: inherit;
+}
+.disclosure[data-setting-row] {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.disclosure[data-setting-row] .trigger {
+  padding: 10px 14px;
+  border-radius: 0;
+  font-size: 14px;
+  font-weight: 400;
+}
+.disclosure[data-setting-row] .arrow {
+  width: 14px;
+  height: 18px;
+}
+.disclosure[data-setting-row] .body {
+  margin: 0;
+  padding: 0;
+  background: var(--fs-settings-canvas);
+}
+.disclosure[data-setting-row] .body > button,
+.disclosure[data-setting-row] .body > div {
+  padding-left: 22px;
+}
+.disclosure[data-setting-row] .body > button {
+  min-height: 48px;
+}
+.disclosure[data-setting-row] .body > button:not(:first-child) {
+  border-top: 1px solid var(--fs-line);
 }
 [data-guide='true'] .body {
   border-top-color: var(--fs-accent-line);

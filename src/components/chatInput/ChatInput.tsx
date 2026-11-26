@@ -327,7 +327,6 @@ const Input = ({
       return
     }
     cancelVoice()
-    stopReadAloud()
     if (isMobile) {
       textareaRef.current?.blur()
     } else {

@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
 import { IconButton } from '../base/IconButton.js'
 import { openMobileSider, useMobileSider } from '../sider/mobileSiderState.js'
+import { SessionTitle } from './SessionTitle.js'
 import styles from './MobileHeader.module.css'
 
 /**
@@ -14,12 +15,14 @@ export const MobileHeader = ({
   title,
   headerRef,
   openAssistant,
+  onTop,
   artifactsButton,
   voicesButton,
 }: {
   title?: string
   headerRef?: Ref<HTMLDivElement>
   openAssistant?: () => void
+  onTop?: () => void
   artifactsButton?: ReactNode
   voicesButton?: ReactNode
 }) => {
@@ -48,15 +51,14 @@ export const MobileHeader = ({
       </span>
       {title === undefined ? null : (
         <>
-          {openAssistant ? (
-            <button
-              type="button"
+          {openAssistant && onTop ? (
+            <SessionTitle
+              title={title}
               className={styles.title}
-              aria-label={t('assistantChatOptions')}
-              onClick={openAssistant}
-            >
-              <span className={styles.titleText}>{title}</span>
-            </button>
+              textClassName={styles.titleText}
+              onTop={onTop}
+              onAssistant={openAssistant}
+            />
           ) : (
             <div className={styles.title}>
               <span className={styles.titleText}>{title}</span>

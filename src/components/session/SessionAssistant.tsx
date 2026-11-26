@@ -97,13 +97,24 @@ export const SessionAssistant = ({
             />
           </Section>
         )}
-        {enabled && (
+        {enabled ? (
           <Section>
             <SwitchRow
               label={t('assistantMemoryPaused')}
               description={t('assistantMemoryNextTurn')}
               checked={Boolean(session.memoryPaused)}
               change={(paused) => setSessionMemoryPaused(session.id, paused)}
+            />
+          </Section>
+        ) : (
+          <Section>
+            <Row
+              label={t('assistantMemory')}
+              value={t('assistantDisabled')}
+              onClick={() => {
+                close()
+                openSettings('assistantSettings')
+              }}
             />
           </Section>
         )}

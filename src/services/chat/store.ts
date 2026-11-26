@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { showToast } from '../../components/base/toastState.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { TranslationParams } from '../../i18n/index.js'
+import { translate, type TranslationParams } from '../../i18n/index.js'
 import {
   supportsOfficialChatExtensions,
   type ChatModel,
@@ -34,9 +34,11 @@ import * as db from './db.js'
 import { allSessionMessages, mapSessionMessages } from './sessionData.js'
 import { sumMessageUsage, usageEntries } from './usage.js'
 import { abortReason } from '../../utils/abort.js'
-import { mergeInheritedRoles, sessionRoles } from '../speech/roleTable.js'
-import { MAX_ROLE_ALIASES, roleNameKey, type VoiceRole } from '../speech/roleMarkers.js'
-import { roleVoicePromptFor, withReplyRoles } from '../speech/roleVoiceBridge.js'
+import { mergeInheritedRoles, sessionRoles, storedSessionRoles } from '../speech/roleTable.js'
+import { MAX_ROLE_ALIASES, MAX_ROLE_SAMPLE_BYTES, roleNameKey, type VoiceRole } from '../speech/roleMarkers.js'
+import { roleVoiceActive, roleVoicePromptFor, streamRoleVoice, withReplyRoles } from '../speech/roleVoiceBridge.js'
+import { describeReadAloudError, stopReadAloud, useReadAloud } from '../speech/readAloud.js'
+import { roleVoiceProfile } from '../speech/roleVoiceProfile.js'
 import { BackupError } from './history/errors.js'
 import {
   clearAllDrafts,
@@ -48,6 +50,7 @@ import {
 import { createLatestReminder } from './latestReminder.js'
 import {
   applicableSummary,
+  approvedPrefixBeforeRefusal,
   compressionEstimateParams,
   contextWasRejected,
   contextLength,
@@ -65,6 +68,7 @@ import {
   planCompression,
   planRecoveryCompression,
   recentChatContext,
+  refusedCompressionBoundary,
   type ContextRound,
   type SummaryPlan,
 } from './contextCompression.js'
@@ -150,6 +154,7 @@ import {
   toSessionSummary,
   type AssistantMessage,
   type ChatMode,
+  type CompressionCheckpoint,
   type ContextSummary,
   type FileAttachment,
   type InheritedContext,
@@ -224,6 +229,8 @@ type ChatState = {
   importingHistory: boolean
   /** 仅列表元数据，按 updatedAt 降序；流式消息更新不会改变此数组。 */
   sessions: SessionSummary[]
+  /** 切换回答版本会改变搜索可见的正文，即使标题及聊天时间相同。 */
+  historyBranchRevision: number
   sessionCache: Record<string, Session>
   sessionLoadErrors: Record<string, boolean>
   sessionSaveErrors: Record<string, ChatSaveFailure>
@@ -255,6 +262,7 @@ export const useChatStore = create<ChatState>(() => ({
   historyMayStartFresh: false,
   importingHistory: false,
   sessions: [],
+  historyBranchRevision: 0,
   sessionCache: {},
   sessionLoadErrors: {},
   sessionSaveErrors: {},
@@ -1326,7 +1334,7 @@ export const setSessionPinned = async (id: string, pinned: boolean): Promise<boo
 }
 
 /** Save only the edited role. A reply can discover new characters while the editor is open. */
-export const saveSessionVoiceRole = async (id: string, next: VoiceRole) => {
+export const saveSessionVoiceRole = async (id: string, next: VoiceRole, sample?: Blob) => {
   if (get().importingHistory || deletingSessions.has(id)) {
     return 'failed'
   }
@@ -1350,13 +1358,95 @@ export const saveSessionVoiceRole = async (id: string, next: VoiceRole) => {
   const aliases = renamed && !names.has(roleNameKey(before.name))
     ? [before.name, ...next.aliases].slice(0, MAX_ROLE_ALIASES)
     : next.aliases
-  const voiceRoles = roles.map((role) => role.id === next.id ? { ...next, aliases } : role)
+  if (sample) {
+    const ref = next.voiceSample
+    if (!ref || !next.description || next.preset || sample.type !== 'audio/wav' ||
+      ref.size !== sample.size || ref.size <= 44 || ref.size > MAX_ROLE_SAMPLE_BYTES
+    ) {
+      return 'failed'
+    }
+    pendingFiles.set(id, [
+      ...(pendingFiles.get(id) ?? []).filter((file) => file.id !== ref.id),
+      { id: ref.id, blob: sample },
+    ])
+  }
+  const voiceRoles = storedSessionRoles(session).map((role) => role.id === next.id ? { ...next, aliases } : role)
   updateSession(id, (session) => ({ ...session, voiceRoles }))
   if (!(await persist(id))) {
     return 'failed'
   }
   logEvent('speech', 'roles.saved', { total: voiceRoles.length })
   return 'saved'
+}
+
+const playLiveRoleVoice = (sessionId: string, reply: AssistantMessage, resume = false) => {
+  const session = getSession(sessionId)
+  const { roleVoice } = useSettings.getState()
+  if (!session || session.mode === 'agent' || reply.task || !roleVoiceActive(roleVoice, reply.agent)) {
+    return
+  }
+  const profile = roleVoiceProfile(useProviders.getState().profiles, roleVoice)
+  if (!profile) {
+    return
+  }
+  const path = getVisibleMessages(session)
+  const index = path.findIndex(({ id }) => id === reply.id)
+  if (index < 0) {
+    return
+  }
+  const playback = streamRoleVoice(
+    reply, sessionRoles(session, path.slice(0, index)), roleVoice, profile,
+    translate('roleVoiceNarrator'), (error) => showToast(describeReadAloudError(error)), resume
+  )
+  if (!playback) {
+    return
+  }
+  let last = reply
+  const unsubscribe = useChatStore.subscribe((state, previous) => {
+    if (state.activeId !== sessionId || state.importingHistory) {
+      stopReadAloud()
+      return
+    }
+    const current = state.sessionCache[sessionId]
+    if (current === previous.sessionCache[sessionId]) {
+      return
+    }
+    const next = current?.messages.findLast(({ id }) => id === reply.id)
+    if (next?.role === 'assistant' && next !== last) {
+      last = next
+      playback.update(next)
+      if (next.status !== 'pending' && next.status !== 'streaming') {
+        unsubscribe()
+      }
+    } else if (!next) {
+      stopReadAloud()
+    }
+  })
+  playback.signal.addEventListener('abort', unsubscribe, { once: true })
+  playback.update(reply)
+}
+
+export const setConversationRoleVoiceLive = (sessionId: string, enabled: boolean) => {
+  const session = getSession(sessionId)
+  if (!session || session.mode === 'agent' || get().activeId !== sessionId || get().importingHistory) {
+    return
+  }
+  if (Boolean(session.roleVoiceLive) !== enabled) {
+    updateSession(sessionId, (current) => ({ ...current, roleVoiceLive: enabled }))
+    void persist(sessionId)
+  }
+  const playback = useReadAloud.getState()
+  if (!enabled && playback.roleReply) {
+    stopReadAloud()
+  }
+  if (enabled && getStreamController(sessionId)) {
+    const reply = getVisibleMessages(session).at(-1)
+    if (reply?.role === 'assistant' && reply.id !== playback.messageId &&
+      (reply.status === 'pending' || reply.status === 'streaming')
+    ) {
+      playLiveRoleVoice(sessionId, reply)
+    }
+  }
 }
 
 export const renameSession = (id: string, title: string) => {
@@ -2263,6 +2353,11 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
   if (!reply) {
     return
   }
+  const playback = useReadAloud.getState()
+  const followVoice = get().activeId === sessionId && playback.roleReply && playback.messageId === previous.id
+  if (get().activeId === sessionId) {
+    stopReadAloud()
+  }
   if (!isWindowsDesktop() && session.mode === 'agent' && previous.task?.run?.mode === 'plan') {
     reply.task = {
       plan: [],
@@ -2302,11 +2397,17 @@ export const regenerateReply = (sessionId: string, messageId?: string) => {
     updatedAt: Date.now(),
   }))
   persist(sessionId)
-  void streamReply(sessionId, reply, {
+  if (followVoice) {
+    playLiveRoleVoice(sessionId, reply)
+  }
+  return streamReply(sessionId, reply, {
     history,
     question,
     inherited: session.inherited ?? null,
     persona: session.persona ?? null,
+  }).then(() => {
+    const regenerated = getSession(sessionId)?.messages.find((message) => message.id === reply.id)
+    return regenerated?.role === 'assistant' ? regenerated : undefined
   })
 }
 
@@ -2375,7 +2476,16 @@ export const selectMessageVersion = (sessionId: string, messageId: string) => {
   if (getStreamController(sessionId)) {
     return
   }
-  updateSession(sessionId, (session) => selectVersion(session, messageId))
+  const previous = getSession(sessionId)
+  if (!previous) {
+    return
+  }
+  const next = selectVersion(previous, messageId)
+  if (next === previous) {
+    return
+  }
+  updateSession(sessionId, () => next)
+  set((state) => ({ historyBranchRevision: state.historyBranchRevision + 1 }))
   logEvent('chat', 'reply.version-selected', { sessionId, messageId })
   persist(sessionId)
 }
@@ -2557,13 +2667,18 @@ export const currentContextSummary = (session: Session) =>
   )
 
 type CompressionMode = 'ask' | 'compress' | 'recover' | 'send' | 'recent'
-const saveContext = async (id: string, summary: ContextSummary, signal: AbortSignal) => {
-  signal.throwIfAborted()
+const saveContext = async (
+  id: string,
+  summary: ContextSummary | undefined,
+  signal?: AbortSignal,
+  checkpoint?: CompressionCheckpoint
+) => {
+  signal?.throwIfAborted()
   const previous = getSession(id)
   updateSession(id, (session) => ({
     ...session,
     contextSummary: summary,
-    compressionCheckpoint: undefined,
+    compressionCheckpoint: checkpoint,
   }))
   if (!(await persist(id))) {
     updateSession(id, (session) =>
@@ -2575,10 +2690,42 @@ const saveContext = async (id: string, summary: ContextSummary, signal: AbortSig
           }
         : session
     )
-    signal.throwIfAborted()
+    signal?.throwIfAborted()
     throw new ApiError('protocol', { key: 'compressionFailedSave' })
   }
-  signal.throwIfAborted()
+  signal?.throwIfAborted()
+}
+
+const keepApprovedCompression = async (
+  id: string,
+  connection: Connection,
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  signal: AbortSignal
+) => {
+  if (get().importingHistory || deletingSessions.has(id)) {
+    return prior
+  }
+  const approved = approvedPrefixBeforeRefusal(
+    connection,
+    rounds,
+    prior,
+    getSession(id)?.compressionCheckpoint
+  )
+  if (!approved) {
+    return prior
+  }
+  const { summary, checkpoint } = approved
+  await saveContext(id, summary, signal, checkpoint)
+  logEvent('chat', 'compression.partial.applied', {
+    sessionId: id,
+    coveredRounds: summary.coveredRounds,
+    pendingRounds: rounds.length - summary.coveredRounds,
+    targetRounds: checkpoint.targetRounds,
+    historyTokensBefore: summary.historyEstimate?.before,
+    historyTokensAfter: summary.historyEstimate?.after,
+  })
+  return summary
 }
 const markCompressing = (id: string, percent?: number) =>
   set((state) => {
@@ -2652,17 +2799,21 @@ const compressRounds = async (
     }
     return summary
   } catch (error) {
+    const failure = describeCompressionFailure(error)
     logEvent(
       'chat',
       'compression.failed',
       {
         sessionId: id,
         ...diagnosticError(error),
-        failureKey: describeCompressionFailure(error).key,
+        failureKey: failure.key,
         cancelled: signal.aborted,
       },
       signal.aborted ? 'info' : 'warn'
     )
+    if (!signal.aborted && failure.key === 'compressionFailedRefused') {
+      await keepApprovedCompression(id, connection, rounds, prior, signal)
+    }
     throw error
   } finally {
     markCompressing(id)
@@ -2676,20 +2827,23 @@ const compressRounds = async (
 export const compressionPreflight = (id: string) => {
   const session = getSession(id)
   if (!session) {
-    return { available: false, pendingRounds: 0, saves: false }
+    return { available: false, pendingRounds: 0, saves: false, refused: false }
   }
   try {
     const connection = activeConnection()
     const rounds = contextRounds(getVisibleMessages(session), session.inherited)
     const prior = applicableSummary(session.contextSummary, rounds)
     const plan = planCompression(rounds, prior, connection)
+    const refused =
+      refusedCompressionBoundary(connection, rounds, prior, session.compressionCheckpoint) !==
+      undefined
     const pendingRounds = Math.max(0, plan.end - plan.start)
     const before = plan.historyEstimate?.before ?? 0
     const after = plan.historyEstimate?.after ?? 0
-    return { available: pendingRounds > 0, pendingRounds, saves: after < before }
+    return { available: !refused && pendingRounds > 0, pendingRounds, saves: after < before, refused }
   } catch {
     // 还在渲染层调用：拿不到连接（没配 Key 等）时只禁用按钮，别让面板崩掉。
-    return { available: false, pendingRounds: 0, saves: false }
+    return { available: false, pendingRounds: 0, saves: false, refused: false }
   }
 }
 
@@ -2747,6 +2901,25 @@ export const editContextSummary = (id: string, original: ContextSummary, text: s
   return true
 }
 
+export const restoreFullContext = async (id: string, original: ContextSummary) => {
+  const session = getSession(id)
+  if (
+    !session ||
+    !original.recentOnly ||
+    currentContextSummary(session) !== original ||
+    getStreamController(id) ||
+    deletingSessions.has(id) ||
+    get().importingHistory
+  ) {
+    throw new ApiError('protocol', { key: 'compressionUnavailable' })
+  }
+  await saveContext(id, undefined)
+  logEvent('chat', 'compression.history.restored', {
+    sessionId: id,
+    coveredRounds: original.coveredRounds,
+  })
+}
+
 export const retryContextReply = (
   id: string,
   replyId: string,
@@ -2762,6 +2935,7 @@ export const retryContextReply = (
     previous = path[index]
   const local = previous?.role === 'assistant' ? previous.error?.localMessage : undefined
   const rejected = contextWasRejected(local)
+  const refused = local?.key === 'compressionFailedRefused'
   if (
     question?.role !== 'user' ||
     previous?.role !== 'assistant' ||
@@ -2769,7 +2943,8 @@ export const retryContextReply = (
     (!rejected &&
       !['compressionSuggested', 'compressionUnavailable'].includes(local?.key ?? '') &&
       !isCompressionFailure(local?.key)) ||
-    (mode === 'send' && rejected)
+    (mode === 'send' && rejected && !refused) ||
+    (refused && mode !== 'send')
   ) {
     return
   }
@@ -2780,10 +2955,11 @@ export const retryContextReply = (
     stopReason: undefined,
     stopDetails: undefined,
   }
-  const rejection = rejected
+  const rejection = rejected || refused
     ? {
         ...local?.params,
-        recoverContext: 1,
+        ...(rejected ? { recoverContext: 1 } : {}),
+        ...(refused ? { compressionRefused: 1 } : {}),
         ...(isContextRejection(local?.key) && local ? { rejectionKey: local.key } : {}),
       }
     : undefined
@@ -3268,6 +3444,12 @@ const streamReply = async (
     taskMode,
     useSettings.getState().locale === 'zh-CN'
   )
+  if (get().activeId === sessionId && useReadAloud.getState().messageId !== initial.id) {
+    stopReadAloud()
+    if (getSession(sessionId)?.roleVoiceLive) {
+      playLiveRoleVoice(sessionId, initial, Boolean(original.prefix))
+    }
+  }
   let reply = initial
   let waitingForApproval = false
   let frame = 0
@@ -3325,6 +3507,15 @@ const streamReply = async (
         const serverExtensions = !taskMode && officialWebTools
         if (checkPressure) {
           checkPressure = false
+          if (mode === 'send' && rejection?.compressionRefused === 1) {
+            summary = await keepApprovedCompression(
+              sessionId,
+              connection,
+              rounds,
+              summary,
+              controller.signal
+            )
+          }
           const recovering = mode === 'recover'
           const pressure =
             recovering || mode === 'recent'
@@ -3346,6 +3537,11 @@ const streamReply = async (
             }
             try {
               await saveContext(sessionId, summary, controller.signal)
+              logEvent('chat', 'compression.recent.selected', {
+                sessionId,
+                coveredRounds: summary.coveredRounds,
+                retainedRounds: rounds.length - summary.coveredRounds,
+              })
             } catch (error) {
               controller.signal.throwIfAborted()
               throw new ApiError('protocol', {
@@ -3466,7 +3662,10 @@ const streamReply = async (
           (initial.systemPrompt ??
             replySystemPrompt(request.persona?.prompt, connection.kind === 'deepseek')) +
           taskPrompt +
-          roleVoicePromptFor(getSession(sessionId), initial.agent, useSettings.getState().locale)
+          roleVoicePromptFor(
+            getSession(sessionId), initial.agent, useSettings.getState().locale,
+            original.prefix ? [...original.history, original.prefix] : original.history
+          )
         const windowTokens = contextLength(connection)
         const library = useAssistantLibrary.getState()
         const availableMemory =
@@ -4081,7 +4280,10 @@ const streamReply = async (
                 system,
                 controller.signal,
                 initial.reasoning,
-                { sessionId, search, requestId, managedTools: Boolean(initial.agent), task }
+                {
+                  sessionId, search, requestId, managedTools: Boolean(initial.agent), task,
+                  retryInitialRequest: !initial.agent && !taskMode,
+                }
               )
             : streamMessage(
                 connection.apiKey,
@@ -4179,6 +4381,12 @@ const streamReply = async (
           }
         }
         reply = settleReply(reply, 'done', Date.now())
+        if (reply.stopReason === 'max_tokens') {
+          logEvent('chat', 'reply.output-exhausted', {
+            sessionId, replyId: reply.id, requestId, hasAnswer: Boolean(getReplyText(reply).trim()),
+            outputTokens: reply.usage?.output_tokens,
+          }, 'warn')
+        }
         if (mode === 'recent' && summary?.recentOnly && get().activeId === sessionId) {
           showToast({ key: 'compressionRecentApplied' })
         }
@@ -4318,6 +4526,14 @@ const streamReply = async (
               !isImage && serverId && !documentTexts?.has(serverId) ? [serverId] : []
             )
           ).size
+          if (!receivedContent && mode === 'send' && rejection?.compressionRefused === 1) {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'compressionRefusalTooLong', params },
+            })
+            break
+          }
           rejection = params
           if (
             mode === 'recent' &&
@@ -4345,7 +4561,7 @@ const streamReply = async (
               localMessage: {
                 key: documentLimit
                   ? 'replyDocumentInputLimit'
-                  : summary
+                  : summary && !summary.recentOnly
                     ? 'compressionStillTooLong'
                     : 'compressionInputLarge',
                 params,
@@ -4415,9 +4631,9 @@ const streamReply = async (
           reply = settleReply(reply, 'error', Date.now(), {
             kind: 'protocol',
             message: '',
-            localMessage: {
-              key: error.reason === 'changed' ? 'providerConfigChanged' : 'providerConfigMissing',
-            },
+            localMessage: error.reason === 'output-limit'
+              ? { key: 'providerErrorOutputLimit', params: { limit: error.outputLimit?.toLocaleString() ?? '' } }
+              : { key: error.reason === 'changed' ? 'providerConfigChanged' : 'providerConfigMissing' },
           })
         } else {
           reply = settleReply(reply, 'error', Date.now(), {
@@ -4631,5 +4847,12 @@ useChatStore.subscribe((state) => {
     return
   }
   lastActiveId = state.activeId
+  stopReadAloud()
   writeActiveSession(state.activeId)
+})
+
+useSettings.subscribe((state, previous) => {
+  if (previous.roleVoice.enabled && !state.roleVoice.enabled && useReadAloud.getState().roleReply) {
+    stopReadAloud()
+  }
 })

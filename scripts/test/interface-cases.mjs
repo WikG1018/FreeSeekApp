@@ -115,10 +115,10 @@ export const runInterfaceCases = async ({ run }) => {
         }
         a.settingsDialog.openSettings('chat')
       })
-      const enterSetting = page.getByRole('button', { name: '输入法回车键', exact: true })
+      const enterSetting = page.getByRole('button', { name: '回车键', exact: true })
       const choose = async (value) => {
         await enterSetting.click()
-        const menu = page.getByRole('dialog', { name: '输入法回车键', exact: true })
+        const menu = page.getByRole('dialog', { name: '回车键', exact: true })
         const option = menu.getByRole('option', { name: value, exact: true })
         await option.waitFor()
         const [panel, row] = await Promise.all([menu.boundingBox(), enterSetting.boundingBox()])
@@ -149,7 +149,7 @@ export const runInterfaceCases = async ({ run }) => {
       await page.keyboard.press('Escape')
 
       await page.evaluate(() => window.__audit.settingsDialog.openSettings('chat'))
-      await choose('发送')
+      await choose('发送消息')
       assert.equal(await input.getAttribute('enterkeyhint'), 'send')
       await input.fill('中文输入')
       await input.evaluate((element) => {
@@ -182,6 +182,62 @@ export const runInterfaceCases = async ({ run }) => {
       await page.waitForFunction(() => window.__composerRequests === 2)
       await page.evaluate(() => window.__audit.waitIdle())
       assert.equal(await input.inputValue(), '')
+    }
+  )
+
+  await run(
+    'a returning user sees the character voice introduction once and can open speech settings',
+    async (page) => {
+      const intro = page.getByRole('dialog', { name: '让故事里的角色开口', exact: true })
+      await intro.waitFor()
+      await intro.getByRole('heading', { name: '小米 MiMo 语音合成限时免费' }).waitFor()
+      assert.match(await intro.innerText(), /站台只剩一盏灯/)
+      assert.equal(
+        await intro.getByRole('link', { name: 'MiMo 官方定价' }).getAttribute('href'),
+        'https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go'
+      )
+      assert.equal(
+        await page.evaluate(() => localStorage.getItem('freeseek:role-voice-intro-seen')),
+        '1'
+      )
+      await page.setViewportSize({ width: 320, height: 568 })
+      await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+      await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+      const english = page.getByRole('dialog', { name: 'Give your story a voice', exact: true })
+      const settings = english.getByRole('button', { name: 'Open Settings', exact: true })
+      const bounds = await settings.boundingBox()
+      assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 568 && bounds.height >= 44)
+      await page.evaluate(() => window.__audit.settings.setLocale('zh-CN'))
+      await intro.getByRole('button', { name: '去设置', exact: true }).click()
+      const speech = page.locator('[data-settings-page="chatSpeech"]')
+      await speech.getByRole('button', { name: '如何配置角色配音', exact: true }).waitFor()
+      await back(page)
+      await page.locator('[data-settings-page="chat"]').waitFor()
+      await page.reload()
+      await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+      assert.equal(await intro.count(), 0)
+    },
+    (context) =>
+      context.addInitScript(() => {
+        localStorage.setItem('freeseek:notice-version', '1')
+        localStorage.setItem('freeseek:onboarded', '1')
+      })
+  )
+
+  await run(
+    'a new installation never shows the update-only character voice introduction',
+    async (page) => {
+      await page.evaluate(() => localStorage.removeItem('freeseek:role-voice-intro-seen'))
+      const clean = new URL(page.url())
+      clean.search = ''
+      await page.goto(clean.href)
+      await page.getByRole('button', { name: '我已阅读，继续', exact: true }).click()
+      await page.getByRole('button', { name: '先进去看看', exact: true }).click()
+      const intro = page.getByRole('dialog', { name: '让故事里的角色开口', exact: true })
+      assert.equal(await intro.count(), 0)
+      await page.reload()
+      await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+      assert.equal(await intro.count(), 0)
     }
   )
 

@@ -22,7 +22,7 @@ import { useUploads } from '../attachments.js'
 import { useUpdate } from '../update.js'
 import { API_ORIGIN } from '../api/client.js'
 import { writeArchive } from '../chat/history/zipWriter.js'
-import { providerModelParameters, useProviders } from '../providers.js'
+import { providerModelContextWindow, providerModelOutputLimit, providerModelParameters, useProviders } from '../providers.js'
 
 type Capture<T> =
   | { status: 'available'; value: T }
@@ -205,7 +205,8 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
         providers.selection.providerId === 'deepseek' ? providers.selection.model : undefined,
       customStream: modelParameters?.stream,
       customStreamUsage: modelParameters?.streamUsage,
-      customContextTokens: profile?.contextWindows?.[providers.selection.model],
+      customContextTokens: profile && providerModelContextWindow(profile, providers.selection.model),
+      customOutputLimitTokens: profile && providerModelOutputLimit(profile, providers.selection.model),
       customMaxOutputTokens: modelParameters?.maxOutputTokens,
       customVision: modelParameters?.vision,
       customPdf: modelParameters?.pdf,

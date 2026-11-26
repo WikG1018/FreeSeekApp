@@ -40,8 +40,8 @@
   display: grid;
   place-items: center;
   box-sizing: border-box;
-  width: 29px;
-  height: 29px;
+  width: var(--fs-chat-chip-height);
+  height: var(--fs-chat-chip-height);
   border: 1px solid var(--fs-line);
   border-radius: 50%;
   background: var(--fs-floating-surface);

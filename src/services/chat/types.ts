@@ -170,6 +170,8 @@ export type CompressionCheckpoint = {
   outputTokens: number
   windowTokens: number
   targetRounds?: number
+  /** The service declined this prefix. Keep any earlier progress and do not retry the same input. */
+  refused?: true
 }
 
 export type Session = {
@@ -196,6 +198,7 @@ export type Session = {
   persona?: { name: string; prompt: string } | null
   /** 角色配音表：回答里首次出场的角色及其音色；缺省表示本会话没有角色。 */
   voiceRoles?: VoiceRole[]
+  roleVoiceLive?: boolean
   agent?: AgentRef | null
   memoryPaused?: boolean
 }

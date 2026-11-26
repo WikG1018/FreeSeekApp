@@ -93,20 +93,136 @@
 .title {
   line-height: 18px;
 }
-.item.withExcerpt {
-  height: auto;
-  min-height: 56px;
-}
 .excerpt {
-  margin-top: 3px;
-  font-size: 12px;
-  line-height: 17px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 19px;
   color: var(--fs-secondary-text);
 }
 .excerpt mark {
   color: var(--fs-brand-ink);
   background: var(--fs-accent-wash);
   font-weight: 600;
+}
+
+.matches {
+  margin: 0 4px 8px 31px;
+  padding-inline-start: 5px;
+  border-inline-start: 1px solid var(--fs-line);
+}
+
+.matchRow,
+.matchToggle,
+.matchPager button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fs-secondary-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.matchRow {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+  text-align: start;
+}
+
+.matchMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.matchMeta > span:last-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.matchToggle {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: var(--fs-brand-ink);
+  font-size: 12px;
+  text-align: start;
+}
+
+.matchToggle svg {
+  flex: none;
+  transition: transform var(--fs-duration-fast) var(--fs-ease-out);
+}
+
+.matchToggle[aria-expanded='true'] svg,
+.matchPager button:first-child svg {
+  transform: rotate(180deg);
+}
+
+.matchRow:focus,
+.matchToggle:focus,
+.matchPager button:focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+
+.matchRow:focus:not(:focus-visible),
+.matchToggle:focus:not(:focus-visible),
+.matchPager button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+:global([data-legacy-spacing]) .matchToggle svg {
+  margin-inline-start: 5px;
+}
+
+@media (hover: hover) {
+  .matchRow:hover,
+  .matchToggle:hover,
+  .matchPager button:not(:disabled):hover {
+    background: var(--dsw-specific-sidebar-nav-item-hover);
+  }
+}
+
+.matchPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+
+.matchPager button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  flex: none;
+}
+
+.matchPager button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.matchStatus {
+  margin: 6px 8px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .matchToggle svg {
+    transition: none;
+  }
 }
 
 .activity {

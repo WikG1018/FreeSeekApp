@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import {
   IconChevronRightOutline14,
@@ -15,16 +15,21 @@ import type { VoiceRole } from '../../services/speech/roleMarkers.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { ReadingBars } from '../messages/ReadingBars.js'
 import { RoleVoiceDialog, type RoleVoiceSaveResult } from './RoleVoiceDialog.js'
+import { SwitchRow } from '../settings/SettingsRows.js'
 import styles from './RoleVoice.module.css'
 
 export const RoleVoiceButton = ({
   roles,
+  live,
+  onLiveChange,
   onPreview,
   onSave,
 }: {
   roles: ReadonlyArray<VoiceRole>
+  live: boolean
+  onLiveChange: (enabled: boolean) => void
   onPreview: (role: VoiceRole, context?: AudioContext) => void
-  onSave: (next: VoiceRole) => Promise<RoleVoiceSaveResult>
+  onSave: (next: VoiceRole, sample?: Blob) => Promise<RoleVoiceSaveResult>
 }) => {
   const t = useTranslate()
   const roleVoice = useSettings((state) => state.roleVoice)
@@ -32,13 +37,20 @@ export const RoleVoiceButton = ({
   const [editing, setEditing] = useState<VoiceRole | null>(null)
   const [showExtras, setShowExtras] = useState(false)
   const extraList = useId()
+  const listRef = useRef<HTMLDivElement>(null)
+  const listTop = useRef(0)
   const count = visibleRoleCount(roles) || roles.length
   const panel = useOptionPanel(t('settingsRoleVoice'), {
     kind: 'artifacts',
     align: 'end',
-    disabled: !roleVoice.enabled || !count,
+    disabled: !roleVoice.enabled || (!count && !live),
   })
-  if (!roleVoice.enabled || !count) {
+  useLayoutEffect(() => {
+    if (panel.positioned && listRef.current) {
+      listRef.current.scrollTop = listTop.current
+    }
+  }, [panel.positioned])
+  if (!roleVoice.enabled || (!count && !live)) {
     return null
   }
 
@@ -48,7 +60,9 @@ export const RoleVoiceButton = ({
   const extras = ordered.filter((role) => role.importance === 'extra')
   const renderRole = (role: VoiceRole) => {
     const voice = effectiveVoice(role, roleVoice)
-    const label = voice.description
+    const label = role.voiceSample && voice.description
+      ? t('roleVoiceSampleFixed')
+      : voice.description
       ? t('roleVoiceDescriptionShort')
       : voice.preset === 'mimo_default'
         ? t('roleVoiceDefaultPreset')
@@ -60,6 +74,7 @@ export const RoleVoiceButton = ({
         label={label}
         canPreview={!!profile}
         onEdit={() => {
+          listTop.current = listRef.current?.scrollTop ?? 0
           panel.close()
           setEditing(role)
         }}
@@ -81,66 +96,76 @@ export const RoleVoiceButton = ({
         {...panel.trigger}
       >
         <IconMasksOutline16 />
-        <span aria-hidden>{count}</span>
+        {count > 0 && <span aria-hidden>{count}</span>}
       </button>
       {panel.open &&
         panel.render(
           <>
             <div className={styles.heading}>
               <strong>{t('settingsRoleVoice')}</strong>
-              <span>{roles.length}</span>
+              {roles.length > 0 && <span>{roles.length}</span>}
             </div>
-            <div className={styles.scroll} data-testid="role-voice-list">
-              {!profile && (
-                <button
-                  type="button"
-                  className={styles.configuration}
-                  data-panel-item=""
-                  onClick={() => {
-                    panel.close()
-                    openSettings('providerSpeech')
-                  }}
-                >
-                  <span>
-                    <strong>{t('settingsRoleVoiceModelMissing')}</strong>
-                    <small>{t('settingsRoleVoiceModelGo')}</small>
-                  </span>
-                  <IconChevronRightOutline14 />
-                </button>
-              )}
-              {named.length > 0 && <ul className={styles.list}>{named.map(renderRole)}</ul>}
-              {extras.length > 0 && (
-                <>
+            <div ref={listRef} className={styles.scroll} data-testid="role-voice-list" data-scroll-edge="">
+              <div data-scroll-edge-content="">
+                {(profile || live) && <div className={styles.livePreference}>
+                  <SwitchRow panelItem label={t('roleVoiceLive')} checked={live}
+                    change={onLiveChange} description={t('roleVoiceLiveDescription')} />
+                </div>}
+                {!profile && (
                   <button
                     type="button"
-                    className={styles.foldRow}
+                    className={styles.configuration}
                     data-panel-item=""
-                    aria-expanded={showExtras}
-                    aria-controls={extraList}
-                    onClick={() => setShowExtras(!showExtras)}
+                    onClick={() => {
+                      panel.close()
+                      openSettings('chatSpeech', { backToConversation: true })
+                    }}
                   >
-                    <IconChevronRightOutline14 />
-                    <span>{t('roleVoiceOthers', { count: extras.length })}</span>
                     <span>
-                      {roleVoice.extrasShareVoice
-                        ? t('roleVoiceSharedVoice', { voice: roleVoice.extraVoice })
-                        : t('roleVoiceOwnVoices')}
+                      <strong>{t('settingsRoleVoiceModelMissing')}</strong>
+                      <small>{t('settingsRoleVoiceModelGo')}</small>
                     </span>
+                    <IconChevronRightOutline14 />
                   </button>
-                  <ul id={extraList} className={styles.list} hidden={!showExtras}>
-                    {showExtras && extras.map(renderRole)}
-                  </ul>
-                </>
-              )}
+                )}
+                {named.length > 0 && <ul className={styles.list}>{named.map(renderRole)}</ul>}
+                {extras.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.foldRow}
+                      data-panel-item=""
+                      aria-expanded={showExtras}
+                      aria-controls={extraList}
+                      onClick={() => setShowExtras(!showExtras)}
+                    >
+                      <IconChevronRightOutline14 />
+                      <span>{t('roleVoiceOthers', { count: extras.length })}</span>
+                      <span>
+                        {roleVoice.extrasShareVoice
+                          ? t('roleVoiceSharedVoice')
+                          : t('roleVoiceOwnVoices')}
+                      </span>
+                    </button>
+                    <ul id={extraList} className={styles.list} hidden={!showExtras}>
+                      {showExtras && extras.map(renderRole)}
+                    </ul>
+                  </>
+                )}
+              </div>
             </div>
           </>
         )}
       {editing && (
         <RoleVoiceDialog
           role={editing}
+          profile={profile}
           extraVoice={roleVoice.extraVoice}
           extrasShareVoice={roleVoice.extrasShareVoice}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null)
+            panel.show()
+          }}
           onSave={onSave}
           onPreview={profile ? onPreview : undefined}
         />
@@ -180,7 +205,7 @@ const VoiceRoleRow = ({
           data-panel-item=""
           onClick={onPreview}
         >
-          {playback === 'idle' ? <IconPlayMediaOutline16 /> : <ReadingBars mode={playback} />}
+          {playback === 'loading' || playback === 'playing' ? <ReadingBars mode={playback} /> : <IconPlayMediaOutline16 />}
         </button>
       )}
       <button

@@ -11,6 +11,7 @@ export const SettingsDisclosure = ({
   defaultOpen = false,
   onToggle,
   guide = false,
+  settingRow = false,
   testId,
   children,
 }: {
@@ -21,6 +22,7 @@ export const SettingsDisclosure = ({
   defaultOpen?: boolean
   onToggle?: () => void
   guide?: boolean
+  settingRow?: boolean
   testId?: string
   children: ReactNode
 }) => {
@@ -30,6 +32,7 @@ export const SettingsDisclosure = ({
   const shelf = useRef<HTMLDivElement>(null)
   const animation = useRef<Animation | null>(null)
   const previous = useRef(expanded)
+  const Heading = settingRow ? 'h3' : 'h2'
   useLayoutEffect(() => {
     const element = shelf.current
     if (!element) {
@@ -66,9 +69,10 @@ export const SettingsDisclosure = ({
       data-testid={testId}
       className={styles.disclosure}
       data-guide={guide}
+      data-setting-row={settingRow ? '' : undefined}
       data-open={expanded}
     >
-      <h2>
+      <Heading>
         <button
           type="button"
           className={styles.trigger}
@@ -95,7 +99,7 @@ export const SettingsDisclosure = ({
             <IconChevronDownOutline14 />
           </span>
         </button>
-      </h2>
+      </Heading>
       <div id={id} ref={shelf} className={styles.shelf} aria-hidden={!expanded}>
         <fieldset className={styles.body} disabled={!expanded}>
           {children}

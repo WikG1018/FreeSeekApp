@@ -24,18 +24,15 @@ import { Menu } from '../base/Menu.js'
 import { showToast } from '../base/toastState.js'
 import { closeMobileSider } from './mobileSiderState.js'
 import { ConversationIcon } from './ConversationIcon.js'
-import type { MessageMatch } from './useSessionSearch.js'
 import styles from './SessionItem.module.css'
 
 export const SessionItem = memo(function SessionItem({
   session,
   active,
-  match,
   onDelete,
 }: {
   session: SessionSummary
   active: boolean
-  match?: MessageMatch
   onDelete: () => void
 }) {
   const t = useTranslate()
@@ -82,7 +79,7 @@ export const SessionItem = memo(function SessionItem({
 
   return (
     <div
-      className={clsx(styles.item, active && styles.active, match && styles.withExcerpt)}
+      className={clsx(styles.item, active && styles.active)}
       data-session-id={session.id}
       data-session-mode={mode}
       data-session-activity={activity}
@@ -94,7 +91,7 @@ export const SessionItem = memo(function SessionItem({
         aria-current={active ? 'page' : undefined}
         aria-describedby={kindId}
         onClick={() => {
-          selectSession(session.id, match?.messageId)
+          selectSession(session.id)
           closeMobileSider()
         }}
       >
@@ -103,13 +100,6 @@ export const SessionItem = memo(function SessionItem({
         </span>
         <span className={styles.copy}>
           <span className={styles.title}>{displayTitle}</span>
-          {match && (
-            <span className={styles.excerpt}>
-              {match.before}
-              <mark>{match.keyword}</mark>
-              {match.after}
-            </span>
-          )}
         </span>
         {activity && (
           <span className={styles.activity} aria-hidden="true">

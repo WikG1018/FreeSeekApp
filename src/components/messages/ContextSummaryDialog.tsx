@@ -13,6 +13,7 @@ import {
   compressSession,
   compressionPreflight,
   editContextSummary,
+  restoreFullContext,
   stopReply,
   useChatStore,
 } from '../../services/chat/store.js'
@@ -42,6 +43,7 @@ function SummaryEditor({ session }: { session: Session }) {
     null
   )
   const [error, setError] = useState<TranslationMessage | null>(null)
+  const [restoring, setRestoring] = useState(false)
   const busy = useChatStore((s) => Boolean(s.streaming[session.id]) || s.importingHistory)
   const compressing = useChatStore((s) => s.compressing[session.id])
   const text = edit && edit.original === summary ? edit.text : (summary?.text ?? '')
@@ -60,6 +62,22 @@ function SummaryEditor({ session }: { session: Session }) {
         return
       }
       setError(describeCompressionFailure(e))
+    }
+  }
+  const restore = async () => {
+    if (!summary?.recentOnly) {
+      return
+    }
+    setError(null)
+    setRestoring(true)
+    try {
+      await restoreFullContext(session.id, summary)
+      showToast({ key: 'compressionHistoryRestored' })
+      close()
+    } catch {
+      setError({ key: 'compressionRestoreHistoryFailed' })
+    } finally {
+      setRestoring(false)
     }
   }
   return (
@@ -96,13 +114,17 @@ function SummaryEditor({ session }: { session: Session }) {
               {canCompress && (
                 <Button
                   variant={summary ? 'outlined' : 'primary'}
-                  disabled={busy || noSavings}
+                  disabled={busy || restoring || noSavings}
                   onClick={() => void generate()}
                 >
                   {t(summary ? 'compressionMore' : 'compressionGenerate')}
                 </Button>
               )}
-              {summary && !summary.recentOnly ? (
+              {summary?.recentOnly ? (
+                <Button disabled={busy || restoring} onClick={() => void restore()}>
+                  {t('compressionRestoreHistory')}
+                </Button>
+              ) : summary ? (
                 <Button
                   disabled={busy}
                   onClick={() => setEdit({ original: summary, text: summary.text })}
@@ -120,7 +142,7 @@ function SummaryEditor({ session }: { session: Session }) {
       <p className={styles.hint}>
         {t(
           summary?.recentOnly
-            ? 'compressionRecentSummary'
+            ? 'compressionRestoreHistoryHint'
             : summary
               ? 'compressionSummaryHint'
               : 'compressionHelp'
@@ -149,15 +171,19 @@ function SummaryEditor({ session }: { session: Session }) {
         </section>
       )}
       <div aria-live="polite" className={styles.status}>
-        {compressing
-          ? t('compressionProgress', { percent: compressing.percent })
-          : error
-            ? t(error.key, error.params)
-            : !summary && !canCompress
-              ? t('compressionUnavailable')
-              : noSavings
-                ? t('compressionShortHistory')
-                : null}
+        {restoring
+          ? t('compressionRestoringHistory')
+          : compressing
+            ? t('compressionProgress', { percent: compressing.percent })
+            : error
+              ? t(error.key, error.params)
+              : preflight.refused
+                ? t('compressionFailedRefused')
+                : !summary && !canCompress
+                  ? t('compressionUnavailable')
+                  : noSavings
+                    ? t('compressionShortHistory')
+                    : null}
       </div>
     </Modal>
   )

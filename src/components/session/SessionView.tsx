@@ -3,8 +3,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
-import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
-import { newChat, saveSessionVoiceRole } from '../../services/chat/store.js'
+import { newChat, saveSessionVoiceRole, setConversationRoleVoiceLive } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
 import { useSettings } from '../../services/settings.js'
@@ -21,7 +20,7 @@ import { MessageList } from '../messages/MessageList.js'
 import { MobileHeader } from './MobileHeader.js'
 import { SessionAssistant, useSessionAgent } from './SessionAssistant.js'
 import { SessionArtifactsButton } from './SessionArtifacts.js'
-import { useAssistantLibrary } from '../../services/assistants/library.js'
+import { SessionTitle } from './SessionTitle.js'
 import styles from './SessionView.module.css'
 
 /** 会话内所有已记录回复的 token 总量（输入含缓存 + 输出） */
@@ -61,9 +60,6 @@ export const SessionView = ({
   const roleVoice = useSettings((state) => state.roleVoice)
   const profiles = useProviders((state) => state.profiles)
   const agent = useSessionAgent(session.id)
-  const controls = useAssistantLibrary(
-    (state) => state.data.enabled || (!isWindowsDesktop() && state.data.agents.length > 0)
-  )
   const [assistantOpen, setAssistantOpen] = useState(false)
   const { artifacts, rounds } = useMemo(() => {
     if (
@@ -101,12 +97,14 @@ export const SessionView = ({
       (error) => showToast(describeReadAloudError(error))
     )
   }
-  const roleVoiceButton = roleVoice.enabled && session.mode !== 'agent' && roles.length > 0 && (
+  const roleVoiceButton = roleVoice.enabled && session.mode !== 'agent' && (roles.length > 0 || session.roleVoiceLive) && (
     <RoleVoiceButton
       key={session.id}
       roles={roles}
+      live={!!session.roleVoiceLive}
+      onLiveChange={(enabled) => setConversationRoleVoiceLive(session.id, enabled)}
       onPreview={previewRole}
-      onSave={(next) => saveSessionVoiceRole(session.id, next)}
+      onSave={(next, sample) => saveSessionVoiceRole(session.id, next, sample)}
     />
   )
   const agentName = agent?.name ?? session.agent?.name
@@ -114,8 +112,7 @@ export const SessionView = ({
     (session.mode === 'agent' ? 'Agent · ' : '') +
     (session.title || t(session.inherited ? 'inheritedChatTitle' : 'untitledChat')) +
     (agentName ? ' · ' + agentName : '')
-  const openAssistant =
-    controls || (!isWindowsDesktop() && session.agent) ? () => setAssistantOpen(true) : undefined
+  const openAssistant = () => setAssistantOpen(true)
   const tokens = useMemo(() => sessionTokens(session), [session])
   const pricing = usePricing()
   const cost = useMemo(
@@ -132,6 +129,8 @@ export const SessionView = ({
     dockRef = useRef<HTMLDivElement>(null),
     headerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const scrollToTopRef = useRef<() => void>(null)
+  const backToTop = () => scrollToTopRef.current?.()
   const focusComposer = useCallback(() => editorRef.current?.focus({ preventScroll: true }), [])
   // 遮罩和末尾留白随输入框真实高度变化，长草稿、附件和字体缩放不会盖住最后一条消息。
   useLayoutEffect(() => {
@@ -175,24 +174,19 @@ export const SessionView = ({
           title={title}
           headerRef={headerRef}
           openAssistant={openAssistant}
+          onTop={backToTop}
           artifactsButton={artifactsButton}
           voicesButton={roleVoiceButton}
         />
       ) : (
         <div ref={headerRef} className={styles.header} data-testid="chat-header">
           <div className={clsx(styles.headerPill, siderCollapsed && styles.withCollapsedSider)}>
-            {openAssistant ? (
-              <button
-                type="button"
-                className={clsx(styles.title, styles.assistantTitle)}
-                aria-label={t('assistantChatOptions')}
-                onClick={openAssistant}
-              >
-                {title}
-              </button>
-            ) : (
-              <div className={styles.title}>{title}</div>
-            )}
+            <SessionTitle
+              title={title}
+              className={clsx(styles.title, styles.assistantTitle)}
+              onTop={backToTop}
+              onAssistant={openAssistant}
+            />
             {showUsage && tokens > 0 ? (
               <span className={styles.usage} title={t('usageTokensTitle')}>
                 {formatTokens(tokens)} tok{priced ? ` · ${formatCost(cost)}` : ''}
@@ -219,6 +213,7 @@ export const SessionView = ({
         streaming={streaming}
         rounds={rounds}
         onPlanReply={focusComposer}
+        scrollToTopRef={scrollToTopRef}
       />
       <div ref={dockRef} className={styles.dock} data-testid="chat-dock">
         <div className={styles.dockInner}>

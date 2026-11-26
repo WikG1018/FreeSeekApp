@@ -29,6 +29,7 @@ export const Select = <T extends string>({
   pill = false,
   settingRow,
   compactMenu = false,
+  showSelectedDetail = true,
   disabled = false,
   footer,
 }: {
@@ -41,6 +42,7 @@ export const Select = <T extends string>({
   pill?: boolean
   settingRow?: 'value' | 'detail'
   compactMenu?: boolean
+  showSelectedDetail?: boolean
   disabled?: boolean
   footer?: { label: string; onSelect: () => void }
 }) => {
@@ -56,7 +58,7 @@ export const Select = <T extends string>({
   })
   const current = options.find((item) => item.value === value)
   const displayValue = current?.shortLabel ?? current?.label ?? placeholder
-  const currentDetail = settingRow === 'value' ? current?.detail : undefined
+  const currentDetail = settingRow === 'value' && showSelectedDetail ? current?.detail : undefined
   const filterable = options.length > 8
   const needle = query.trim().toLocaleLowerCase()
   const filtered =

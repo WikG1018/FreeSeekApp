@@ -15,10 +15,11 @@ import {
   providerModelParameters,
   providerOutputBudget,
   validateProfile,
+  validateProviderModelOutput,
   type ProviderModelParameters,
   type ProviderProfile,
 } from '../providers.js'
-import { isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
+import { isOfficialMiMoV26, isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../providerPresets.js'
 import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
@@ -30,6 +31,7 @@ import {
   registerLogSecret,
 } from '../diagnostics/log.js'
 import { createId } from '../../utils/id.js'
+import { abortableDelay } from '../../utils/abort.js'
 import type { TranslationKey } from '../../i18n/index.js'
 
 type Json = Record<string, unknown>
@@ -156,7 +158,8 @@ const remoteLimit = (data: Json) => {
 export const readApiJson = async (
   response: Response,
   signal: AbortSignal,
-  limit = 8 * 1024 * 1024
+  limit = 8 * 1024 * 1024,
+  timing?: { idleMs: number; maxMs: number }
 ): Promise<Json> => {
   if (!response.body) {
     throw new ApiError('protocol', { key: 'providerInvalidResponse' })
@@ -169,10 +172,12 @@ export const readApiJson = async (
   const abort = () => {
     void reader.cancel().catch(() => {})
   }
-  const timer = setTimeout(() => {
+  const timeout = () => {
     timedOut = true
     abort()
-  }, 60000)
+  }
+  let timer = setTimeout(timeout, timing?.idleMs ?? 60000)
+  const deadline = timing && setTimeout(timeout, timing.maxMs)
   signal.addEventListener('abort', abort, { once: true })
   try {
     for (;;) {
@@ -191,6 +196,10 @@ export const readApiJson = async (
       if (size > limit) {
         throw new ApiError('protocol', { key: 'providerResponseTooLarge' })
       }
+      if (timing && value.length && !timedOut) {
+        clearTimeout(timer)
+        timer = setTimeout(timeout, timing.idleMs)
+      }
       body += decoder.decode(value, { stream: true })
     }
     signal.throwIfAborted()
@@ -205,6 +214,7 @@ export const readApiJson = async (
     }
   } finally {
     clearTimeout(timer)
+    clearTimeout(deadline)
     signal.removeEventListener('abort', abort)
     abort()
     reader.releaseLock()
@@ -313,7 +323,7 @@ export const fetchProviderResponse = async (
     clearTimeout(timer)
   }
 }
-export type ProviderCatalogModel = { id: string; contextWindow?: number }
+export type ProviderCatalogModel = { id: string; contextWindow?: number; outputLimit?: number }
 const loadProviderCatalog = async (
   input: ProviderProfile,
   signal: AbortSignal
@@ -358,7 +368,11 @@ const loadProviderCatalog = async (
             advertised <= 10000000
               ? advertised
               : undefined
-          models.set(id, { id, contextWindow })
+          const output = value.outputTokenLimit ?? value.max_output_tokens ?? value.max_completion_tokens ??
+            record(value.top_provider).max_completion_tokens
+          const outputLimit = typeof output === 'number' && Number.isSafeInteger(output) &&
+            output >= 16 && output <= 1048576 ? output : undefined
+          models.set(id, { id, contextWindow, ...(outputLimit !== undefined && { outputLimit }) })
         }
       }
       const token = gemini
@@ -445,24 +459,30 @@ export const providerBody = (
     role: message.role,
     content: message.content.map((part) => partFor(part, profile.protocol, message.role)),
   }))
-  const common = {
-    ...profile.extraBody,
-    ...(profile.temperature !== null ? { temperature: profile.temperature } : {}),
-  }
+  const common = { ...profile.extraBody }
+  // The chosen model setting owns the output budget. Sending two aliases can make the request invalid.
+  delete common.max_tokens
+  delete common.max_completion_tokens
+  delete common.max_output_tokens
+  delete common.maxOutputTokens
   if (profile.protocol === 'gemini') {
+    delete common.temperature
     return {
-      ...profile.extraBody,
+      ...common,
       systemInstruction: { parts: [{ text: system }] },
       contents: messages.map((message) => ({
         role: message.role === 'assistant' ? 'model' : 'user',
         parts: message.content.map((part) => partFor(part, 'gemini', message.role)),
       })),
       generationConfig: {
-        ...record(profile.extraBody.generationConfig),
+        ...record(common.generationConfig),
         maxOutputTokens: profile.maxOutputTokens,
         ...(profile.temperature !== null ? { temperature: profile.temperature } : {}),
       },
     }
+  }
+  if (profile.temperature !== null) {
+    common.temperature = profile.temperature
   }
   if (profile.protocol === 'responses') {
     return {
@@ -497,12 +517,20 @@ export const providerBody = (
   }
 }
 
-const stopReason = (value: unknown): StopReason =>
-  /length|max_tokens|MAX_TOKENS|max_output_tokens/.test(text(value))
+const stopReason = (value: unknown, prior: StopReason): StopReason => {
+  const reason = text(value)
+  if (
+    prior === 'refusal' ||
+    /^(?:refusal|content_filter|safety|blocklist|prohibited_content|spii|recitation)$/i.test(reason)
+  ) {
+    return 'refusal'
+  }
+  return /length|max_tokens|max_output_tokens/i.test(reason)
     ? 'max_tokens'
-    : /tool_calls|tool_use/.test(text(value))
+    : /tool_calls|tool_use/.test(reason)
       ? 'tool_use'
       : 'end_turn'
+}
 
 export async function* streamProviderMessage(
   input: ProviderProfile,
@@ -518,13 +546,16 @@ export async function* streamProviderMessage(
     maxOutputTokens,
     managedTools,
     task,
+    retryInitialRequest,
   }: RequestContext & {
     search?: SearchTool
     maxOutputTokens?: number
     managedTools?: boolean
     task?: TaskToolset
+    retryInitialRequest?: boolean
   } = {}
 ): AsyncGenerator<MessageStreamEvent> {
+  validateProviderModelOutput(input, model)
   const configuration = validateProfile({
     ...input,
     model,
@@ -537,12 +568,25 @@ export async function* streamProviderMessage(
           },
         }),
   })
+  validateProviderModelOutput(configuration, model)
   const profile = { ...configuration, ...providerModelParameters(configuration, model) }
   const body: Json = applyReasoning(
     providerBody(profile, model, messages, system),
     profile.protocol,
     reasoning
   )
+  if (profile.protocol === 'openai' && isOfficialMiMoV26(profile.url, model)) {
+    if (record(body.thinking).type !== 'disabled') {
+      // MiMo's reasoning mode controls sampling at the service.
+      delete body.temperature
+      delete body.top_p
+    } else if (body.temperature !== undefined && (
+      typeof body.temperature !== 'number' || !Number.isFinite(body.temperature) ||
+      body.temperature < 0 || body.temperature > 1.5
+    )) {
+      throw new ApiError('protocol', { key: 'providerMiMoTemperatureRange' })
+    }
+  }
   const context = { requestId, sessionId }
   if (managedTools || task) {
     // Agent runs expose the app's allowed tools, not tools inherited from provider options.
@@ -565,7 +609,8 @@ export async function* streamProviderMessage(
     search = undefined
   }
   if (!search && !task) {
-    yield* streamProviderRound(profile, model, body, signal, context)
+    const canRetry = retryInitialRequest && !array(body.tools).length && !array(body.functions).length
+    yield* streamProviderRound(profile, model, body, signal, context, undefined, false, canRetry)
     return
   }
   if (
@@ -590,7 +635,8 @@ export async function* streamProviderMessage(
       requestSignal,
       { requestId, sessionId },
       collector,
-      Boolean(task)
+      Boolean(task),
+      Boolean(!task && requestId && retryInitialRequest)
     )
   }
   if (task) {
@@ -608,17 +654,28 @@ async function* streamProviderRound(
   signal: AbortSignal,
   { requestId = createId(), sessionId }: RequestContext,
   collector?: SearchTurnCollector,
-  showToolInput = false
+  showToolInput = false,
+  retryInitialRequest = false
 ): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
-  const { response, dispose } = await fetchProviderResponse(
-    profile,
-    providerEndpoint(profile, 'chat', model, profile.stream),
-    body,
-    signal,
-    { requestId, sessionId }
-  )
+  const url = providerEndpoint(profile, 'chat', model, profile.stream)
+  let activeRequestId = requestId
+  const { response, dispose } = await fetchProviderResponse(profile, url, body, signal, { requestId, sessionId })
+    .catch(async (error: unknown) => {
+      if (!retryInitialRequest || signal.aborted || !(error instanceof ApiError) || !(
+        [502, 503, 504].includes(error.status ?? 0) || error.localMessage?.key === 'providerNetworkError'
+      )) {
+        throw error
+      }
+      activeRequestId = createId()
+      logEvent('api', 'provider.initial-request-retry', {
+        requestId, retryRequestId: activeRequestId, sessionId, ...diagnosticError(error),
+      }, 'warn')
+      await abortableDelay(650, signal)
+      return fetchProviderResponse(profile, url, body, signal, { requestId: activeRequestId, sessionId })
+    })
   let completed = false,
     emitted = false,
+    emittedText = false,
     reason: StopReason = 'end_turn',
     usage: MessageUsage | undefined
   let rawAnthropicUsage: Json = {}
@@ -642,6 +699,9 @@ async function* streamProviderRound(
       return
     }
     emitted = true
+    if (!thinking) {
+      emittedText = true
+    }
     if (!activeBlock || activeBlock.thinking !== thinking) {
       yield* closeBlock()
       activeBlock = { index: nextBlock++, thinking }
@@ -669,20 +729,28 @@ async function* streamProviderRound(
     if (profile.protocol === 'openai') {
       const choice = record(Array.isArray(data.choices) ? data.choices[0] : undefined),
         content = record(choice.delta || choice.message)
+      if (text(content.refusal)) {
+        reason = 'refusal'
+      }
       yield* delta(content.reasoning_content || content.reasoning, true)
       if (Array.isArray(content.content)) {
         for (const part of content.content) {
-          yield* delta(record(part).text)
+          const item = record(part)
+          if (item.type === 'refusal') {
+            reason = 'refusal'
+          } else {
+            yield* delta(item.text)
+          }
         }
       } else {
-        yield* delta(content.content || content.refusal)
+        yield* delta(content.content)
       }
-      if (array(content.tool_calls).length) {
+      if (array(content.tool_calls).length && reason !== 'refusal') {
         reason = 'tool_use'
         yield* toolInput()
       }
       if (choice.finish_reason) {
-        reason = stopReason(choice.finish_reason)
+        reason = stopReason(choice.finish_reason, reason)
         completed = true
       }
       if (data.usage) {
@@ -695,8 +763,11 @@ async function* streamProviderRound(
       ) {
         yield* toolInput()
       }
-      if (data.type === 'response.output_text.delta' || data.type === 'response.refusal.delta') {
+      if (data.type === 'response.output_text.delta') {
         yield* delta(data.delta)
+      }
+      if (data.type === 'response.refusal.delta' || data.type === 'response.refusal.done') {
+        reason = 'refusal'
       }
       if (
         data.type === 'response.reasoning_summary_text.delta' ||
@@ -710,10 +781,20 @@ async function* streamProviderRound(
         data.type === 'response.incomplete' ||
         (!data.type && Array.isArray(data.output))
       ) {
-        if (!emitted && Array.isArray(result.output)) {
-          for (const item of result.output) {
-            for (const part of array(record(item).content)) {
-              yield* delta(record(part).text || record(part).refusal)
+        const includeText = !emittedText
+        if (Array.isArray(result.output)) {
+          for (const value of result.output) {
+            const item = record(value)
+            if (item.type && item.type !== 'message') {
+              continue
+            }
+            for (const value of array(item.content)) {
+              const part = record(value)
+              if (part.type === 'refusal' || text(part.refusal)) {
+                reason = 'refusal'
+              } else if (includeText) {
+                yield* delta(part.text)
+              }
             }
           }
         }
@@ -721,7 +802,7 @@ async function* streamProviderRound(
           throw new ApiError('stream', remoteLimit(result) ?? { key: 'providerRemoteError' })
         }
         completed = true
-        reason = stopReason(record(result.incomplete_details).reason)
+        reason = stopReason(record(result.incomplete_details).reason, reason)
         if (result.usage) {
           usage = normalizeProviderUsage(result.usage, profile.protocol)
         }
@@ -729,7 +810,8 @@ async function* streamProviderRound(
     } else if (profile.protocol === 'gemini') {
       const candidate = record(Array.isArray(data.candidates) ? data.candidates[0] : undefined)
       if (record(data.promptFeedback).blockReason) {
-        throw new ApiError('stream', { key: 'providerRemoteError' })
+        reason = 'refusal'
+        completed = true
       }
       const parts = record(candidate.content).parts
       if (Array.isArray(parts)) {
@@ -744,7 +826,7 @@ async function* streamProviderRound(
       }
       if (candidate.finishReason) {
         completed = true
-        reason = stopReason(candidate.finishReason)
+        reason = stopReason(candidate.finishReason, reason)
       }
       if (data.usageMetadata) {
         usage = normalizeProviderUsage(data.usageMetadata, profile.protocol)
@@ -761,7 +843,9 @@ async function* streamProviderRound(
         } else if (block.type === 'thinking') {
           yield* delta(block.thinking, true)
         } else if (block.type === 'tool_use') {
-          reason = 'tool_use'
+          if (reason !== 'refusal') {
+            reason = 'tool_use'
+          }
           yield* toolInput()
         }
       }
@@ -781,7 +865,7 @@ async function* streamProviderRound(
         yield* closeBlock()
       }
       if (data.type === 'message_delta') {
-        reason = stopReason(record(data.delta).stop_reason)
+        reason = stopReason(record(data.delta).stop_reason, reason)
         if (data.usage) {
           rawAnthropicUsage = { ...rawAnthropicUsage, ...record(data.usage) }
           usage = normalizeProviderUsage(rawAnthropicUsage, profile.protocol)
@@ -795,7 +879,7 @@ async function* streamProviderRound(
           const block = record(part)
           yield* delta(block.text || block.thinking, block.type === 'thinking')
         }
-        reason = stopReason(data.stop_reason)
+        reason = stopReason(data.stop_reason, reason)
         usage = data.usage ? normalizeProviderUsage(data.usage, profile.protocol) : undefined
         completed = true
       }
@@ -831,14 +915,16 @@ async function* streamProviderRound(
       yield* consume(await readApiJson(response, signal))
     }
     signal.throwIfAborted()
-    if (!completed) {
+    const finalReason = reason as StopReason
+    if (!completed && finalReason !== 'refusal') {
       throw new ApiError('interrupted', { key: 'providerInterrupted' })
     }
-    const turn = (reason as StopReason) === 'max_tokens' ? undefined : collector?.finish()
-    if ((reason as StopReason) === 'tool_use' && !turn) {
+    const turn =
+      finalReason === 'max_tokens' || finalReason === 'refusal' ? undefined : collector?.finish()
+    if (finalReason === 'tool_use' && !turn) {
       throw new ApiError('protocol', { key: 'providerToolUnsupported' })
     }
-    if (!emitted && !turn) {
+    if (!emitted && !turn && finalReason !== 'max_tokens' && finalReason !== 'refusal') {
       throw new ApiError('protocol', { key: 'providerInvalidResponse' })
     }
     yield* closeBlock()
@@ -853,11 +939,15 @@ async function* streamProviderRound(
     yield { type: 'message_stop' }
     return undefined
   } catch (error) {
+    if ((reason as StopReason) === 'refusal') {
+      signal.throwIfAborted()
+      throw new ApiError('protocol', { key: 'replyRefused' })
+    }
     if (error instanceof StreamReadError) {
       logEvent(
         'api',
         'response.body.failed',
-        { requestId, receivedBytes: error.receivedBytes },
+        { requestId: activeRequestId, receivedBytes: error.receivedBytes },
         'warn'
       )
       throw new ApiError('network', { key: 'streamConnectionLost' })
@@ -884,28 +974,35 @@ export const testProviderModel = async (
   try {
     const configuration = validateProfile(profile)
     const capability = customReasoning(configuration, configuration.model)
-    let result = ''
-    for await (const event of streamProviderMessage(
-      configuration,
-      configuration.model,
-      [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
-      'This is a connection test. Reply briefly.',
-      signal,
-      capability && { adapter: capability.adapter, level: capability.defaultLevel },
-      {
-        requestId,
-        maxOutputTokens: Math.min(providerOutputBudget(configuration, configuration.model), 1024),
+    const ceiling = providerOutputBudget(configuration, configuration.model)
+    const budgets = new Set([Math.min(ceiling, 1024), Math.min(ceiling, 4096)])
+    for (const budget of budgets) {
+      let result = ''
+      let reason: StopReason | null | undefined
+      for await (const event of streamProviderMessage(
+        configuration,
+        configuration.model,
+        [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
+        'This is a connection test. Reply briefly.',
+        signal,
+        capability && { adapter: capability.adapter, level: capability.defaultLevel },
+        { requestId, maxOutputTokens: budget }
+      )) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          result += event.delta.text
+        } else if (event.type === 'message_delta') {
+          reason = event.delta.stop_reason
+        }
       }
-    )) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        result += event.delta.text
+      if (result.trim()) {
+        finish('completed')
+        return { text: result.slice(0, 200), elapsedMs: Math.round(performance.now() - started) }
+      }
+      if (reason !== 'max_tokens') {
+        throw new ApiError('protocol', { key: 'providerInvalidResponse' })
       }
     }
-    if (!result.trim()) {
-      throw new ApiError('protocol', { key: 'providerInvalidResponse' })
-    }
-    finish('completed')
-    return { text: result.slice(0, 200), elapsedMs: Math.round(performance.now() - started) }
+    throw new ApiError('protocol', { key: 'providerTestOutputExhausted' })
   } catch (error) {
     finish(signal.aborted ? 'cancelled' : 'failed', diagnosticError(error))
     throw error

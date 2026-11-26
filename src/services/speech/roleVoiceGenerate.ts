@@ -1,112 +1,197 @@
 import { ApiError, streamMessage } from '../api/client.js'
-import type { MessageStreamEvent } from '../api/types.js'
+import type { MessageStreamEvent, StopReason } from '../api/types.js'
 import { streamProviderMessage } from '../api/providerClient.js'
-import { activeConnection } from '../providers.js'
+import { diagnosticError, logEvent } from '../diagnostics/log.js'
+import { activeConnection, providerOutputBudget, ProviderConfigError } from '../providers.js'
 import { customReasoning, disabledReasoning } from '../reasoning.js'
 import { useSettings } from '../settings.js'
-import type { VoiceRole } from './roleMarkers.js'
-
-/**
- * 让模型重写一个角色的音色。
- *
- * 只改「声音」这一半；语气仍然由正文里的标注决定。用户点了「重写」之后
- * 结果仍然可以手动编辑，所以这里只求给一个好起点。
- */
+import { createId } from '../../utils/id.js'
+import { voiceGenderFromDescription, voiceGenderLabel, type VoiceRole } from './roleMarkers.js'
 
 const PROMPT =
-  '你在为一个朗读功能设定角色声音。只输出一句到两句中文的音色描述，' +
-  '说清性别、年龄感、音色质感、语速或口音中真正有辨识度的部分。' +
-  '不要写情绪或语气（那由正文决定），不要用引号，不要解释，不要列举。' +
-  '不要出现「音色」「描述」这类词。只输出描述本身。'
+  '为角色写一两句中文音色描述。描述年龄感、音高、声音质感、语速或口音。' +
+  '沿用已知的声线和角色设定，声线不明时用中性措辞，不凭名字判断男女。' +
+  '只输出描述本身，不加标题、引号或解释。'
 
 const PROMPT_EN =
-  'Write one or two short English sentences that describe a character’s voice for speech synthesis. ' +
-  'Use distinctive traits such as apparent age, pitch, texture, pace, or accent. ' +
-  'Leave emotion and delivery to the scene. Return the description alone, without quotation marks.'
+  'Write one or two short English sentences about a character’s voice for speech synthesis. ' +
+  'Describe age, pitch, texture, pace, or accent. Keep any established voice gender. ' +
+  'Use neutral wording if it is unspecified. Do not infer gender from a name. ' +
+  'Return the description alone, without quotes or a heading.'
 
 const clean = (text: string) =>
   text
     .trim()
-    .replace(/^["「『]|["」』]$/g, '')
+    .replace(/^```[^\n]*\n([\s\S]*?)\n?```$/, '$1')
+    .replace(/^(?:音色描述|音色|voice description|voice)\s*[:：]\s*/i, '')
+    .replace(/^["「『“]|["」』”]$/g, '')
     .replace(/\s*\n\s*/g, ' ')
+    .trim()
     .slice(0, 200)
 
-/** 从流事件里拼出正文；思考块不计入 */
-const collect = async (
-  events: AsyncIterable<MessageStreamEvent>,
-  signal: AbortSignal
-): Promise<string> => {
+const collect = async (events: AsyncIterable<MessageStreamEvent>, signal: AbortSignal) => {
   let text = ''
+  let stopReason: StopReason | undefined
+  let hasReasoning = false
   for await (const event of events) {
     signal.throwIfAborted()
     if (event.type === 'content_block_start' && event.content_block.type === 'text') {
       text += event.content_block.text
-    }
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-      text += event.delta.text
+    } else if (event.type === 'content_block_delta') {
+      if (event.delta.type === 'text_delta') {
+        text += event.delta.text
+      } else if (event.delta.type === 'thinking_delta') {
+        hasReasoning = true
+      }
+    } else if (event.type === 'message_delta') {
+      stopReason = event.delta.stop_reason ?? stopReason
     }
     if (text.length > 2000) {
       break
     }
   }
-  return text
+  signal.throwIfAborted()
+  return { description: clean(text), stopReason, hasReasoning }
 }
 
+type VoiceDescriptionInput = Pick<
+  VoiceRole, 'name' | 'nature' | 'aliases' | 'importance' | 'voiceGender' | 'description'
+>
+
 export const regenerateVoiceDescription = async (
-  role: Pick<VoiceRole, 'name' | 'nature' | 'aliases' | 'importance'>,
+  role: VoiceDescriptionInput,
   signal: AbortSignal
 ): Promise<string> => {
-  const connection = activeConnection()
-  const prompt = useSettings.getState().locale === 'en-US' ? PROMPT_EN : PROMPT
-  const ask = [
-    `角色：${role.name}${role.aliases.length ? `（别名：${role.aliases.join('、')}）` : ''}`,
-    role.nature.trim() ? `性格：${role.nature.trim()}` : '',
-    role.importance === 'lead' ? '重要性：主角' : role.importance === 'supporting' ? '重要性：次要' : '重要性：路人',
-    '请给出这个角色的音色描述。',
-  ]
-    .filter(Boolean)
-    .join('\n')
+  signal.throwIfAborted()
+  const english = useSettings.getState().locale === 'en-US'
+  const prompt = english ? PROMPT_EN : PROMPT
+  const gender = role.voiceGender ?? voiceGenderFromDescription(role.description ?? '')
+  const importance = { lead: '主角', supporting: '次要', extra: '路人' }
+  const ask = (english ? [
+    `Character: ${role.name}`,
+    role.aliases.length && `Aliases: ${role.aliases.join(', ')}`,
+    role.nature.trim() && `Personality: ${role.nature.trim()}`,
+    `Importance: ${role.importance}`,
+    gender && `Required voice gender: ${gender}`,
+    role.description?.trim() && `Current description: ${role.description.trim()}`,
+    'Suggest a different voice description that fits the character.',
+  ] : [
+    `角色：${role.name}`,
+    role.aliases.length && `别名：${role.aliases.join('、')}`,
+    role.nature.trim() && `性格：${role.nature.trim()}`,
+    `重要性：${importance[role.importance]}`,
+    gender && `必须沿用的声线：${voiceGenderLabel(gender)}`,
+    role.description?.trim() && `当前描述：${role.description.trim()}`,
+    '为这个角色换一种合适的音色描述。',
+  ]).filter(Boolean).join('\n')
 
-  let raw: string
+  const operationId = createId()
+  const started = performance.now()
+  const controller = new AbortController()
+  const cancel = () => controller.abort(signal.reason)
+  signal.addEventListener('abort', cancel, { once: true })
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 60_000)
+  let requestId: string | undefined
+
   try {
-    if (connection.kind === 'deepseek') {
-      raw = await collect(
-        streamMessage(
-          connection.apiKey,
-          {
-            model: connection.model,
-            max_tokens: 200,
-            system: prompt,
-            thinking: { type: 'disabled' },
-            messages: [{ role: 'user', content: ask }],
-          },
-          signal
-        ),
-        signal
-      )
-    } else {
-      raw = await collect(
-        streamProviderMessage(
-          connection.profile,
-          connection.model,
-          [{ role: 'user', content: [{ type: 'text', text: ask }] }],
-          prompt,
-          signal,
-          disabledReasoning(customReasoning(connection.profile, connection.model)),
-          { maxOutputTokens: 200, managedTools: true }
-        ),
-        signal
-      )
+    const connection = activeConnection()
+    if (connection.kind === 'deepseek' && !connection.apiKey.trim()) {
+      throw new ApiError('protocol', { key: 'roleVoiceRewriteNeedsModel' })
+    }
+    const budget = connection.kind === 'custom'
+      ? providerOutputBudget(connection.profile, connection.model)
+      : 2048
+    let reasoning = connection.kind === 'custom'
+      ? disabledReasoning(customReasoning(connection.profile, connection.model))
+      : undefined
+    const protocol = connection.kind === 'custom' ? connection.profile.protocol : 'deepseek'
+    let outputTokens = Math.min(budget, 1024)
+
+    for (let attempt = 1; ; attempt += 1) {
+      requestId = createId()
+      logEvent('speech', 'rewrite.started', {
+        operationId, requestId, protocol, attempt, requestedOutputTokens: outputTokens,
+      })
+      try {
+        const events = connection.kind === 'deepseek'
+          ? streamMessage(connection.apiKey, {
+              model: connection.model,
+              max_tokens: outputTokens,
+              system: prompt,
+              thinking: { type: 'disabled' },
+              safety_check: { level: 'high' },
+              messages: [{ role: 'user', content: ask }],
+            }, controller.signal, requestId)
+          : streamProviderMessage(
+              connection.profile,
+              connection.model,
+              [{ role: 'user', content: [{ type: 'text', text: ask }] }],
+              prompt,
+              controller.signal,
+              reasoning,
+              { maxOutputTokens: outputTokens, managedTools: true, requestId }
+            )
+        const { description, stopReason, hasReasoning } = await collect(events, controller.signal)
+        const exhausted = stopReason === 'max_tokens'
+        const retryBudget = Math.min(budget, 2048)
+        if (attempt === 1 && retryBudget > outputTokens && (exhausted || (!description && hasReasoning))) {
+          logEvent('speech', 'rewrite.retry', {
+            operationId, requestId, stopReason, hasReasoning, reason: 'output-budget',
+          }, 'warn')
+          outputTokens = retryBudget
+          continue
+        }
+        if (exhausted || !description || stopReason === 'refusal') {
+          const key = exhausted ? 'roleVoiceRewriteTruncated'
+            : stopReason === 'refusal' ? 'roleVoiceRewriteRefused' : 'roleVoiceRewriteEmpty'
+          logEvent('speech', 'rewrite.incomplete', {
+            operationId, requestId, stopReason, hasReasoning,
+          }, 'warn')
+          throw new ApiError('protocol', { key })
+        }
+        const receivedGender = voiceGenderFromDescription(description)
+        if (gender && receivedGender && receivedGender !== gender) {
+          throw new ApiError('protocol', { key: 'roleVoiceDescriptionGenderMismatch' })
+        }
+        logEvent('speech', 'rewrite.completed', {
+          operationId, requestId, stopReason, hasReasoning, elapsedMs: Math.round(performance.now() - started),
+        })
+        return description
+      } catch (error) {
+        if (
+          !controller.signal.aborted && attempt === 1 && reasoning &&
+          error instanceof ApiError && (error.status === 400 || error.status === 422)
+        ) {
+          logEvent('speech', 'rewrite.retry', {
+            operationId, requestId, reason: 'reasoning-parameters', ...diagnosticError(error),
+          }, 'warn')
+          reasoning = undefined
+          outputTokens = Math.min(budget, 2048)
+          continue
+        }
+        throw error
+      }
     }
   } catch (error) {
     if (signal.aborted) {
+      logEvent('speech', 'rewrite.cancelled', { operationId, requestId })
       throw error
     }
-    throw error instanceof ApiError ? error : new ApiError('network', String(error))
+    const failure = timedOut
+      ? new ApiError('network', { key: 'roleVoiceRewriteTimedOut' })
+      : error instanceof ProviderConfigError
+        ? new ApiError('protocol', { key: 'roleVoiceRewriteNeedsModel' })
+        : error
+    logEvent('speech', 'rewrite.failed', {
+      operationId, requestId, elapsedMs: Math.round(performance.now() - started), ...diagnosticError(failure),
+    }, 'warn')
+    throw failure
+  } finally {
+    clearTimeout(timeout)
+    signal.removeEventListener('abort', cancel)
   }
-  const description = clean(raw)
-  if (!description) {
-    throw new ApiError('protocol', 'The model returned an empty voice description')
-  }
-  return description
 }

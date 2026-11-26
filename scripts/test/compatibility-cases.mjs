@@ -497,8 +497,8 @@ export const runCompatibilityCases = async (run) => {
         await page.evaluate(() => window.__audit.settingsDialog.openSettings('home'))
         await page.getByRole('button', { name: '对话偏好', exact: true }).click()
       }
-      const row = page.getByRole('button', { name: '启动时打开', exact: true })
-      const menu = page.getByRole('listbox', { name: '启动时打开', exact: true })
+      const row = page.getByRole('button', { name: '启动后打开', exact: true })
+      const menu = page.getByRole('listbox', { name: '启动后打开', exact: true })
 
       await openPreferences()
       await row.getByText('上次对话', { exact: true }).waitFor()

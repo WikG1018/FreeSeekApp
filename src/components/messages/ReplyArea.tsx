@@ -64,6 +64,8 @@ export const ReplyArea = memo(function ReplyArea({
   hasResponse,
   agentMode = false,
   activityPaused = false,
+  voiceControl,
+  voiceDetails,
 }: {
   message: AssistantMessage
   view: ReplyView
@@ -71,11 +73,21 @@ export const ReplyArea = memo(function ReplyArea({
   hasResponse: boolean
   agentMode?: boolean
   activityPaused?: boolean
+  voiceControl?: ReactNode
+  voiceDetails?: ReactNode
 }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
+  const id = useId()
   const live = streaming && !activityPaused
   const visibleSteps = view.steps
-  if (visibleSteps.length === 0 && !live) {
+  const phase = replyActivityPhase(message, view)
+  const writing = streaming && (hasResponse || phase === 'replyActivityAnswer')
+  useEffect(() => {
+    if (writing) {
+      setOpen(false)
+    }
+  }, [writing])
+  if (visibleSteps.length === 0 && !live && !voiceControl) {
     return null
   }
   if (agentMode) {
@@ -83,7 +95,7 @@ export const ReplyArea = memo(function ReplyArea({
     const activeThought =
       live &&
       last?.type === 'thinking' &&
-      replyActivityPhase(message, view) === 'agentThinkingActive'
+      phase === 'agentThinkingActive'
         ? last
         : undefined
     return (
@@ -96,6 +108,7 @@ export const ReplyArea = memo(function ReplyArea({
                 step={step}
                 message={message}
                 active={step === activeThought}
+                writing={writing}
               />
             )
           }
@@ -129,60 +142,90 @@ export const ReplyArea = memo(function ReplyArea({
       </div>
     )
   }
-  // 未记录请求开关时，按是否有思考内容显示标题。
-  const thinking = message.thinking ?? view.steps.some((step) => step.type === 'thinking')
-  const title =
-    thinking && visibleSteps.length > 0
-      ? getAreaTitle(view, streaming, Date.now(), hasResponse)
-      : null
-  const stopped = !streaming && !hasResponse
+  const lastThought = visibleSteps.findLast((step): step is ThinkingStep => step.type === 'thinking')
+  const title = lastThought ? getAreaTitle(view, streaming, Date.now(), hasResponse) : null
+  const expanded = open && !writing
+  const thinking = live && !writing && phase === 'agentThinkingActive'
+  const preview = thinking && !expanded && lastThought
+  const shownSteps = expanded ? visibleSteps : visibleSteps.filter((step) => step.type !== 'thinking')
+  const label = live
+    ? <ReplyActivity message={message} view={view} />
+    : <span className={styles.titleText}>{title}</span>
   return (
     <div className={styles.area}>
-      {title ? (
-        <div className={styles.title} onClick={() => setOpen((value) => !value)}>
-          <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
-            <IconThinkOutline16 />
-          </span>
-          {live ? (
-            <ReplyActivity message={message} view={view} />
+      {(title || live || voiceControl) && (
+        <div className={styles.replySummary} data-testid="reply-summary">
+          {title ? (
+            <button
+              type="button"
+              className={styles.title}
+              data-thinking={thinking || undefined}
+              aria-expanded={expanded}
+              aria-controls={id}
+              disabled={writing}
+              onClick={() => setOpen((value) => !value)}
+            >
+              <span className={clsx(styles.titleIcon, !live && styles.stoppedIcon)}>
+                <IconThinkOutline16 />
+              </span>
+              {label}
+              {!writing && (expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />)}
+            </button>
           ) : (
-            <span className={styles.titleText}>{title}</span>
+            <div className={styles.summaryStatus}>
+              {live && <ReplyActivity message={message} view={view} />}
+            </div>
           )}
-          {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
+          {voiceControl}
         </div>
-      ) : live ? (
-        <ReplyActivity message={message} view={view} />
-      ) : null}
-      {open || !title ? (
-        <div className={styles.steps}>
-          {view.steps.map((step, index) => (
-            <StepItem
-              key={stepKey(step, index)}
-              step={step}
-              message={message}
-              sources={view.sources}
-              streaming={streaming}
-              isLast={index === view.steps.length - 1}
-            />
-          ))}
-        </div>
-      ) : null}
+      )}
+      {voiceDetails}
+      {preview && <ThoughtPreview step={lastThought} />}
+      <div id={id} className={styles.steps}>
+        {shownSteps.map((step, index) => (
+          <StepItem
+            key={stepKey(step, index)}
+            step={step}
+            message={message}
+            sources={view.sources}
+            streaming={streaming}
+            isLast={index === shownSteps.length - 1}
+          />
+        ))}
+      </div>
     </div>
   )
 })
+
+const ThoughtPreview = ({ step }: { step: ThinkingStep }) => {
+  const tail = step.blocks.map(({ thinking }) => thinking).join('').trimEnd().slice(-4096)
+  return tail ? (
+    <div className={styles.thoughtPreview} aria-hidden="true" data-testid="thought-preview">
+      <div>{tail}</div>
+    </div>
+  ) : null
+}
 
 const AgentThinking = ({
   step,
   message,
   active,
+  writing,
 }: {
   step: ThinkingStep
   message: AssistantMessage
   active: boolean
+  writing: boolean
 }) => {
   const t = useTranslate()
   const [open, setOpen] = useState(false)
   const id = useId()
+  const expanded = open && !writing
+  useEffect(() => {
+    if (writing) {
+      setOpen(false)
+    }
+  }, [writing])
   const duration = getTotalThinkingSeconds([step], Date.now())
   const title = active
     ? t('agentThinkingActive')
@@ -198,7 +241,8 @@ const AgentThinking = ({
       <button
         type="button"
         className={styles.agentThinkingToggle}
-        aria-expanded={open}
+        aria-expanded={expanded}
+        disabled={writing}
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
       >
@@ -208,9 +252,10 @@ const AgentThinking = ({
         <span className={styles.agentThinkingText} role={active ? 'status' : undefined}>
           {title}
         </span>
-        {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
+        {!writing && (expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />)}
       </button>
-      {open && (
+      {active && !writing && !expanded && <ThoughtPreview step={step} />}
+      {expanded && (
         <div id={id} className={styles.agentThinkingBody}>
           <Markdown
             className="ds-think-content"

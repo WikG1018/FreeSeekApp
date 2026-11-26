@@ -5,6 +5,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { IconCloseOutline16 } from './icons.js'
 import { hasTransientPanel } from './transientPanel.js'
 import { IconButton } from './IconButton.js'
+import { restoreDialogFocus } from './useDialogFocus.js'
 import styles from './Modal.module.css'
 
 /** 当前打开的弹窗，后打开的在末尾；叠放时 Esc 只关闭最上层，原生返回键同理 */
@@ -65,6 +66,7 @@ export const Modal = ({
   className,
   titleClassName,
   mainClassName,
+  scrollEdgeFeedback = false,
   onDismissStart,
   onClose,
 }: {
@@ -82,6 +84,7 @@ export const Modal = ({
   titleClassName?: string
   /** 内容区的 class */
   mainClassName?: string
+  scrollEdgeFeedback?: boolean
   /** Called once when dismissal begins, before the visual exit finishes. */
   onDismissStart?: () => void
   onClose: () => void
@@ -135,13 +138,7 @@ export const Modal = ({
     return () => {
       const previous = previousFocusRef.current
       previousFocusRef.current = null
-      // 等卸载完成再还焦点，避免元素已被移除
-      window.setTimeout(() => {
-        const activeDialog = document.activeElement?.closest('[aria-modal="true"]')
-        if (previous && (!activeDialog || activeDialog.contains(previous))) {
-          previous.focus({ preventScroll: true })
-        }
-      }, 0)
+      restoreDialogFocus(previous)
     }
   }, [])
 
@@ -226,7 +223,14 @@ export const Modal = ({
             />
           ) : null}
         </div>
-        {children ? <div className={clsx(styles.main, mainClassName)}>{children}</div> : null}
+        {children ? (
+          <div
+            className={clsx(styles.main, mainClassName)}
+            data-scroll-edge={scrollEdgeFeedback ? '' : undefined}
+          >
+            {scrollEdgeFeedback ? <div data-scroll-edge-content="">{children}</div> : children}
+          </div>
+        ) : null}
         {footer ? <div className={styles.footer}>{footer}</div> : null}
       </div>
     </div>,

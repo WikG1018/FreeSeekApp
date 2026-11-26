@@ -100,8 +100,12 @@
 .trigger.settingRow[aria-expanded='true'] svg {
   transform: rotate(90deg);
 }
-.trigger.settingRow:focus-visible {
+.trigger.settingRow:focus {
+  outline: 2px solid var(--fs-focus);
   outline-offset: -3px;
+}
+.trigger.settingRow:focus:not(:focus-visible) {
+  outline: none;
 }
 .trigger .settingCopy {
   flex: 1;

@@ -30,6 +30,7 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   providerSearch: 'thirdPartySearchTitle',
   providerSpeech: 'providerSpeechTitle',
   chat: 'settingsChatPreferences',
+  chatSpeech: 'providerSpeechTitle',
   personas: 'personaManagerTitle',
   personaEdit: 'settingsEditPersona',
   assistantSettings: isWindowsDesktop() ? 'assistantMemory' : 'assistantSettings',

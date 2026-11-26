@@ -6,6 +6,10 @@ import {
   type ProviderCatalogModel,
 } from '../../services/api/providerClient.js'
 import {
+  isMiMoHost,
+  isOfficialMiMoV26,
+  MIMO_API_BASE_URL,
+  MIMO_TOKEN_PLAN_BASE_URL,
   presetConnectionName,
   presetName,
   providerAccess,
@@ -15,7 +19,9 @@ import {
   modelsInProfile,
   modelSettingsFor,
   ProviderConfigError,
+  providerModelContextWindow,
   providerModelLabel,
+  providerModelOutputLimit,
   providerModelParameters,
   saveProvider,
   validModel,
@@ -35,17 +41,22 @@ import { useProviders } from '../../services/providers.js'
 import { MIMO_TTS_MODEL, MIMO_TTS_DESIGN_MODEL } from '../../services/api/speech.js'
 import { describeReadAloudError, previewRoleVoice, stopReadAloud, useReadAloud } from '../../services/speech/readAloud.js'
 import { reusableVoiceProfiles, roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
+import { openExternal } from '../../utils/openExternal.js'
 import { Button } from '../base/Button.js'
 import {
   IconAddOutline16,
+  IconBookOutline16,
   IconChevronDownOutline14,
   IconChevronRightOutline14,
   IconEyeOffOutline16,
   IconEyeOutline16,
   IconLinkOutline14,
+  IconPlayMediaOutline16,
   IconRefreshOutline16,
+  IconRightUpOutline14,
   IconSearchOutline16,
   IconSettingsOutline16,
+  IconStopFill16,
 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { useOptionPanel } from '../base/OptionPanel.js'
@@ -62,8 +73,9 @@ import {
 } from './ProviderSettings.js'
 import { ReasoningRow } from './ReasoningRow.js'
 import { SettingsDisclosure } from './SettingsDisclosure.js'
-import { Row, Section, SwitchRow } from './SettingsRows.js'
+import { Row, Section, SwitchRow, TutorialSteps } from './SettingsRows.js'
 import { useSettingsLeave } from './useSettingsLeave.js'
+import settingsStyles from './Settings.module.css'
 import styles from './ProviderSettings.module.css'
 
 const Field = ({ label, children }: { label: string; children: ReactNode }) => (
@@ -488,7 +500,7 @@ export const ProviderModelsPage = ({
                 .join(' · ')}
               prominent
               badge={profile.model === model ? t('providerDefaultModelBadge') : undefined}
-              onClick={() => editModel({ id: model })}
+              onClick={() => editModel(catalog.find(({ id }) => id === model) ?? { id: model })}
               target="providerModel"
             />
           )
@@ -638,10 +650,16 @@ export const ProviderModelPage = ({
         ...settings,
         name: settings.name?.trim() || undefined,
         maxOutputTokens: optionalInteger(output),
+        advertisedOutputLimit: model === selected.id
+          ? selected.outputLimit ?? settings.advertisedOutputLimit
+          : undefined,
       },
     },
   }
   const parameters = providerModelParameters(candidate, model)
+  const defaultContext = providerModelContextWindow({ ...candidate, contextWindows: undefined }, model)
+  const outputLimit = providerModelOutputLimit(candidate, model)
+  const mimoSampling = profile.protocol === 'openai' && isOfficialMiMoV26(profile.url, model)
   const capability = validModel(model) ? customReasoning(candidate, model) : undefined
   const saveDisabled = busy || !validModel(model)
   const saveMenu = useOptionPanel(t('providerMoreSaveActions'), {
@@ -655,6 +673,10 @@ export const ProviderModelPage = ({
   const selectedLevels = settings.reasoningLevels ?? levels
   const save = (activate: boolean) => {
     setError('')
+    if (mimoSampling && settings.temperature !== null && settings.temperature !== undefined && settings.temperature > 1.5) {
+      setError(t('providerMiMoTemperatureRange'))
+      return
+    }
     if (!existing && modelsInProfile(profile).includes(model)) {
       setError(t('providerModelExists'))
       return
@@ -733,8 +755,10 @@ export const ProviderModelPage = ({
           label={t('providerModelContextLabel')}
           fieldLabel={t('providerContextTokens')}
           value={context}
-          summary={context ? Number(context).toLocaleString() : t('providerNotSet')}
-          placeholder={t('providerContextUnset')}
+          summary={context ? Number(context).toLocaleString()
+            : defaultContext ? t('providerDefaultTokens', { tokens: defaultContext.toLocaleString() })
+              : t('providerNotSet')}
+          placeholder={defaultContext ? String(defaultContext) : t('providerContextUnset')}
           min={512}
           max={10000000}
           change={setContext}
@@ -746,11 +770,11 @@ export const ProviderModelPage = ({
           summary={
             output
               ? Number(output).toLocaleString()
-              : t('providerDefaultOutput', { tokens: parameters.maxOutputTokens.toLocaleString() })
+              : t('providerDefaultTokens', { tokens: parameters.maxOutputTokens.toLocaleString() })
           }
           placeholder={String(parameters.maxOutputTokens)}
           min={16}
-          max={1048576}
+          max={outputLimit ?? 1048576}
           change={setOutput}
         />
         {capability && (
@@ -779,7 +803,7 @@ export const ProviderModelPage = ({
             <input
               type="number"
               min={0}
-              max={2}
+              max={mimoSampling ? 1.5 : 2}
               step="any"
               value={settings.temperature ?? ''}
               onChange={(event) =>
@@ -787,6 +811,7 @@ export const ProviderModelPage = ({
               }
             />
           </Field>
+          {mimoSampling && <p className={styles.hint}>{t('providerMiMoSamplingHint')}</p>}
           {profile.protocol === 'openai' && (
             <div className={styles.field}>
               <span>{t('providerTokenParameter')}</span>
@@ -1052,16 +1077,76 @@ export const ProviderSearchPage = ({ onDone }: { onDone: () => void }) => {
   )
 }
 
-const SPEECH_CHECK_ID = 'speech-settings-preview'
+const SPEECH_SETUP_STEPS = [
+  'providerSpeechGuideReuse',
+  'providerSpeechGuideKey',
+  'providerSpeechGuideModels',
+  'providerSpeechGuideListen',
+] as const
+const MIMO_KEYS_PAGE = 'https://platform.xiaomimimo.com/#/console/api-keys'
+const MIMO_PLAN_KEYS_PAGE = 'https://platform.xiaomimimo.com/#/console/plan-manage'
+const SPEECH_ACCESS_URLS = {
+  api: MIMO_API_BASE_URL,
+  tokenPlan: MIMO_TOKEN_PLAN_BASE_URL,
+  custom: '',
+} as const
+type SpeechAccess = keyof typeof SPEECH_ACCESS_URLS
+
+const speechAccessFromUrl = (address: string): SpeechAccess => {
+  try {
+    const { protocol, hostname } = new URL(address.trim())
+    if (protocol === 'https:' && isMiMoHost(hostname)) {
+      return hostname === 'api.xiaomimimo.com' ? 'api' : 'tokenPlan'
+    }
+  } catch {
+    // Keep the custom choice while the address is incomplete.
+  }
+  return 'custom'
+}
+
+const SpeechSetupGuide = ({ defaultOpen }: { defaultOpen: boolean }) => {
+  const t = useTranslate()
+  const locale = useSettings((state) => state.locale)
+  const voiceDocs = `https://mimo.mi.com/docs/${locale}/quick-start/usage-guide/audio/speech-synthesis-v2.5`
+  return (
+    <SettingsDisclosure
+      guide
+      title={t('providerSpeechGuideTitle')}
+      icon={<IconBookOutline16 />}
+      defaultOpen={defaultOpen}
+    >
+      <TutorialSteps steps={SPEECH_SETUP_STEPS} />
+      <div className={settingsStyles.tutorialActions}>
+        <button
+          className={settingsStyles.tutorialButton}
+          type="button"
+          onClick={() => void openExternal(MIMO_KEYS_PAGE)}
+        >
+          {t('providerSpeechGuideOpenKeys')}
+          <IconRightUpOutline14 />
+        </button>
+        <button
+          className={settingsStyles.tutorialButton}
+          type="button"
+          onClick={() => void openExternal(voiceDocs)}
+        >
+          {t('providerSpeechGuideOpenDocs')}
+          <IconRightUpOutline14 />
+        </button>
+      </div>
+      <p className={settingsStyles.tutorialHint}>{t('providerSpeechGuideMatchKey')}</p>
+    </SettingsDisclosure>
+  )
+}
+
+const SPEECH_PREVIEWS = {
+  preset: 'speech-settings-preview-preset',
+  description: 'speech-settings-preview-description',
+} as const
+type SpeechPreview = keyof typeof SPEECH_PREVIEWS
 
 /** The connection page manages service settings. Voices are configured in chat preferences. */
-export const ProviderSpeechPage = ({
-  onDone,
-  onSwitch,
-}: {
-  onDone: () => void
-  onSwitch: () => void
-}) => {
+export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
   const t = useTranslate()
   const settings = useSettings((state) => state.roleVoice)
   const profiles = useProviders((state) => state.profiles)
@@ -1076,14 +1161,21 @@ export const ProviderSpeechPage = ({
     },
   }
   const [form, setForm] = useState(initial)
-  const [error, setError] = useState('')
-  const previewing = useReadAloud((state) => state.messageId === SPEECH_CHECK_ID)
+  const [error, setError] = useState<{ text: string; preview?: SpeechPreview }>()
+  const previewing = useReadAloud((state) => state.messageId)
+  const loadingAudio = useReadAloud((state) => state.status === 'loading')
   const leave = useSettingsLeave(JSON.stringify(form) !== JSON.stringify(initial))
   const available = reusableVoiceProfiles(profiles)
   const profile = roleVoiceProfile(profiles, form)
+  const speechAccess = speechAccessFromUrl(form.custom.url)
+  const canSave = form.source === 'follow'
+    ? Boolean(profile)
+    : Boolean(form.custom.url.trim() && form.custom.apiKey.trim())
+  const previewStatus = t(loadingAudio ? 'ttsPreparing' : 'providerSpeechStopPreview')
 
   const stopPreview = () => {
-    if (useReadAloud.getState().messageId === SPEECH_CHECK_ID) {
+    const id = useReadAloud.getState().messageId
+    if (id === SPEECH_PREVIEWS.preset || id === SPEECH_PREVIEWS.description) {
       stopReadAloud()
     }
   }
@@ -1091,27 +1183,36 @@ export const ProviderSpeechPage = ({
 
   const patch = (next: Partial<typeof form>) => {
     stopPreview()
-    setError('')
+    setError(undefined)
     setForm((current) => ({ ...current, ...next }))
   }
   const patchCustom = (key: keyof typeof form.custom, value: string) =>
     patch({ custom: { ...form.custom, [key]: value } })
 
+  const selectSource = (source: typeof form.source) => {
+    patch({
+      source,
+      custom: source === 'custom' && !form.custom.url.trim()
+        ? { ...form.custom, url: MIMO_API_BASE_URL }
+        : form.custom,
+    })
+  }
+
   const save = () => {
     const url = form.custom.url.trim()
     if (form.source === 'custom') {
       if (!url || !form.custom.apiKey.trim()) {
-        setError(t('providerSpeechMissingCustom'))
+        setError({ text: t('providerSpeechMissingCustom') })
         return
       }
       try {
         validateProviderUrl(url)
       } catch {
-        setError(t('providerErrorUrl'))
+        setError({ text: t('providerErrorUrl') })
         return
       }
       if ([form.custom.model, form.custom.designModel].some((model) => model.trim() && !validModel(model.trim()))) {
-        setError(t('providerSpeechInvalidModel'))
+        setError({ text: t('providerSpeechInvalidModel') })
         return
       }
     }
@@ -1121,34 +1222,58 @@ export const ProviderSpeechPage = ({
       model: form.custom.model.trim(),
       designModel: form.custom.designModel.trim(),
     } })) {
-      setError(t('providerErrorStorage'))
+      setError({ text: t('providerErrorStorage') })
       return
     }
     showToast({ key: 'providerSaved' })
     onDone()
   }
 
+  const audition = (voice: SpeechPreview) => {
+    if (!profile) {
+      return
+    }
+    const described = voice === 'description'
+    setError(undefined)
+    previewRoleVoice({
+      role: {
+        id: SPEECH_PREVIEWS[voice],
+        name: t(described ? 'providerSpeechPreviewCharacter' : 'roleVoiceNarrator'),
+        ...(described
+          ? { description: t('providerSpeechPreviewDescription') }
+          : { preset: settings.narratorVoice }),
+        aliases: [],
+        nature: '',
+        importance: described ? 'lead' : 'supporting',
+        source: 'user',
+        createdAt: 0,
+      },
+      text: t(described ? 'providerSpeechPreviewLine' : 'providerSpeechPreviewText'),
+      messageId: SPEECH_PREVIEWS[voice],
+      profile,
+      extrasShareVoice: false,
+      extraVoice: settings.extraVoice,
+    }, (failure) => {
+      const message = describeReadAloudError(failure)
+      setError({ text: t(message.key, message.params), preview: voice })
+    })
+  }
+
   return (
     <div className={styles.page}>
-      <Section>
-        <Row
-          label={t('settingsRoleVoice')}
-          target="chat"
-          description={t(settings.enabled ? 'providerSpeechOn' : 'providerSpeechOff')}
-          detail={t('providerSpeechSwitchHint')}
-          onClick={onSwitch}
-        />
-      </Section>
+      <SpeechSetupGuide defaultOpen={!profile} />
       <Section>
         <Select
           ariaLabel={t('providerSpeechSource')}
           settingRow="value"
+          compactMenu
+          showSelectedDetail={false}
           value={form.source}
           options={[
             { value: 'follow', label: t('providerSpeechFollow'), detail: t('providerSpeechFollowHint') },
             { value: 'custom', label: t('providerSpeechCustom'), detail: t('providerSpeechCustomHint') },
           ]}
-          onChange={(source) => patch({ source })}
+          onChange={selectSource}
         />
         {form.source === 'follow' ? (
           <>
@@ -1156,6 +1281,7 @@ export const ProviderSpeechPage = ({
               <Select
                 ariaLabel={t('providerSpeechConnection')}
                 settingRow="value"
+                compactMenu
                 value={form.providerId ?? ''}
                 options={[
                   { value: '', label: t('providerSpeechAutomatic') },
@@ -1164,62 +1290,81 @@ export const ProviderSpeechPage = ({
                 onChange={(providerId) => patch({ providerId: providerId || null })}
               />
             )}
-            {!profile && <p className={styles.hint}>{t('providerSpeechNeedMiMo')}</p>}
+            {!profile && (
+              <p className={`${styles.hint} ${settingsStyles.rowNote}`}>{t('providerSpeechNeedMiMo')}</p>
+            )}
           </>
         ) : (
-          <div className={styles.formFields}>
-            <Field label={t('providerSpeechUrl')}>
-              <input type="url" autoCapitalize="none" autoComplete="off" spellCheck={false}
-                value={form.custom.url} placeholder="https://api.xiaomimimo.com/v1"
-                onChange={(event) => patchCustom('url', event.target.value)} />
-            </Field>
-            <KeyField label={t('providerKey')} value={form.custom.apiKey}
-              change={(apiKey) => patchCustom('apiKey', apiKey)} />
-            <Field label={t('providerSpeechPresetModel')}>
-              <input autoCapitalize="none" autoComplete="off" spellCheck={false}
-                value={form.custom.model} placeholder={MIMO_TTS_MODEL}
-                onChange={(event) => patchCustom('model', event.target.value)} />
-            </Field>
-            <Field label={t('providerSpeechDesignModel')}>
-              <input autoCapitalize="none" autoComplete="off" spellCheck={false}
-                value={form.custom.designModel} placeholder={MIMO_TTS_DESIGN_MODEL}
-                onChange={(event) => patchCustom('designModel', event.target.value)} />
-            </Field>
-            <p className={styles.hint}>{t('providerSpeechCustomNote')}</p>
-          </div>
+          <>
+            <Select
+              ariaLabel={t('providerSpeechAccess')}
+              settingRow="value"
+              compactMenu
+              showSelectedDetail={false}
+              value={speechAccess}
+              options={[
+                { value: 'api', label: t('providerAccessApi'), detail: t('providerSpeechAccessApiHint') },
+                { value: 'tokenPlan', label: t('providerAccessTokenPlan'), detail: t('providerSpeechAccessPlanHint') },
+                { value: 'custom', label: t('providerSpeechAccessCustom') },
+              ]}
+              onChange={(access) => {
+                if (access !== speechAccess) {
+                  patchCustom('url', SPEECH_ACCESS_URLS[access])
+                }
+              }}
+            />
+            <div className={styles.formFields}>
+              <Field label={t('providerSpeechUrl')}>
+                <input type="url" autoCapitalize="none" autoComplete="off" spellCheck={false}
+                  value={form.custom.url} placeholder="https://example.com/v1"
+                  onChange={(event) => patchCustom('url', event.target.value)} />
+              </Field>
+              <KeyField
+                label={t('providerKey')}
+                value={form.custom.apiKey}
+                change={(apiKey) => patchCustom('apiKey', apiKey)}
+                helpHref={speechAccess === 'tokenPlan' ? MIMO_PLAN_KEYS_PAGE : undefined}
+              />
+              <Field label={t('providerSpeechPresetModel')}>
+                <input autoCapitalize="none" autoComplete="off" spellCheck={false}
+                  value={form.custom.model} placeholder={MIMO_TTS_MODEL}
+                  onChange={(event) => patchCustom('model', event.target.value)} />
+              </Field>
+              <Field label={t('providerSpeechDesignModel')}>
+                <input autoCapitalize="none" autoComplete="off" spellCheck={false}
+                  value={form.custom.designModel} placeholder={MIMO_TTS_DESIGN_MODEL}
+                  onChange={(event) => patchCustom('designModel', event.target.value)} />
+              </Field>
+              <p className={styles.hint}>{t('providerSpeechCustomNote')}</p>
+            </div>
+          </>
         )}
-        {profile && (
-          <Row
-            label={t(previewing ? 'ttsStop' : 'providerSpeechPreview')}
-            onClick={() => {
-              setError('')
-              previewRoleVoice({
-                role: {
-                  id: 'speech-settings',
-                  name: t('roleVoiceNarrator'),
-                  preset: settings.narratorVoice,
-                  aliases: [],
-                  nature: '',
-                  importance: 'supporting',
-                  source: 'user',
-                  createdAt: 0,
-                },
-                text: t('providerSpeechPreviewText'),
-                messageId: SPEECH_CHECK_ID,
-                profile,
-                extrasShareVoice: false,
-                extraVoice: settings.extraVoice,
-              }, (failure) => {
-                const message = describeReadAloudError(failure)
-                setError(t(message.key, message.params))
-              })
-            }}
-          />
-        )}
-        {error && <p className={styles.error} role="alert">{error}</p>}
       </Section>
+      {profile && (
+        <Section title={t('providerSpeechAudition')}>
+          <Row
+            label={t('providerSpeechPreviewNarrator')}
+            icon={previewing === SPEECH_PREVIEWS.preset ? <IconStopFill16 /> : <IconPlayMediaOutline16 />}
+            value={previewing === SPEECH_PREVIEWS.preset ? previewStatus : t('settingsLeadVoicePreset')}
+            onClick={() => audition('preset')}
+          />
+          {error?.preview === 'preset' && (
+            <p className={`${styles.error} ${styles.insetHint}`} role="alert">{error.text}</p>
+          )}
+          <Row
+            label={t('providerSpeechPreviewLead')}
+            icon={previewing === SPEECH_PREVIEWS.description ? <IconStopFill16 /> : <IconPlayMediaOutline16 />}
+            value={previewing === SPEECH_PREVIEWS.description ? previewStatus : t('settingsLeadVoiceDescribed')}
+            onClick={() => audition('description')}
+          />
+          {error?.preview === 'description' && (
+            <p className={`${styles.error} ${styles.insetHint}`} role="alert">{error.text}</p>
+          )}
+        </Section>
+      )}
+      {error && !error.preview && <p className={styles.error} role="alert">{error.text}</p>}
       <div className={styles.footer} data-provider-actions="">
-        <Button block onClick={save}>{t('providerSpeechSave')}</Button>
+        <Button block disabled={!canSave} onClick={save}>{t('providerSpeechSave')}</Button>
       </div>
       {leave.dialog}
     </div>

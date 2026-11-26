@@ -174,4 +174,14 @@
   font: inherit;
   cursor: pointer;
   text-align: left;
+  min-height: 42px;
+  border-radius: 12px;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+}
+
+.assistantTitle:focus-visible {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: 2px;
 }

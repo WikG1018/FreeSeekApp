@@ -4,7 +4,7 @@
  * 聊天模型在回答里用 ⟦ ⟧ 标注「谁在说话、这段什么语气」，前台渲染前剥掉，朗读时按段取音色。
  *
  *   首次出场（完整声明）：
- *     ⟦新角色：林黛玉｜别名：林妹妹、颦儿｜音色：茉莉｜性格：多愁善感，说话轻柔｜重要性：主角⟧
+ *     ⟦新角色：林黛玉｜别名：林妹妹、颦儿｜声线：女声｜音色：茉莉｜性格：多愁善感｜重要性：主角⟧
  *   之后每段：
  *     ⟦黛玉｜语气：委屈，声音发颤⟧你别管我。
  *
@@ -45,20 +45,28 @@ export const MAX_ROLE_ALIASES = 50
 export const MAX_ROLES = 500
 
 export type RoleImportance = 'lead' | 'supporting' | 'extra'
+export type VoiceGender = 'female' | 'male'
+export const MAX_ROLE_SAMPLE_BYTES = 512 * 1024
+export type RoleVoiceSample = { id: string; size: number }
 
 /** 存在会话上的角色；接续新对话时随 InheritedContext 一起走 */
 export type VoiceRole = {
   id: string
   name: string
   aliases: string[]
+  /** 角色设定中的声线，旧记录和未交代的角色可缺省。 */
+  voiceGender?: VoiceGender
   /** 音色二选一：预置 ID（出声快）或描述（更贴合，但每段要等整段合成完） */
   preset?: MiMoPresetVoice
   description?: string
+  voiceSample?: RoleVoiceSample
   /** 性格底色：约束语气的范围，用户可编辑 */
   nature: string
   importance: RoleImportance
-  /** user 设定过的角色，模型不能再改音色/别名/性格 */
+  /** user 设定过的角色，模型可补充别名，音色、性格和重要性由用户决定 */
   source: 'model' | 'user'
+  /** Introduced by this reply version. In earlier archives, createdAt identifies the first reply. */
+  introducedBy?: string
   createdAt: number
 }
 
@@ -67,6 +75,7 @@ export type VoiceSegment = {
   /** 本段语气，模型临场写 */
   tone: string
   text: string
+  span?: { start: number; closed: boolean }
 }
 
 export type ParsedReply = {
@@ -104,9 +113,11 @@ const TAG_MAX_LENGTH = 400
 const FIELD_KEYS = new Map<string, string>(
   [
     ['新角色', 'new character', 'new role'],
+    ['说话人', 'speaker'],
     ['角色', 'character', 'role'],
     ['角色名', 'character name', 'role name'],
     ['别名', 'aliases', 'alias'],
+    ['声线', '性别', 'voice gender', 'gender'],
     ['音色', 'voice'],
     ['性格', 'nature', 'personality'],
     ['重要性', 'importance'],
@@ -114,6 +125,7 @@ const FIELD_KEYS = new Map<string, string>(
     ['_bare'],
   ].flatMap(([field, ...labels]) => [field, ...labels].map((label) => [label, field] as const))
 )
+const speakerLabel = /^(?:说话人|speaker)\s*[:：]/i
 /**
  * 判断一行是不是标注行。
  *
@@ -126,11 +138,11 @@ const looksLikeTagLine = (line: string) => {
   if (!text || text.length > 160) {
     return false
   }
-  if (!/[｜|]/.test(text)) {
-    return false
-  }
   // 去掉外面可能套着的括号再判断
   const inner = text.replace(/^[「『【〔⟦［[(]+/, '').replace(/[」』】〕⟧］\])]+$/, '')
+  if (!/[｜|]/.test(inner)) {
+    return false
+  }
   return inner.split(/[｜|]/).some((part) => {
     const separator = part.search(/[:：]/)
     return separator > 0 && FIELD_KEYS.has(part.slice(0, separator).trim().toLowerCase())
@@ -146,12 +158,17 @@ const RANK: Record<RoleImportance, number> = { extra: 0, supporting: 1, lead: 2 
 
 const IMPORTANCE_WORDS: Record<string, RoleImportance> = {
   主角: 'lead',
+  共同主角: 'lead',
+  男主: 'lead',
+  女主: 'lead',
   主要: 'lead',
   次要: 'supporting',
   配角: 'supporting',
   路人: 'extra',
   龙套: 'extra',
   lead: 'lead',
+  'co-lead': 'lead',
+  protagonist: 'lead',
   supporting: 'supporting',
   extra: 'extra',
 }
@@ -161,6 +178,63 @@ const isPresetVoice = (value: string): value is MiMoPresetVoice =>
   value === 'mimo_default'
 
 const clean = (value: string | undefined) => value?.trim() ?? ''
+
+const voiceGenderField = (value: string | undefined): VoiceGender | undefined => {
+  const field = clean(value).toLowerCase()
+  if (/^(女|女声|女性|female)$/.test(field)) {
+    return 'female'
+  }
+  if (/^(男|男声|男性|male)$/.test(field)) {
+    return 'male'
+  }
+  return undefined
+}
+
+export const voiceGenderFromDescription = (value: string): VoiceGender | undefined => {
+  const female = /女声|女性|少女|\b(?:female|woman|girl)\b/i.test(value)
+  const male = /男声|男性|少年|\b(?:male|man|boy)\b/i.test(value)
+  return female === male ? undefined : female ? 'female' : 'male'
+}
+
+const presetPairs = [
+  ['冰糖', '苏打'],
+  ['茉莉', '白桦'],
+  ['Mia', 'Milo'],
+  ['Chloe', 'Dean'],
+] as const satisfies ReadonlyArray<readonly [MiMoPresetVoice, MiMoPresetVoice]>
+
+export const presetVoiceGender = (voice: MiMoPresetVoice | undefined): VoiceGender | undefined => {
+  if (voice === 'mimo_default' || presetPairs.some(([female]) => female === voice)) {
+    return 'female'
+  }
+  return presetPairs.some(([, male]) => male === voice) ? 'male' : undefined
+}
+
+export const presetForGender = (voice: MiMoPresetVoice, gender?: VoiceGender): MiMoPresetVoice => {
+  if (!gender || presetVoiceGender(voice) === gender) {
+    return voice
+  }
+  const pair = presetPairs.find(([female, male]) => female === voice || male === voice)
+  return pair?.[gender === 'female' ? 0 : 1] ?? DEFAULT_EXTRA_VOICE
+}
+
+export const voiceGenderLabel = (gender: VoiceGender) => gender === 'female' ? '女声' : '男声'
+
+const declaredRoleVoice = (
+  voice: string,
+  fallback: MiMoPresetVoice,
+  mayDescribe: boolean,
+  gender?: VoiceGender
+): Pick<VoiceRole, 'preset' | 'description'> => {
+  if (isPresetVoice(voice)) {
+    return { preset: presetForGender(voice, gender), description: undefined }
+  }
+  const describedGender = voiceGenderFromDescription(voice)
+  if (voice && mayDescribe && (!gender || !describedGender || gender === describedGender)) {
+    return { preset: undefined, description: voice }
+  }
+  return { preset: presetForGender(fallback, gender ?? describedGender), description: undefined }
+}
 
 /** 提示词让模型在没有别名时写「别名：无」「Aliases：none」，这些占位词不是真别名 */
 const NO_ALIAS = /^(无|没有|暂无|无别名|none|n\/a|na|-|—|–)$/i
@@ -226,9 +300,9 @@ export type RoleLookup = (name: string) => VoiceRole | undefined
 /** 一个识别出来的标注：在原文里的起止位置和内容 */
 type TagMark = { start: number; end: number; inner: string }
 
-const maskInlineCode = (line: string) => {
+const maskInlineCode = (line: string, maskOpenCode: boolean) => {
   const runs = [...line.matchAll(/\x60+/g)]
-  if (runs.length < 2) {
+  if (!runs.length || (runs.length === 1 && !maskOpenCode)) {
     return line
   }
   const nextRun = new Map<number, number>()
@@ -247,6 +321,9 @@ const maskInlineCode = (line: string) => {
       backslashes++
     }
     const partner = partners[i]
+    if (maskOpenCode && partner < 0 && backslashes % 2 === 0) {
+      return masked + line.slice(cursor, start) + ' '.repeat(line.length - start)
+    }
     if (partner < 0 || backslashes % 2) {
       continue
     }
@@ -259,7 +336,7 @@ const maskInlineCode = (line: string) => {
 }
 
 /** Ignore code while scanning markers, keeping the original character offsets. */
-const maskMarkdownCode = (text: string) => {
+const maskMarkdownCode = (text: string, maskOpenCode = false) => {
   if (!text.includes('\x60') && !text.includes('~~~')) {
     return text
   }
@@ -278,7 +355,7 @@ const maskMarkdownCode = (text: string) => {
         fence = marker[1]
         return ' '.repeat(line.length)
       }
-      return maskInlineCode(line)
+      return maskInlineCode(line, maskOpenCode)
     })
     .join('\n')
 }
@@ -292,8 +369,8 @@ const maskMarkdownCode = (text: string) => {
  * 只靠括号会被模型的各种变体打穿，只靠行结构又会漏掉「⟦旁白⟧台词」这种把台词接在同行的写法，
  * 所以两条都要。
  */
-const scanMarks = (value: string): TagMark[] => {
-  const text = maskMarkdownCode(value)
+const scanMarks = (value: string, maskOpenCode = false): TagMark[] => {
+  const text = maskMarkdownCode(value, maskOpenCode)
   const marks: TagMark[] = []
   let index = 0
   while (index < text.length) {
@@ -327,7 +404,9 @@ const scanMarks = (value: string): TagMark[] => {
       index = contentStart
       continue
     }
-    if (!strong && !looksLikeTagLine(inner)) {
+    const speakerAtLineStart = speakerLabel.test(inner) &&
+      !text.slice(text.lastIndexOf('\n', index - 1) + 1, index).trim()
+    if (!strong && !speakerAtLineStart && !looksLikeTagLine(inner)) {
       index = contentStart
       continue
     }
@@ -401,14 +480,6 @@ export const createRoleLookup = (roles: ReadonlyArray<VoiceRole>): RoleLookup =>
   }
 }
 
-export const defaultRoleVoice = (
-  importance: RoleImportance,
-  narratorVoice: MiMoPresetVoice,
-  extraVoice: MiMoPresetVoice
-): Pick<VoiceRole, 'preset' | 'description'> => ({
-  preset: importance === 'extra' ? extraVoice : narratorVoice,
-})
-
 /**
  * 解析一条回答。`existing` 是会话当前的角色表。
  * 不修改入参；所有变更以 newRoles / aliasAdditions / promotions 返回，由调用方合并。
@@ -420,9 +491,11 @@ export const parseRoleMarkers = (
     narratorVoice?: MiMoPresetVoice
     extraVoice?: MiMoPresetVoice
     now?: number
-    /** false = 用户把「主角默认音色」设成了预置：模型写的音色描述不采纳，按没写处理，落回预置 */
+    /** false = 用户把「主配角音色」设成了预置：模型写的音色描述不采纳，按没写处理，落回预置 */
     allowDescription?: boolean
     includeNarration?: boolean
+    speechOnly?: boolean
+    narrateUnmarked?: boolean
   } = {}
 ): ParsedReply => {
   const narratorVoice = options.narratorVoice ?? DEFAULT_NARRATOR_VOICE
@@ -437,12 +510,38 @@ export const parseRoleMarkers = (
   const updates: ParsedReply['updates'] = []
   const unknownNames: string[] = []
   const newLookup = new Map<string, VoiceRole>()
-  const resolve = (name: string) => newLookup.get(roleKey(name)) ?? lookup(name)
+  const revisedRoles = new Map<string, VoiceRole>()
+  const resolve = (name: string) => {
+    const found = newLookup.get(roleKey(name)) ?? lookup(name)
+    return found && (revisedRoles.get(found.id) ?? found)
+  }
+  const revise = (role: VoiceRole, patch: Partial<VoiceRole>) => {
+    const revised = { ...role, ...patch }
+    revisedRoles.set(role.id, revised)
+    updates.push({ roleId: role.id, patch })
+    return revised
+  }
 
-  const marks = scanMarks(text)
-  const addNarration = (value: string) => {
-    if (options.includeNarration && marks.length && value.trim()) {
-      segments.push({ roleId: null, tone: '', text: value.trim() })
+  const marks = scanMarks(text, options.speechOnly)
+  const dangling = options.speechOnly ? danglingOpener(text) : -1
+  const speechText = options.speechOnly
+    ? maskMarkdownCode(dangling < 0 ? text : text.slice(0, dangling), true)
+    : text
+  const addSpeech = (roleId: string | null, tone: string, from: number, to: number) => {
+    const raw = speechText.slice(from, to)
+    const spoken = raw.trim()
+    if (spoken) {
+      segments.push({
+        roleId, tone, text: spoken,
+        ...(options.speechOnly && {
+          span: { start: from + raw.length - raw.trimStart().length, closed: to < text.length && to <= speechText.length },
+        }),
+      })
+    }
+  }
+  const addNarration = (from: number, to: number) => {
+    if (options.includeNarration && (marks.length || options.narrateUnmarked)) {
+      addSpeech(null, '', from, to)
     }
   }
   let plain = ''
@@ -451,97 +550,110 @@ export const parseRoleMarkers = (
     // 标记之前的文本照常显示
     const leading = text.slice(cursor, mark.start)
     plain += leading
-    addNarration(leading)
+    addNarration(cursor, mark.start)
     const nextStart = marks[index + 1]?.start ?? text.length
     // 标记之后到下一个标记之前的全部文本都要渲染……
     const rest = text.slice(mark.end, nextStart)
     plain += rest
     cursor = nextStart
-    // 第一段是角色的台词。空行之后未标注的文字交给旁白。
-    const paragraphs = rest.trimStart().split(/\r?\n[\t ]*\r?\n/)
-    const speech = clean(paragraphs[0])
     const { fields, looseName, looseValue } = parseFields(mark.inner)
-
-    const isNew = fields.has('新角色')
+    const explicit = fields.has('说话人')
+    // Only the legacy format uses the first blank line as an implicit narrator transition.
+    const trimmed = rest.trimStart()
+    const nextParagraph = explicit ? -1 : trimmed.search(/\r?\n[\t ]*\r?\n/)
+    const speechEnd = nextParagraph < 0 ? nextStart : mark.end + rest.length - trimmed.length + nextParagraph
+    const hasDeclaration = fields.has('新角色') ||
+      (explicit && (fields.has('音色') || fields.has('别名') || fields.has('重要性')))
     const name = clean(
-      fields.get('新角色') ?? fields.get('角色') ?? fields.get('角色名') ?? fields.get('_bare') ?? looseName
+      fields.get('说话人') ?? fields.get('新角色') ?? fields.get('角色') ?? fields.get('角色名') ?? fields.get('_bare') ?? looseName
     )
     if (!name || name.length > MAX_ROLE_NAME || name.includes('\0')) {
-      addNarration(rest)
+      addNarration(mark.end, nextStart)
       continue
     }
     const tone = clean(fields.get('语气'))
+    const isNarrator = roleKey(name) === NARRATOR
+    const declaredGender = isNarrator ? undefined : voiceGenderField(fields.get('声线'))
     let role = resolve(name)
+    const gender = role?.voiceGender ?? declaredGender
+    if (role?.source === 'model' && !role.voiceGender && declaredGender) {
+      // 旧会话可用剧情补记声线，且只校正自动分配的音色。
+      const fallback = role.importance === 'extra' ? extraVoice : narratorVoice
+      const patch = declaredRoleVoice(
+        role.preset ?? role.description ?? '', fallback, Boolean(role.description), declaredGender
+      )
+      role = revise(role, { ...patch, voiceGender: declaredGender })
+    }
     // 没写「新角色」声明、表里也没有：按规划补建，否则模型只写「⟦旁白⟧」时整个功能都失效
-    const autoCreate = !role && !isNew
-    if (isNew || autoCreate) {
-      const declaredAliases = splitAliases(fields.get('别名') ?? '', name)
-        .filter((alias) => !resolve(alias))
+    const autoCreate = !role && !hasDeclaration
+    if (hasDeclaration || autoCreate) {
+      const declaredAliases = splitAliases(fields.get('别名') ?? '', name).filter((alias) => {
+        const key = roleKey(alias)
+        if (key === NARRATOR || newLookup.has(key)) {
+          return false
+        }
+        const owner = lookup(alias)
+        // 同一角色的简称可以从模糊匹配补成正式别名。其他角色占用的称呼保留归属。
+        return !owner || (owner.id === role?.id && roleKey(owner.name) !== key &&
+          !owner.aliases.some((established) => roleKey(established) === key))
+      })
       const declaredNature = clean(fields.get('性格'))
-      const isNarrator = roleKey(name) === NARRATOR
       // 重要性可以写在「重要性：」里，也可以写在「角色名：次要」那一侧
       const importanceWord = (clean(fields.get('重要性')) || looseValue).toLowerCase()
-      const importance = Object.hasOwn(IMPORTANCE_WORDS, importanceWord)
-        ? IMPORTANCE_WORDS[importanceWord]
-        : isNarrator ? 'supporting' : 'extra'
-      const declaredVoice = clean(fields.get('音色'))
+      const importance = isNarrator
+        ? 'supporting'
+        : (Object.hasOwn(IMPORTANCE_WORDS, importanceWord)
+            ? IMPORTANCE_WORDS[importanceWord]
+            : (role?.importance ?? 'extra'))
+      const taggedVoice = clean(fields.get('音色'))
+      const declaredVoice = !isNarrator || isPresetVoice(taggedVoice) ? taggedVoice : ''
       if (role) {
-        // 已有角色：用户设定过的音色一律不动。模型早先按裸名字猜出来的路人，
-        // 允许用后到的完整声明补齐——否则「先出现「黛玉」、再出现新角色：林黛玉」会留下两个声音。
-        const additions = declaredAliases
-        if (additions.length) {
-          aliasAdditions.push({ roleId: role.id, aliases: additions })
-          for (const alias of additions) {
+        if (declaredAliases.length) {
+          aliasAdditions.push({ roleId: role.id, aliases: declaredAliases })
+          for (const alias of declaredAliases) {
             newLookup.set(roleKey(alias), role)
           }
         }
-        const awaitingDeclaration = role.source === 'model' && !role.nature && !role.description
-        if (awaitingDeclaration) {
+        if (role.source === 'model') {
+          const level = RANK[importance] > RANK[role.importance] ? importance : role.importance
           const patch: Partial<VoiceRole> = {}
-          // 描述只给主角/次要，而且要用户没关；旁白和路人任何时候都只用预置
-          const mayDescribe = allowDescription && !isNarrator &&
-            (role.importance !== 'extra' || importance !== 'extra')
-          if (declaredVoice && isPresetVoice(declaredVoice) && !role.description) {
-            patch.preset = declaredVoice
-          } else if (declaredVoice && !isPresetVoice(declaredVoice) && mayDescribe && role.description !== declaredVoice) {
-            patch.description = declaredVoice
-            // 有了描述就不能再留着预置，否则显示和朗读都还按预置走
-            patch.preset = undefined
+          if (!role.description && declaredVoice) {
+            const mayDescribe = allowDescription && !isNarratorRole(role) && level !== 'extra'
+            const fallback = level === 'extra' ? extraVoice : narratorVoice
+            const voice = declaredRoleVoice(declaredVoice, fallback, mayDescribe, gender)
+            if (voice.description || (!role.nature && (mayDescribe || isPresetVoice(declaredVoice)))) {
+              Object.assign(patch, voice)
+            }
           }
-          if (declaredNature && declaredNature !== role.nature) {
+          if (!role.nature && declaredNature) {
             patch.nature = declaredNature
           }
-          if (Object.keys(patch).length) {
-            updates.push({ roleId: role.id, patch })
+          if (level !== role.importance) {
+            promotions.push({ roleId: role.id, to: level })
+            role = { ...role, importance: level }
+            revisedRoles.set(role.id, role)
           }
-        }
-        // RANK 里 extra=0、lead=2，升级就是新值比旧值大
-        if (RANK[importance] > RANK[role.importance]) {
-          promotions.push({ roleId: role.id, to: importance })
+          if (Object.keys(patch).length) {
+            revise(role, patch)
+          }
         }
       } else {
         if (autoCreate) {
           unknownNames.push(name)
         }
-        // 旁白和路人只能用预置；主角/次要可以写描述——除非用户把主角音色设成了「预置」
-        const usePreset =
-          !allowDescription ||
-          isNarrator ||
-          importance === 'extra' ||
-          !declaredVoice ||
-          isPresetVoice(declaredVoice)
-        const fallback = defaultRoleVoice(importance, narratorVoice, extraVoice)
+        // 旁白和路人只能用预置；主角/次要可以写描述——除非用户选择了预置模式
+        const mayDescribe = allowDescription && !isNarrator && importance !== 'extra'
+        const fallback = importance === 'extra' ? extraVoice : narratorVoice
         const created: VoiceRole = {
           id: `role-${now}-${newRoles.length}-${name}`,
           name,
           aliases: declaredAliases,
+          ...(gender && { voiceGender: gender }),
           nature: declaredNature || (isNarrator ? (name === NARRATOR ? '冷静客观' : 'calm and objective') : ''),
           importance,
           source: 'model',
           createdAt: now,
-          ...(usePreset
-            ? { preset: (isPresetVoice(declaredVoice) ? declaredVoice : fallback.preset) as MiMoPresetVoice }
-            : { description: declaredVoice }),
+          ...declaredRoleVoice(declaredVoice, fallback, mayDescribe, gender),
         }
         newRoles.push(created)
         newLookup.set(roleKey(name), created)
@@ -553,12 +665,13 @@ export const parseRoleMarkers = (
     } else if (!role) {
       continue
     }
-    if (speech && role) {
-      segments.push({ roleId: role.id, tone, text: speech })
+    if (role) {
+      addSpeech(role.id, tone, mark.end, speechEnd)
     }
-    addNarration(paragraphs.slice(1).join('\n\n'))
+    addNarration(speechEnd, nextStart)
   }
   plain += text.slice(cursor)
+  addNarration(cursor, text.length)
 
   return {
     segments,
@@ -577,6 +690,9 @@ export const parseRoleMarkers = (
  * 未闭合的标注永远不是正文内容，显示出来只会是噪音。
  */
 export const stripRoleMarkers = (text: string) => {
+  if (!/[｜|]/.test(text) && !OPENERS.some((opener) => text.includes(opener))) {
+    return text
+  }
   const marks = scanMarks(text)
   if (!marks.length) {
     const dangling = danglingOpener(text)
@@ -623,7 +739,8 @@ const danglingOpener = (value: string) => {
       continue
     }
     const strong = STRONG_OPENERS.has(opener)
-    if (strong || /[｜|]/.test(text.slice(contentStart, cursor)) || /语气\s*[:：]/.test(text.slice(contentStart, cursor))) {
+    const inner = text.slice(contentStart, cursor)
+    if (strong || /[｜|]/.test(inner) || /语气\s*[:：]/.test(inner) || speakerLabel.test(inner)) {
       found = index
     }
     index = cursor
@@ -633,5 +750,5 @@ const danglingOpener = (value: string) => {
 
 export const hasRoleMarkers = (text: string) => scanMarks(text).length > 0
 
-export const isNarratorRole = (role: Pick<VoiceRole, 'name'>) => role.name === NARRATOR
+export const isNarratorRole = (role: Pick<VoiceRole, 'name'>) => roleKey(role.name) === NARRATOR
 export const NARRATOR_NAME = NARRATOR

@@ -6,6 +6,123 @@ const PRO_REMINDER_REJECTION =
   'The latest_reminder message is unavailable for model deepseek-v4-pro. Please use deepseek-flash instead. (request_id: test-pro-reminder)'
 
 export const runProviderCases = async ({ run }) => {
+  await run('MiMo and model catalogs use the correct output budget and parameter', async (page) => {
+    const result = await page.evaluate(async () => {
+      const a = window.__audit
+      const requests = []
+      let shortProbe = true
+      window.fetch = async (_url, init) => {
+        if (init.method === 'GET') {
+          return Response.json({ data: [{ id: 'from-catalog', context_length: 64000, outputTokenLimit: 2048 }] })
+        }
+        const body = JSON.parse(init.body)
+        requests.push(body)
+        if (shortProbe && body.max_completion_tokens === 1024) {
+          shortProbe = false
+          return new Response('data: {"choices":[{"delta":{"reasoning_content":"测试思考"},"finish_reason":"length"}]}\n\n', {
+            headers: { 'content-type': 'text/event-stream' },
+          })
+        }
+        return new Response('data: {"choices":[{"delta":{"content":"正常"},"finish_reason":"stop"}]}\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+      const model = 'mimo-v2.6-flash'
+      const base = {
+        ...a.providers.emptyProfile(), name: '小米', protocol: 'openai',
+        url: 'https://token-plan-cn.xiaomimimo.com/v1', model, apiKey: 'fixture-key',
+        extraBody: { max_tokens: 4096, max_completion_tokens: 32, max_output_tokens: 64, temperature: 0.8, top_p: 0.9, seed: 42 },
+      }
+      const profile = a.providers.saveProvider(base, true)
+      const signal = new AbortController().signal
+      const limits = {
+        output: a.providers.providerModelParameters(profile, model).maxOutputTokens,
+        context: a.providers.providerModelContextWindow(profile, model),
+        smallerWindow: a.providers.providerModelParameters({ ...profile, contextWindows: { [model]: 65536 } }, model).maxOutputTokens,
+        input: a.providers.modelInputCapabilities(model, profile),
+        disabledVision: a.providers.modelInputCapabilities(model, { ...profile, modelSettings: { [model]: { vision: false } } }).vision,
+      }
+      const catalog = await a.providerClient.fetchProviderCatalog(profile, signal)
+      const catalogProfile = a.providers.saveProvider({
+        ...base, url: 'https://example.test/v1', model: 'from-catalog',
+        modelSettings: { 'from-catalog': { advertisedOutputLimit: catalog[0].outputLimit } },
+      })
+      const officialOpenAI = a.providers.providerModelParameters({ ...base, url: 'https://api.openai.com/v1' }, 'gpt-test')
+      await a.providerClient.testProviderModel(profile, signal)
+      const send = async (text) => {
+        a.drafts.setDraftText(null, text)
+        a.store.sendMessage(null)
+        await a.waitIdle()
+      }
+      await send('先使用模型默认值')
+      const explicit = a.providers.saveProvider({
+        ...profile, modelSettings: { [model]: { maxOutputTokens: 8192, defaultReasoning: 'off', temperature: 1.3 } },
+      }, true)
+      await send('再使用手动设置')
+      const invalid = { ...explicit, modelSettings: { [model]: { maxOutputTokens: 131073 } } }
+      const rejected = []
+      try { a.providers.saveProvider(invalid, true) } catch (error) { rejected.push([error.reason, error.outputLimit]) }
+      try { await a.providerClient.testProviderModel(invalid, signal) } catch (error) { rejected.push([error.reason, error.outputLimit]) }
+      const moved = a.providers.saveProvider({ ...catalogProfile, url: 'https://next.example.test/v1' })
+      return { limits, catalog, rejected, requests,
+        external: a.providers.providerModelParameters(catalogProfile, 'from-catalog').maxOutputTokens,
+        moved: a.providers.providerModelParameters(moved, 'from-catalog').maxOutputTokens,
+        openAIParam: officialOpenAI.tokenParameter,
+      }
+    })
+    assert.deepEqual(result.limits, {
+      output: 131072, context: 1000000, smallerWindow: 32768,
+      input: { vision: true, pdf: false }, disabledVision: false,
+    })
+    assert.deepEqual(result.catalog, [{ id: 'from-catalog', contextWindow: 64000, outputLimit: 2048 }])
+    assert.deepEqual(result.rejected, [['output-limit', 131072], ['output-limit', 131072]])
+    assert.equal(result.external, 2048)
+    assert.equal(result.moved, 4096)
+    assert.equal(result.openAIParam, 'max_completion_tokens')
+    assert.deepEqual(result.requests.map((body) => body.max_completion_tokens), [1024, 4096, 131072, 8192])
+    assert.ok(result.requests.every((body) => body.seed === 42 && !('max_tokens' in body) && !('max_output_tokens' in body)))
+    assert.ok(result.requests.slice(0, 3).every((body) => !('temperature' in body) && !('top_p' in body)))
+    assert.equal(result.requests.at(-1).temperature, 1.3)
+    assert.equal(result.requests.at(-1).top_p, 0.9)
+  })
+
+  await run('custom model recovers an initial gateway error and explains a thinking-only output limit', async (page) => {
+    await page.evaluate(() => {
+      const a = window.__audit
+      const model = 'mimo-v2.6-flash'
+      a.providers.saveProvider({ ...a.providers.emptyProfile(), model, protocol: 'openai',
+        url: 'https://token-plan-cn.xiaomimimo.com/v1', apiKey: 'fixture-key',
+        modelSettings: { [model]: { maxOutputTokens: 4096 } },
+      }, true)
+      window.__capRequests = []
+      window.fetch = async (_url, init) => {
+        const number = window.__capRequests.push(JSON.parse(init.body))
+        if (number === 1) return new Response('{}', { status: 502 })
+        const delta = number === 2 ? { reasoning_content: '正在梳理多个角色。' } : { content: '正文已经生成。' }
+        const finish_reason = number === 2 ? 'length' : 'stop'
+        return new Response('data: ' + JSON.stringify({ choices: [{ delta, finish_reason }] }) + '\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+    })
+    const input = page.getByTestId('chat-composer').locator('textarea')
+    await input.fill('写一段多角色对话')
+    await input.press('Enter')
+    await page.getByText('思考用完了本次输出额度，正文还没生成。', { exact: true }).waitFor()
+    if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+      await page.screenshot({ path: 'tmp/regression/role-voice-output-limit-zh.png', animations: 'disabled' })
+    }
+    assert.equal(await page.evaluate(() => window.__capRequests.length), 2)
+    const button = page.getByRole('button', { name: '继续生成', exact: true })
+    await button.click()
+    await page.getByText('正文已经生成。', { exact: true }).waitFor()
+    const requests = await page.evaluate(() => window.__capRequests)
+    assert.deepEqual(requests.map((body) => body.max_completion_tokens), [4096, 4096, 4096])
+    assert.equal(requests[2].messages.filter(({ role }) => role === 'user').length, 1)
+    assert.equal(requests[2].messages.filter(({ role }) => role === 'assistant').length, 0)
+    assert.equal(await page.getByText('思考用完了本次输出额度，正文还没生成。', { exact: true }).count(), 0)
+  })
+
   await run(
     'continued custom chats send text and available files when old originals are missing',
     async (page) => {

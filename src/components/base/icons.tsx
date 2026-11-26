@@ -389,6 +389,24 @@ export const IconSettingsOutline16 = () => (
   </svg>
 )
 
+export const IconResumeOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M5 3.25 12 8l-7 4.75V3.25Z" stroke="currentColor" strokeWidth={1.35} strokeLinejoin="round" />
+  </svg>
+)
+
+export const IconPauseOutline16 = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M5.5 3.75v8.5m5-8.5v8.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+)
+
+export const IconStopOutline16 = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <rect x="3.65" y="3.65" width="8.7" height="8.7" rx="1.6" stroke="currentColor" strokeWidth="1.5" />
+  </svg>
+)
+
 export const IconStopFill16 = () => (
   <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

@@ -1,6 +1,7 @@
 const GUIDE_KEY = 'freeseek:onboarded'
 const NOTICE_KEY = 'freeseek:notice-version'
 const NOTICE_VERSION = '1'
+const ROLE_VOICE_INTRO_KEY = 'freeseek:role-voice-intro-seen'
 const volatile = new Map<string, string>()
 
 const stored = (key: string) => {
@@ -26,6 +27,23 @@ export const hasSeenOnboarding = () => stored(GUIDE_KEY) === '1'
 export const markOnboardingSeen = () => remember(GUIDE_KEY, '1', 'onboarding.guide-seen')
 export const acceptUsageNotice = () =>
   remember(NOTICE_KEY, NOTICE_VERSION, 'onboarding.notice-accepted')
+export const initialRoleVoiceIntro = (configured: boolean) => {
+  if (stored(ROLE_VOICE_INTRO_KEY) === '1') {
+    return null
+  }
+  return configured || stored(NOTICE_KEY) !== null || hasSeenOnboarding()
+    ? 'pending'
+    : 'fresh-install'
+}
+
+export const markRoleVoiceIntroHandled = (reason: 'shown' | 'fresh-install') => {
+  if (stored(ROLE_VOICE_INTRO_KEY) === '1') {
+    return false
+  }
+  remember(ROLE_VOICE_INTRO_KEY, '1', 'onboarding.role-voice-intro.' + reason)
+  return true
+}
+
 export type OnboardingStep = 'notice' | 'guide'
 export const initialOnboardingStep = (configured: boolean): OnboardingStep | null => {
   if (

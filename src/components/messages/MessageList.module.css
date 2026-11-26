@@ -39,7 +39,22 @@
   }
 }
 
+.toBottom[data-history-latest] {
+  width: auto;
+  min-width: 44px;
+  padding: 0 12px;
+  gap: 5px;
+  border-radius: 999px;
+  font: var(--dsw-font-s-strong-14);
+  white-space: nowrap;
+}
+
+:global([data-legacy-spacing]) .toBottom[data-history-latest] > span {
+  margin-inline-start: 5px;
+}
+
 .scroll {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -61,6 +76,10 @@
   mask-image: var(--message-mask);
 }
 
+.scroll[data-reading-turn] {
+  overflow-anchor: none;
+}
+
 @media not all and (min-width: 768px) {
   .scroll {
     scrollbar-gutter: auto;
@@ -77,9 +96,10 @@
   margin: 0 auto;
   /* 顶部悬浮栏与底部输入栏均为覆盖层，内容可滚到栏边并从栏底穿过 */
   padding-top: var(--message-list-top-inset, 0px);
-  padding-bottom: var(--composer-inset, 150px);
+  padding-bottom: calc(var(--composer-inset, 150px) + var(--reply-reading-space, 0px));
 }
-.loadEarlier {
+.loadEarlier,
+.loadLater {
   display: block;
   margin: 20px auto 12px;
   padding: 8px 14px;
@@ -90,6 +110,10 @@
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   cursor: pointer;
+}
+
+.loadLater {
+  margin-bottom: 24px;
 }
 
 :global([data-ime-compact]) .toBottom {

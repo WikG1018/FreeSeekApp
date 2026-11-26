@@ -23,12 +23,13 @@ import {
   type ThemePreference,
 } from '../../services/settings.js'
 import { MIMO_PRESET_VOICES } from '../../services/speech/roleMarkers.js'
+import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { roleVoiceProfile } from '../../services/speech/roleVoiceProfile.js'
 import { useProviders } from '../../services/providers.js'
-import { openSettings } from './settingsDialogState.js'
 import { IconCheckOutline16 } from '../base/icons.js'
 import { Select } from '../base/Select.js'
 import { Row, Section, SwitchRow } from './SettingsRows.js'
+import { SettingsDisclosure } from './SettingsDisclosure.js'
 import styles from './Settings.module.css'
 
 const themeChoices: { value: ThemePreference; label: TranslationKey }[] = [
@@ -214,9 +215,8 @@ const BackgroundNotifications = () => {
   )
 }
 
-export const ChatPreferencesPage = () => {
-  const t = useTranslate(),
-    name = useId()
+export const ChatPreferencesPage = ({ openSpeech }: { openSpeech: () => void }) => {
+  const t = useTranslate()
   const startupPage = useSettings((s) => s.startupPage)
   const [startupSaveFailed, setStartupSaveFailed] = useState(false)
   const composerEnter = useSettings((s) => s.composerEnter)
@@ -224,11 +224,10 @@ export const ChatPreferencesPage = () => {
   const showModelSwitcher = useSettings((s) => s.showModelSwitcher),
     showReasoningPicker = useSettings((s) => s.showReasoningPicker),
     autoCompress = useSettings((s) => s.autoCompress),
-    showUsage = useSettings((s) => s.showUsage),
-    voice = useSettings((s) => s.ttsVoice)
+    showUsage = useSettings((s) => s.showUsage)
   return (
     <>
-      <Section>
+      <Section title={t('settingsStartupAndInput')}>
         <Select
           ariaLabel={t('settingsStartupPage')}
           settingRow="value"
@@ -245,8 +244,6 @@ export const ChatPreferencesPage = () => {
             {t('settingsStartupSaveFailed')}
           </p>
         )}
-      </Section>
-      <Section title={t('settingsChatInput')}>
         <Select
           ariaLabel={t('settingsComposerEnter')}
           settingRow="value"
@@ -279,111 +276,156 @@ export const ChatPreferencesPage = () => {
         )}
         <SwitchRow label={t('settingsShowUsage')} checked={showUsage} change={setShowUsage} />
       </Section>
-      {hasAndroidBackgroundWork() && <BackgroundNotifications />}
+      <ReadAloudPreferences openSpeech={openSpeech} />
       <Section title={t('longChats')}>
         <SwitchRow label={t('autoCompress')} checked={autoCompress} change={setAutoCompress} />
-        <p className={styles.paragraph}>{t('autoCompressHint')}</p>
+        <div className={styles.rowNote}>{t('autoCompressHint')}</div>
       </Section>
-      <Section title={t('settingsTtsVoice')}>
-        <div role="radiogroup" aria-label={t('settingsTtsVoice')}>
-          <Choice
-            name={name}
-            label={t('settingsTtsVoiceStella')}
-            checked={voice === 'stella'}
-            change={() => setTtsVoice('stella')}
-          />
-          <Choice
-            name={name}
-            label={t('settingsTtsVoiceTide')}
-            checked={voice === 'tide'}
-            change={() => setTtsVoice('tide')}
-          />
-        </div>
-      </Section>
-      <RoleVoiceSettings />
+      {hasAndroidBackgroundWork() && <BackgroundNotifications />}
     </>
   )
 }
 
-/** 角色配音：开关 + 朗读模型 + 主角/旁白/路人音色。只在开关打开时展开下面几项。 */
-const RoleVoiceSettings = () => {
+const ReadAloudPreferences = ({ openSpeech }: { openSpeech: () => void }) => {
   const t = useTranslate()
   const roleVoice = useSettings((s) => s.roleVoice)
   const english = useSettings((s) => s.locale === 'en-US')
+  const voice = useSettings((s) => s.ttsVoice)
+  const hasDeepSeekKey = useSettings((s) => Boolean(s.apiKey?.trim()))
   const profiles = useProviders((s) => s.profiles)
-  const [saveFailed, setSaveFailed] = useState(false)
-  const save = (patch: Parameters<typeof setRoleVoice>[0]) => setSaveFailed(!setRoleVoice(patch))
-  const profile = roleVoiceProfile(profiles, roleVoice)
-  // 菜单里显示「名字 · 听感」，行内右值只显示名字（shortLabel），保持单行
+  const [failed, setFailed] = useState<'mode' | 'plain' | 'roles'>()
+  const saveRole = (patch: Parameters<typeof setRoleVoice>[0]) => {
+    setFailed(setRoleVoice(patch) ? undefined : 'roles')
+  }
+  const mode = roleVoice.enabled ? 'characters' : 'plain'
+  const profile = roleVoice.enabled ? roleVoiceProfile(profiles, roleVoice) : null
   const voiceOptions = MIMO_PRESET_VOICES.map((voice) => ({
     value: voice.id,
     label: t('settingsRoleVoicePresetOption', { name: voice.id, kind: english ? voice.enLabel : voice.label }),
     shortLabel: voice.id,
   }))
-  return (
-    <Section>
-      <SwitchRow
-        label={t('settingsRoleVoice')}
-        description={t('settingsRoleVoiceHint')}
-        checked={roleVoice.enabled}
-        change={(enabled) => save({ enabled })}
+  const plainVoice = (
+    <>
+      <Select
+        ariaLabel={t(roleVoice.enabled ? 'settingsFallbackReadVoice' : 'settingsTtsVoice')}
+        settingRow="value"
+        compactMenu
+        value={voice}
+        options={[
+          { value: 'stella', label: t('settingsTtsVoiceStella') },
+          { value: 'tide', label: t('settingsTtsVoiceTide') },
+        ]}
+        onChange={(next) => setFailed(setTtsVoice(next) ? undefined : 'plain')}
       />
-      {saveFailed && (
-        <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
-          {t('settingsRoleVoiceSaveFailed')}
-        </p>
+      {failed === 'plain' ? (
+        <div className={`${styles.rowNote} ${styles.errorNote}`} role="alert">
+          {t('settingsReadAloudSaveFailed')}
+        </div>
+      ) : roleVoice.enabled || !hasDeepSeekKey ? (
+        <div className={styles.rowNote}>
+          {t(roleVoice.enabled ? 'settingsFallbackReadVoiceHint' : 'settingsPlainReadAloudNeedKey')}
+        </div>
+      ) : null}
+    </>
+  )
+  return (
+    <Section title={t('settingsReadAloud')}>
+      <Select
+        ariaLabel={t('settingsReadAloudMode')}
+        settingRow="value"
+        compactMenu
+        showSelectedDetail={false}
+        value={mode}
+        options={[
+          { value: 'plain', label: t('settingsPlainReadAloud'), detail: t('settingsPlainReadAloudHint') },
+          { value: 'characters', label: t('settingsRoleVoice'), detail: t('settingsRoleVoiceHint') },
+        ]}
+        onChange={(next) => {
+          if (next === mode) {
+            return
+          }
+          if (setRoleVoice({ enabled: next === 'characters' })) {
+            stopReadAloud()
+            setFailed(undefined)
+          } else {
+            setFailed('mode')
+          }
+        }}
+      />
+      {failed === 'mode' && (
+        <div className={`${styles.rowNote} ${styles.errorNote}`} role="alert">
+          {t('settingsReadAloudSaveFailed')}
+        </div>
       )}
-      {roleVoice.enabled && (
+      {roleVoice.enabled ? (
         <>
           <Row
-            label={t('settingsRoleVoiceModel')}
-            target="providerSpeech"
-            description={profile
-              ? roleVoice.source === 'custom' ? t('providerSpeechCustom') : t('settingsRoleVoiceModelReuse')
-              : t('settingsRoleVoiceModelMissing')}
-            detail={profile && roleVoice.source === 'follow' ? profile.name : undefined}
-            onClick={() => openSettings('providerSpeech')}
+            label={t('providerSpeechTitle')}
+            className={styles.readAloudService}
+            target="chatSpeech"
+            value={profile
+              ? roleVoice.source === 'custom' ? t('providerSpeechCustom') : profile.name
+              : t('settingsSpeechNeedsSetup')}
+            description={!profile && hasDeepSeekKey ? t('settingsSpeechFallbackActive') : undefined}
+            onClick={openSpeech}
           />
-          <Select
-            ariaLabel={t('settingsRoleVoiceLead')}
-            settingRow="value"
-            compactMenu
-            value={roleVoice.leadVoice}
-            options={[
-              { value: 'preset', label: t('settingsRoleVoiceLeadPreset') },
-              { value: 'description', label: t('settingsRoleVoiceLeadDescription') },
-            ]}
-            onChange={(leadVoice) => save({ leadVoice })}
-          />
-          {roleVoice.leadVoice === 'description' && (
-            <p className={styles.paragraph}>{t('settingsRoleVoiceLeadHint')}</p>
-          )}
-          <Select
-            ariaLabel={t('settingsRoleVoiceNarrator')}
-            settingRow="value"
-            compactMenu
-            value={roleVoice.narratorVoice}
-            options={voiceOptions}
-            onChange={(value) => save({ narratorVoice: value as typeof roleVoice.narratorVoice })}
-          />
-          <SwitchRow
-            label={t('settingsRoleVoiceShare')}
-            description={t('settingsRoleVoiceShareHint')}
-            checked={roleVoice.extrasShareVoice}
-            change={(extrasShareVoice) => save({ extrasShareVoice })}
-          />
-          {roleVoice.extrasShareVoice && (
+          <SettingsDisclosure title={t('settingsRoleVoiceDefaults')} settingRow>
             <Select
-              ariaLabel={t('settingsRoleVoiceExtra')}
+              ariaLabel={t('settingsRoleVoiceNarrator')}
               settingRow="value"
               compactMenu
-              value={roleVoice.extraVoice}
+              value={roleVoice.narratorVoice}
               options={voiceOptions}
-              onChange={(extraVoice) => save({ extraVoice })}
+              onChange={(narratorVoice) => saveRole({ narratorVoice })}
             />
-          )}
+            <div className={styles.rowNote}>{t('settingsRoleVoiceNarratorHint')}</div>
+            <Select
+              ariaLabel={t('settingsRoleVoiceLead')}
+              settingRow="value"
+              compactMenu
+              showSelectedDetail={false}
+              value={roleVoice.leadVoice}
+              options={[
+                {
+                  value: 'description',
+                  label: t('settingsLeadVoiceDescribed'),
+                  detail: t('settingsLeadVoiceDescribedHint'),
+                },
+                {
+                  value: 'preset',
+                  label: t('settingsLeadVoicePreset'),
+                  detail: t('settingsLeadVoicePresetHint'),
+                },
+              ]}
+              onChange={(leadVoice) => saveRole({ leadVoice })}
+            />
+            <SwitchRow
+              label={t('settingsRoleVoiceShare')}
+              checked={roleVoice.extrasShareVoice}
+              change={(extrasShareVoice) => saveRole({ extrasShareVoice })}
+            />
+            {roleVoice.extrasShareVoice && (
+              <>
+                <Select
+                  ariaLabel={t('settingsRoleVoiceExtra')}
+                  settingRow="value"
+                  compactMenu
+                  value={roleVoice.extraVoice}
+                  options={voiceOptions}
+                  onChange={(extraVoice) => saveRole({ extraVoice })}
+                />
+                <div className={styles.rowNote}>{t('settingsRoleVoiceShareHint')}</div>
+              </>
+            )}
+            {failed === 'roles' && (
+              <div className={`${styles.rowNote} ${styles.errorNote}`} role="alert">
+                {t('settingsReadAloudSaveFailed')}
+              </div>
+            )}
+            {hasDeepSeekKey && plainVoice}
+          </SettingsDisclosure>
         </>
-      )}
+      ) : plainVoice}
     </Section>
   )
 }

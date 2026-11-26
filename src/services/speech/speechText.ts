@@ -5,6 +5,7 @@ export const splitSpeechText = (text: string, limit: number): string[] => {
   for (let start = 0; start < text.length; ) {
     let end = start
     let boundary = start
+    let wordBoundary = start
     let units = 0
     while (end < text.length) {
       const code = text.codePointAt(end) ?? 0
@@ -14,11 +15,16 @@ export const splitSpeechText = (text: string, limit: number): string[] => {
       }
       const character = text[end]
       end += code > 0xffff ? 2 : 1
-      if (units >= limit / 2 && /[。！？；.!?;\n]/.test(character)) {
-        boundary = end
+      if (units >= limit / 2) {
+        if (/[。！？；，、.!?;,\n]/.test(character)) {
+          boundary = end
+        } else if (/\s/.test(character)) {
+          wordBoundary = end
+        }
       }
     }
-    const cut = end < text.length && boundary > start ? boundary : end
+    const preferred = boundary > start ? boundary : wordBoundary
+    const cut = end < text.length && preferred > start ? preferred : end
     const part = text.slice(start, cut).trim()
     if (part) {
       parts.push(part)

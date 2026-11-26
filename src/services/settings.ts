@@ -21,7 +21,7 @@ export type ThirdPartySearch = {
 /**
  * 角色配音：回答里不同角色用不同声音朗读。
  * 存成一个 JSON 对象，避免散成六个 key。
- * 主角默认音色：preset（预置，出声快）或 description（描述，更贴合但每段要等整段合成完）。
+ * 主角和配角的默认音色：preset（预置）或 description（描述）。
  */
 export type RoleVoiceSettings = {
   enabled: boolean
@@ -183,7 +183,7 @@ const DEFAULT_ROLE_VOICE: RoleVoiceSettings = {
   source: 'follow',
   providerId: null,
   custom: { url: '', apiKey: '', model: '', designModel: '' },
-  leadVoice: 'preset',
+  leadVoice: 'description',
   narratorVoice: DEFAULT_NARRATOR_VOICE,
   extraVoice: DEFAULT_EXTRA_VOICE,
   extrasShareVoice: true,
@@ -209,7 +209,7 @@ const initialRoleVoice = (): RoleVoiceSettings => {
           model: typeof custom.model === 'string' ? custom.model : '',
           ...(typeof custom.designModel === 'string' ? { designModel: custom.designModel } : {}),
         },
-        leadVoice: value.leadVoice === 'description' ? 'description' : 'preset',
+        leadVoice: value.leadVoice === 'preset' ? 'preset' : DEFAULT_ROLE_VOICE.leadVoice,
         narratorVoice: isPresetVoice(value.narratorVoice) ? value.narratorVoice : DEFAULT_ROLE_VOICE.narratorVoice,
         extraVoice: isPresetVoice(value.extraVoice) ? value.extraVoice : DEFAULT_ROLE_VOICE.extraVoice,
         extrasShareVoice: value.extrasShareVoice !== false,
@@ -352,8 +352,11 @@ export const setStartupPage = (startupPage: StartupPagePreference): boolean => {
 }
 
 export const setTtsVoice = (ttsVoice: TtsVoice) => {
-  write(KEYS.ttsVoice, ttsVoice)
+  if (!write(KEYS.ttsVoice, ttsVoice)) {
+    return false
+  }
   useSettings.setState({ ttsVoice })
+  return true
 }
 
 export const setApiKey = (apiKey: string | null, { requirePersistence = false } = {}) => {

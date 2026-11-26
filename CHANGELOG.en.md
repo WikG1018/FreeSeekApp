@@ -1,5 +1,27 @@
 # Release notes
 
+## v3.1.11
+
+This release brings together the improvements from v3.1.7 through v3.1.11 since the previous public release, v3.1.6.
+
+### Search and reading long conversations
+
+- Sidebar search lists multiple matching messages per conversation, with timestamps and highlighted keywords. Expand and page through results. Reopening the sidebar restores the search and page, and switching reply versions refreshes the matches.
+- After jumping to an older message, scroll to a section edge to load adjacent messages and keep your reading position. Tap Latest to jump to the end.
+- Tap the conversation title to go to the first message or press and hold to open the chat assistant. Thinking is collapsed by default, with a preview of the latest five lines that clears when the answer starts. Long replies stop auto-scrolling when the opening comes into view.
+
+### Character voices and speech settings
+
+- Listen to character voices while a reply is being generated. Playback, pause, resume, and stop stay in place. Retry an individual line if speech synthesis fails. Regenerated replies use the voices for the new version of the answer.
+- Stories can have multiple leads. Lead and supporting characters with speaking parts default to voices generated from their descriptions. Manually selected voices take priority. Models can add aliases and corrected names to existing characters.
+- Improved the character list, voice description rewriting, and previews. Save a generated voice sample to reuse the same voice and edit aliases, role importance, and personality under Character details. The list and editor bounce at the scroll edges.
+- Chat preferences brings regular read-aloud and character voices together. Xiaomi MiMo speech supports pay-as-you-go API, Token Plan, and separate configuration. A one-time introduction after the update explains character voices. Fixed MiMo V2.6 request parameter compatibility.
+
+### Context compression
+
+- When a model refuses a compression segment, keep the completed summaries and continue using the original text of turns that were only partly summarized. The pending message and attachments are included on retry.
+- Continue in the same conversation using recent messages, or restore full context from its sidebar menu. Improved messages for refusals, truncated summaries, and lost connections. Resume from saved progress after an interruption.
+
 ## v3.1.6
 
 This stable release brings together changes since public version 3.0.0, covering chat backups and recovery, speech, long conversations, and the web app.

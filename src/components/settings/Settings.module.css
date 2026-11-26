@@ -224,6 +224,7 @@
 }
 .row + .row::before,
 .choiceRow + .choiceRow::before,
+.readAloudService::before,
 .card > div + div > .row:first-child::before {
   content: '';
   position: absolute;

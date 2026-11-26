@@ -58,6 +58,23 @@
   font: var(--dsw-font-s-strong-14);
   color: var(--dsw-alias-label-primary);
 }
+button.title {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+  cursor: pointer;
+}
+
+button.title:focus {
+  outline: 2px solid var(--fs-focus);
+  outline-offset: -2px;
+}
+
+button.title:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .titleText {
   min-width: 0;
   overflow: hidden;

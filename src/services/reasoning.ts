@@ -1,4 +1,5 @@
 import type { ProviderProfile, ProviderProtocol } from './providers.js'
+import { isMiMoHost } from './providerPresets.js'
 
 export const REASONING_LEVELS = [
   'off',
@@ -96,7 +97,7 @@ const infer = (model: string, profile: ProviderProfile): ReasoningControl | unde
     }
   }
   if (
-    /^(?:api|token-plan-[\w-]+)\.xiaomimimo\.com$/.test(host) &&
+    isMiMoHost(host) &&
     /^mimo-v2\.(?:5(?:-pro)?|6-(?:flash|pro(?:-ultraspeed)?))$/.test(id)
   ) {
     return control('thinking', 'on')
