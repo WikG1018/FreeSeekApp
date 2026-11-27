@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="140" viewBox="0 0 640 140" role="img" aria-label="下载量趋势">
   <rect width="640" height="140" fill="#f6f8fc" rx="12"/>
   
-  <polyline fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="0.0,127.9 71.1,105.8 142.2,90.8 213.3,77.1 284.4,64.2 355.6,53.5 426.7,46.2 497.8,36.6 568.9,25.5 640.0,12.0"/>
-  <polyline fill="url(#g)" stroke="none" points="0,140 0.0,127.9 71.1,105.8 142.2,90.8 213.3,77.1 284.4,64.2 355.6,53.5 426.7,46.2 497.8,36.6 568.9,25.5 640.0,12.0 640,140"/>
+  <polyline fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="0.0,127.9 64.0,108.5 128.0,95.4 192.0,83.5 256.0,72.2 320.0,62.8 384.0,56.4 448.0,48.0 512.0,38.3 576.0,26.5 640.0,12.0"/>
+  <polyline fill="url(#g)" stroke="none" points="0,140 0.0,127.9 64.0,108.5 128.0,95.4 192.0,83.5 256.0,72.2 320.0,62.8 384.0,56.4 448.0,48.0 512.0,38.3 576.0,26.5 640.0,12.0 640,140"/>
   <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2563eb" stop-opacity="0.22"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/></linearGradient></defs>
-  <text x="12" y="132" font-family="system-ui, sans-serif" font-size="11" fill="#6b7280">峰值 3290 · 最新 3290</text>
+  <text x="12" y="132" font-family="system-ui, sans-serif" font-size="11" fill="#6b7280">峰值 3759 · 最新 3759</text>
 </svg>
