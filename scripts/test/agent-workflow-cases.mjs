@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 
 const capture = async (page, view) => {
@@ -766,7 +767,9 @@ export const runAgentWorkflowCases = async (run) => {
         const saved = (await a.db.loadSession(id)).messages.at(-1)
         const model = saved.task.artifacts.find(({ name }) => name.endsWith('.glb'))
         const blob = model && (await a.store.loadBackupFile(model.id))
-        const view = blob && new DataView(await blob.arrayBuffer())
+        const bytes = blob && await blob.arrayBuffer()
+        const view = bytes && new DataView(bytes)
+        const digest = bytes && await crypto.subtle.digest('SHA-256', bytes)
         return {
           state: saved.task.run.status,
           test: saved.task.steps.find((step) => step.kind === 'script'),
@@ -775,6 +778,9 @@ export const runAgentWorkflowCases = async (run) => {
           artifacts: saved.task.artifacts.map(({ name }) => name),
           magic: view?.getUint32(0, true),
           gltfVersion: view?.getUint32(4, true),
+          modelHash: digest && Array.from(new Uint8Array(digest), (byte) =>
+            byte.toString(16).padStart(2, '0')
+          ).join(''),
         }
       })
       assert.equal(result.state, 'completed', JSON.stringify(result))
@@ -788,6 +794,15 @@ export const runAgentWorkflowCases = async (run) => {
 
       await page.getByTestId('task-output').filter({ hasText: '外机模型.glb' }).click()
       await page.locator('[data-preview-state="ready"]').waitFor()
+      const originalModel = page.waitForEvent('download')
+      await page.getByRole('button', { name: '保存原件', exact: true }).click()
+      const model = await originalModel
+      assert.equal(model.suggestedFilename(), '外机模型.glb')
+      assert.equal(createHash('sha256').update(await readFile(await model.path())).digest('hex'), result.modelHash)
+      if (process.env.FREESEEK_TASK_PREVIEWS) {
+        await mkdir('tmp/regression/task', { recursive: true })
+        await model.saveAs('tmp/regression/task/外机模型.glb')
+      }
       await page.getByRole('button', { name: '复位视角', exact: true }).click()
       await capture(page, 'creator-model')
       await page.getByRole('button', { name: '部件与尺寸', exact: true }).click()

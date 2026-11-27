@@ -170,7 +170,7 @@ export class AssistantLibraryError extends Error {
 
 export const containsCredential = (text: string) => {
   if (
-    /\b(?:sk[-_]|gh[pousr]_|github_pat_)[a-z0-9_-]{16,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bbearer\s+[a-z0-9._~+/-]{16,}/i.test(
+    /\b(?:sk[-_]|t?tp-|gh[pousr]_|github_pat_)[a-z0-9_-]{16,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bbearer\s+[a-z0-9._~+/-]{16,}/i.test(
       text
     )
   ) {
@@ -179,6 +179,7 @@ export const containsCredential = (text: string) => {
   const settings = useSettings.getState()
   const keys = [
     settings.apiKey,
+    settings.roleVoice.custom.apiKey,
     thirdPartySearchKey(settings),
     ...useProviders.getState().profiles.flatMap((profile) => [
       profile.apiKey,
@@ -417,7 +418,7 @@ export const saveAutomaticMemory = async (
     const text =
       preference.relative && prior && preference.format
         ? prior.text.replace(
-            /(?:Markdown|Word|DOCX|PDF|Excel|XLSX|CSV|PPTX?|JSON|TXT)\s*(?:格式|版)?$/iu,
+            /(?:Markdown|Word|DOCX|PDF|Excel|XLSX|CSV|PPTX?|JSON|TXT|表格|列表|纯文本)\s*(?:格式|版)?$/iu,
             preference.format
           )
         : preference.text
@@ -456,9 +457,11 @@ export const saveAutomaticMemory = async (
   if (operation) {
     logEvent('storage', 'assistant.automatic-memory-written', {
       operation,
+      sessionId: origin.source.sessionId,
       scoped: !!origin.agentId,
     })
   }
+  return operation !== undefined
 }
 
 export const undoAutomaticMemory = (id: string) =>
@@ -499,18 +502,20 @@ export const recordMemoryMaintenance = (input: number, output: number) =>
   }))
 
 export const claimMemoryMaintenance = async (id: string, allowed: (state: Library) => boolean) => {
-  let claimed = false
+  let result = 'disabled'
   await change((state) => {
-    if (
-      !state.enabled ||
-      !state.automatic ||
-      !allowed(state) ||
-      Date.now() - (state.maintenance.lastAt ?? 0) < 60_000 ||
-      state.maintenance.recent?.includes(id)
-    ) {
+    if (!state.enabled || !state.automatic || !allowed(state)) {
       return state
     }
-    claimed = true
+    if (state.maintenance.recent?.includes(id)) {
+      result = 'already-evaluated'
+      return state
+    }
+    if (Date.now() - (state.maintenance.lastAt ?? 0) < 60_000) {
+      result = 'cooldown'
+      return state
+    }
+    result = 'claimed'
     return {
       ...state,
       maintenance: {
@@ -521,7 +526,7 @@ export const claimMemoryMaintenance = async (id: string, allowed: (state: Librar
       },
     }
   })
-  return claimed
+  return result
 }
 
 export const allowsMemory = (grant: MemoryGrant, connection: string, sessionId: string) =>

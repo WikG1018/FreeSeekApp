@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { strToU8, zipSync } from 'fflate'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 const media = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const rels = 'http://schemas.openxmlformats.org/package/2006/relationships'
@@ -44,7 +44,7 @@ const samplePDF = () => {
 const sampleDeck = () => {
   const d = 'http://schemas.openxmlformats.org/drawingml/2006/main'
   const p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
-  const slide = (label) =>
+  const slide = (paragraphs) =>
     '<p:sld xmlns:p="' +
     p +
     '" xmlns:a="' +
@@ -54,10 +54,12 @@ const sampleDeck = () => {
     '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
     '<p:spPr><a:xfrm><a:off x="914400" y="571500"/><a:ext cx="4600000" cy="870000"/></a:xfrm>' +
     '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="244A6C"/></a:solidFill></p:spPr>' +
-    '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2800"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr>' +
-    '<a:t>' +
-    label +
-    '</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+    '<p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/>' +
+    paragraphs +
+    '</p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+  const inherited = (label) =>
+    '<a:p><a:pPr algn="ctr"><a:defRPr sz="2400"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr>' +
+    '<a:r><a:t>' + label + '</a:t></a:r></a:p>'
   return packageOf({
     '[Content_Types].xml':
       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
@@ -89,8 +91,11 @@ const sampleDeck = () => {
       '<Relationship Id="rId2" Type="' +
       media +
       '/slide" Target="slides/slide2.xml"/></Relationships>',
-    'ppt/slides/slide1.xml': slide('先看这一页'),
-    'ppt/slides/slide2.xml': slide('最终核对事项'),
+    'ppt/slides/slide1.xml': slide(
+      '<a:p><a:pPr algn="ctr"/><a:r><a:rPr sz="2800"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr>' +
+      '<a:t>先看这一页</a:t></a:r></a:p>'
+    ),
+    'ppt/slides/slide2.xml': slide(inherited('最终核对事项') + inherited('样式沿用默认')),
   })
 }
 
@@ -390,6 +395,52 @@ export const runDocumentLayoutCases = async (run) => {
           { expected }
         )
       }
+      const slideInk = (slide) =>
+        slide.getByTestId('rendered-artifact-page').evaluate((image) => {
+          const canvas = document.createElement('canvas')
+          canvas.width = image.naturalWidth
+          canvas.height = image.naturalHeight
+          const context = canvas.getContext('2d')
+          context.drawImage(image, 0, 0)
+          // Sample inside the blue rectangle, clear of the slide's white background.
+          const { data, width, height } = context.getImageData(
+            Math.ceil(canvas.width * 0.14), Math.ceil(canvas.height * 0.103),
+            Math.floor(canvas.width * 0.52), Math.floor(canvas.height * 0.128)
+          )
+          const bands = [0, 0]
+          let x = 0
+          let y = 0
+          for (let row = 0; row < height; row++) {
+            for (let col = 0; col < width; col++) {
+              const offset = 4 * (row * width + col)
+              if (data[offset] > 170 && data[offset + 1] > 170 && data[offset + 2] > 170) {
+                bands[row * 2 >= height ? 1 : 0]++
+                x += col
+                y += row
+              }
+            }
+          }
+          const count = bands[0] + bands[1]
+          return { bands, count, x: x / count / width, y: y / count / height }
+        })
+      const capture = async (name) => {
+        if (process.env.FREESEEK_TASK_PREVIEWS) {
+          await page.screenshot({ path: 'tmp/regression/task/' + name + '.png', animations: 'disabled' })
+        }
+      }
+      const saveOriginal = async (dialog, name) => {
+        const download = page.waitForEvent('download')
+        await dialog.getByRole('button', { name: '保存原件', exact: true }).click()
+        const original = await download
+        assert.equal(original.suggestedFilename(), name)
+        assert.deepEqual(
+          await readFile(await original.path()),
+          Buffer.from(files.find((file) => file.name === name).bytes)
+        )
+        if (process.env.FREESEEK_TASK_PREVIEWS) {
+          await original.saveAs('tmp/regression/task/' + name)
+        }
+      }
       const close = async (dialog) => {
         await page.keyboard.press('Escape')
         await dialog.waitFor({ state: 'hidden' })
@@ -400,8 +451,11 @@ export const runDocumentLayoutCases = async (run) => {
       }
       const pdf = await open('版式.pdf')
       await ratio(pdf, 0.5)
+      await capture('pdf-page-1')
       await pdf.getByRole('button', { name: '下一页', exact: true }).click()
       await ratio(pdf, 2)
+      await capture('pdf-page-2')
+      await saveOriginal(pdf, '版式.pdf')
       await pdf.getByRole('button', { name: '放大', exact: true }).click()
       await pdf.getByText('120%', { exact: true }).waitFor()
       await close(pdf)
@@ -411,9 +465,18 @@ export const runDocumentLayoutCases = async (run) => {
       await close(reopened)
       const slides = await open('演示.pptx')
       await ratio(slides, 4 / 3)
+      await capture('ppt-slide-1')
+      const customInk = await slideInk(slides)
+      assert.ok(customInk.count > 30, 'custom run text appears inside the slide shape')
+      assert.ok(Math.abs(customInk.x - 0.5) < 0.12 && Math.abs(customInk.y - 0.5) < 0.18)
       await slides.getByRole('button', { name: '下一页', exact: true }).click()
       await slides.getByText('2/2 页', { exact: true }).waitFor()
       await ratio(slides, 4 / 3)
+      await capture('ppt-slide-2')
+      const inheritedInk = await slideInk(slides)
+      assert.ok(inheritedInk.bands.every((count) => count > 30), 'both inherited-style lines appear')
+      assert.ok(Math.abs(inheritedInk.x - 0.5) < 0.12 && Math.abs(inheritedInk.y - 0.5) < 0.18)
+      await saveOriginal(slides, '演示.pptx')
       await close(slides)
       const sheet = await open('汇总.xlsx')
       const merged = sheet.getByRole('columnheader', { name: '费用汇总' })
@@ -426,6 +489,8 @@ export const runDocumentLayoutCases = async (run) => {
       const result = sheet.getByRole('cell', { name: '42.00', exact: true })
       await result.click()
       await sheet.getByText('单元格公式 · =40+2', { exact: true }).waitFor()
+      await capture('xlsx-styled-sheet')
+      await saveOriginal(sheet, '汇总.xlsx')
       assert.deepEqual(
         external.filter((url) => /googleapis|fonts\.gstatic|unpkg|cdn/i.test(url)),
         []

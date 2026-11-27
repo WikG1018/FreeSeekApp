@@ -11,7 +11,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Base64;
@@ -32,6 +34,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -81,6 +84,7 @@ public final class AgentGoalService extends Service {
     );
     private static final ExecutorService WORK = Executors.newSingleThreadExecutor();
     private static final AtomicReference<Ticket> ACTIVE = new AtomicReference<>();
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static boolean forgetting;
     private static final OkHttpClient PROVIDER = new OkHttpClient.Builder()
         .proxy(Proxy.NO_PROXY)
@@ -152,6 +156,9 @@ public final class AgentGoalService extends Service {
         AgentGoalKernel kernel;
         String protocol;
         volatile ModelActivity activity;
+        volatile LiveTaskProgress.State progress = LiveTaskProgress.WORKING;
+        PendingIntent open;
+        boolean progressDismissed;
         volatile PowerManager.WakeLock wakeLock;
         private long wakeRenewedAt;
         int publicAttempts;
@@ -193,6 +200,10 @@ public final class AgentGoalService extends Service {
     private record ModelActivity(String phase, long updatedAt) {}
 
     private Ticket running;
+    private static AgentGoalService instance;
+    private final Runnable refreshAppearance = this::refreshProgressNotice;
+    private LiveTaskProgress.State shownProgress;
+    private long lastPostedAt;
 
     static synchronized Ticket reserve(String id, Wire wire, String session, boolean chinese) {
         if (forgetting) return null;
@@ -205,6 +216,29 @@ public final class AgentGoalService extends Service {
     static String activeSession() {
         Ticket ticket = ACTIVE.get();
         return ticket == null ? null : ticket.session;
+    }
+
+    static void presentationChanged() {
+        if (instance != null && LiveTaskProgress.supported()) instance.refreshProgressNotice();
+    }
+
+    static void dismissProgress(String id) {
+        Ticket ticket = ACTIVE.get();
+        if (ticket == null || !ticket.id.equals(id)) return;
+        ticket.progressDismissed = true;
+        if (instance != null && instance.running == ticket) instance.shownProgress = null;
+    }
+
+    private static void reportProgress(Ticket ticket, LiveTaskProgress.State progress) {
+        if (!LiveTaskProgress.supported() || ticket.stop.get() != null || progress.equals(ticket.progress)) return;
+        ticket.progress = progress;
+        if (!TaskNotifications.appVisible) MAIN.post(() -> {
+            AgentGoalService service = instance;
+            if (service == null || service.running != ticket || ticket.progressDismissed) return;
+            long elapsed = SystemClock.elapsedRealtime() - service.lastPostedAt;
+            MAIN.removeCallbacks(service.refreshAppearance);
+            MAIN.postDelayed(service.refreshAppearance, Math.max(0, LiveTaskProgress.REFRESH_INTERVAL_MS - elapsed));
+        });
     }
 
     static void pauseForAccessChange() {
@@ -557,15 +591,38 @@ public final class AgentGoalService extends Service {
         return PendingIntent.getService(this, token, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    private Notification notification(Ticket ticket) {
+    private LiveTaskProgress.State liveProgress(Ticket ticket) {
+        return !ticket.progressDismissed && ticket.stop.get() == null && LiveTaskProgress.showOutsideApp(this)
+            ? ticket.progress : null;
+    }
+
+    private void refreshProgressNotice() {
+        MAIN.removeCallbacks(refreshAppearance);
+        Ticket ticket = running;
+        if (ticket == null || ticket.settled.isDone()) return;
+        try {
+            LiveTaskProgress.State progress = liveProgress(ticket);
+            if (Objects.equals(shownProgress, progress)) return;
+            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification(ticket, progress));
+            shownProgress = progress;
+            lastPostedAt = SystemClock.elapsedRealtime();
+        } catch (RuntimeException failure) {
+            DiagnosticsLog.error(this, "chat", "agent.goal.progress-notice-failed", failure);
+        }
+    }
+
+    private Notification notification(Ticket ticket, LiveTaskProgress.State progress) {
         ensureChannel(this, getSystemService(NotificationManager.class));
-        PendingIntent open = TaskNotifications.open(this, ticket.session, "goal");
+        if (ticket.open == null) ticket.open = TaskNotifications.open(this, ticket.session, "goal");
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
             ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
-        return builder.setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle(ticket.chinese ? "FreeSeek 正在执行后台目标" : "FreeSeek is running a goal")
+        String title = progress == null
+            ? (ticket.chinese ? "FreeSeek 正在执行后台目标" : "FreeSeek is running a goal")
+            : (ticket.chinese ? "Agent 后台目标" : "Agent goal");
+        builder.setSmallIcon(R.drawable.freeseek_notification_mark)
+            .setContentTitle(title)
             .setContentText(ticket.chinese ? "打开原对话查看进度" : "Open the conversation to view progress")
-            .setContentIntent(open)
+            .setContentIntent(ticket.open)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
@@ -574,8 +631,9 @@ public final class AgentGoalService extends Service {
             ).build())
             .addAction(new Notification.Action.Builder(
                 null, ticket.chinese ? "停止" : "Stop", controlIntent(ticket, ACTION_END, 24312)
-            ).build())
-            .build();
+            ).build());
+        if (progress != null) LiveTaskProgress.decorate(this, builder, progress, ticket.chinese, ticket.id, true);
+        return builder.build();
     }
 
     @Override
@@ -593,13 +651,18 @@ public final class AgentGoalService extends Service {
         }
         if (!ACTION_START.equals(action) || running != null) return START_NOT_STICKY;
         try {
-            Notification notice = notification(ticket);
+            LiveTaskProgress.State progress = liveProgress(ticket);
+            Notification notice = notification(ticket, progress);
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(NOTIFICATION_ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
             } else {
                 startForeground(NOTIFICATION_ID, notice);
             }
+            if (TaskNotifications.validSession(ticket.session)) TaskNotifications.clearResult(this, ticket.session);
             running = ticket;
+            instance = this;
+            shownProgress = progress;
+            lastPostedAt = SystemClock.elapsedRealtime();
             PowerManager power = getSystemService(PowerManager.class);
             if (power != null) {
                 ticket.wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, getPackageName() + ":agent-goal");
@@ -617,12 +680,16 @@ public final class AgentGoalService extends Service {
     @Override
     public void onTimeout(int startId, int serviceType) {
         if (running != null) running.cancel("system-timeout");
+        MAIN.removeCallbacks(refreshAppearance);
+        if (instance == this) instance = null;
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf(startId);
     }
 
     @Override
     public void onDestroy() {
+        MAIN.removeCallbacks(refreshAppearance);
+        if (instance == this) instance = null;
         Ticket ticket = running;
         if (ticket != null) ticket.cancel("interrupted");
         if (ticket != null) ticket.releaseWake();
@@ -647,7 +714,8 @@ public final class AgentGoalService extends Service {
                     break;
                 }
                 JSONObject transition = new JSONObject(engine.call("next", state, now()));
-                String intended = transition.getJSONObject("state").toString();
+                JSONObject intendedState = transition.getJSONObject("state");
+                String intended = intendedState.toString();
                 JSONObject effect = transition.optJSONObject("effect");
                 if (effect == null) {
                     if (state.equals(intended)) {
@@ -661,6 +729,7 @@ public final class AgentGoalService extends Service {
                 if (ticket.stop.get() != null) continue;
                 long effectStarted = SystemClock.elapsedRealtime();
                 ticket.renewWake();
+                if (LiveTaskProgress.supported()) reportProgress(ticket, effectProgress(intendedState, effect));
                 Observation observed = perform(ticket, db, state, effect);
                 recordEffect(context, ticket, effect.optString("kind"), observed.json(),
                     SystemClock.elapsedRealtime() - effectStarted);
@@ -688,12 +757,13 @@ public final class AgentGoalService extends Service {
             DiagnosticsLog.warn(context, "chat", "agent.goal.native-failed", new JSObject().put("reason", "storage"));
             markUnavailable(context, ticket, "storage");
         } finally {
-            new android.os.Handler(getMainLooper()).post(() -> {
+            MAIN.post(() -> {
                 ticket.settled.complete(false);
                 ticket.releaseWake();
                 release(ticket);
                 if (running == ticket) {
                     running = null;
+                    MAIN.removeCallbacks(refreshAppearance);
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
                 }
@@ -702,6 +772,23 @@ public final class AgentGoalService extends Service {
     }
 
     private record Observation(JSONObject json, String readyFile) {}
+
+    private static LiveTaskProgress.State effectProgress(JSONObject state, JSONObject effect) {
+        LiveTaskProgress.Phase phase = switch (effect.optString("kind")) {
+            case "model" -> LiveTaskProgress.Phase.WAITING;
+            case "public" -> LiveTaskProgress.Phase.READING;
+            case "save" -> LiveTaskProgress.Phase.SAVING;
+            default -> LiveTaskProgress.Phase.WORKING;
+        };
+        JSONArray plan = state.optJSONArray("plan");
+        if (plan != null) for (int i = 0; i < plan.length(); i++) {
+            JSONObject step = plan.optJSONObject(i);
+            if (step != null && "working".equals(step.optString("status"))) {
+                return LiveTaskProgress.State.of(phase, i + 1, plan.length());
+            }
+        }
+        return LiveTaskProgress.State.of(phase, 0, 0);
+    }
 
     private Observation perform(Ticket ticket, AgentGoalStore db, String state, JSONObject effect) throws Exception {
         String kind = effect.optString("kind");
@@ -832,6 +919,10 @@ public final class AgentGoalService extends Service {
                         long now = System.currentTimeMillis();
                         if (previous == null || !phase.equals(previous.phase()) || now - previous.updatedAt() >= 1_000) {
                             ticket.activity = new ModelActivity(phase, now);
+                        }
+                        LiveTaskProgress.Phase activity = LiveTaskProgress.Phase.fromWire(phase);
+                        if (activity != null && activity != ticket.progress.phase()) {
+                            reportProgress(ticket, ticket.progress.withPhase(activity));
                         }
                     }
                 }

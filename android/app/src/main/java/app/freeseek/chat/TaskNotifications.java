@@ -139,7 +139,7 @@ final class TaskNotifications {
                 : (done ? (agent ? "Agent task complete" : "Reply ready") : (agent ? "Agent task needs attention" : "Reply needs attention"));
             Notification notice = builder(context, RESULTS, chinese ? "回复与任务结果" : "Replies and task results",
                 NotificationManager.IMPORTANCE_DEFAULT)
-                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setSmallIcon(R.drawable.freeseek_notification_mark)
                 .setContentTitle(title)
                 .setContentText(chinese ? "点这里回到原对话" : "Tap to return to the conversation")
                 .setContentIntent(open(context, session, "result"))

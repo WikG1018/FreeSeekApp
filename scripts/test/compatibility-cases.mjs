@@ -302,6 +302,49 @@ export const runCompatibilityCases = async (run) => {
   )
 
   await run(
+    'plain text bypasses file preparation and runtime failures are diagnosed without user content',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        a.settings.setApiKey('sk-legacy-fixture-only')
+        a.settings.setSearch(true)
+        const session = a.fixtures.session()
+        await a.seed([session])
+        const originalFetch = window.fetch
+        let requests = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith('/messages')) return originalFetch(url, init)
+          requests++
+          return a.response()
+        }
+        const originalReverse = Array.prototype.toReversed
+        Array.prototype.toReversed = undefined
+        const error = a.diagnostics.diagnosticError(
+          new TypeError('context.toReversed is not a function PRIVATE_CHAT_CANARY')
+        )
+        try {
+          a.drafts.setDraftText(session.id, '111')
+          a.store.sendMessage(session.id)
+          await a.waitIdle()
+        } finally {
+          Array.prototype.toReversed = originalReverse
+          window.fetch = originalFetch
+        }
+        return {
+          status: a.store.useChatStore.getState().sessionCache[session.id].messages.at(-1).status,
+          requests,
+          error,
+        }
+      })
+      assert.equal(result.status, 'done')
+      assert.equal(result.requests, 1)
+      assert.equal(result.error.reason, 'runtime-capability')
+      assert.equal(result.error.runtimeApi, 'toReversed')
+      assert.doesNotMatch(JSON.stringify(result.error), /PRIVATE_CHAT_CANARY/)
+    }
+  )
+
+  await run(
     'foreground restores the composer when a transient visual viewport reports zero height',
     async (page) => {
       const input = page.getByTestId('chat-composer').locator('textarea')
@@ -567,6 +610,86 @@ export const runCompatibilityCases = async (run) => {
       )
     }
   )
+
+  await run('startup restores the durable chat or explicit home when WebView preferences lag behind', async (page) => {
+    const id = 'durable-newly-finished-chat'
+    await page.evaluate(async (id) => {
+      const a = window.__audit
+      await a.seed([a.fixtures.session({ id, title: '新完成的对话' })])
+      await a.settings.setStartupPage('last-chat')
+      if ((await a.db.loadStartupRoute()).activeChat !== id) throw new Error('Selection was not committed')
+      localStorage.removeItem('freeseek:active-session')
+      localStorage.setItem('freeseek:startup-page', 'new-chat')
+    }, id)
+    await page.reload()
+    await page.waitForFunction(id => window.__audit?.store.useChatStore.getState().activeId === id, id)
+    await page.evaluate(async id => {
+      const a = window.__audit
+      a.store.newChat()
+      if ((await a.db.loadStartupRoute()).activeChat !== null) throw new Error('Home was not committed')
+      localStorage.setItem('freeseek:active-session', id)
+    }, id)
+    await page.reload()
+    await page.getByTestId('welcome-whale').waitFor()
+    assert.equal(await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId), null)
+  })
+
+  await run('chat saves request strict durability and retry on a WebView without transaction options', async (page) => {
+    const result = await page.evaluate(async () => {
+      const a = window.__audit
+      const original = IDBDatabase.prototype.transaction
+      let modern = true, strictCalls = 0, legacyCalls = 0
+      IDBDatabase.prototype.transaction = function(stores, mode, options) {
+        if (this.name === 'freeseek' && mode === 'readwrite') {
+          if (options?.durability === 'strict') {
+            strictCalls++
+            if (!modern) throw new TypeError('Unsupported transaction options')
+          } else if (!modern) legacyCalls++
+        }
+        return original.apply(this, arguments)
+      }
+      try {
+        await a.db.saveSession(a.fixtures.session({ id:'strict-modern' }))
+        modern = false
+        await a.db.saveSession(a.fixtures.session({ id:'strict-legacy' }))
+        return { strictCalls, legacyCalls, saved:!!await a.db.loadSession('strict-legacy') }
+      } finally { IDBDatabase.prototype.transaction = original }
+    })
+    assert.equal(result.strictCalls, 2)
+    assert.ok(result.legacyCalls >= 1 && result.saved)
+  })
+
+  await run('Android stores a confirmed startup selection outside the WebView database', async (page) => {
+    const result = await page.evaluate(async () => {
+      const a = window.__audit
+      await a.seed([a.fixtures.session({ id: 'native-route-chat' })])
+      await a.settings.setStartupPage('new-chat')
+      const selected = await a.db.loadStartupRoute()
+      a.store.newChat()
+      const home = await a.db.loadStartupRoute()
+      const request = indexedDB.open('freeseek')
+      const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const tx = db.transaction('historyState'), store = tx.objectStore('historyState')
+      const [chat, page] = [store.get('activeChat'), store.get('startupPage')]
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error) })
+      db.close()
+      return { selected, home, webWrites: chat.result !== undefined || page.result !== undefined }
+    })
+    assert.deepEqual(result.selected, { activeChat:'native-route-chat', startupPage:'new-chat', chatSource:'native', pageSource:'native' })
+    assert.deepEqual(result.home, { ...result.selected, activeChat:null })
+    assert.equal(result.webWrites, false)
+  }, (context) => context.addInitScript(() => {
+    const values = {}
+    window.CapacitorCustomPlatform = {name: 'android'}
+    window.Capacitor = {
+      PluginHeaders: [{name:'StartupRoute', methods:['save','read'].map(name => ({name,rtype:'promise'}))}],
+      nativePromise: async (plugin, method, options) => {
+        if (plugin !== 'StartupRoute') return {}
+        if (method === 'save') Object.assign(values, options)
+        return {...values}
+      },
+    }
+  }))
 
   await run(
     'blocked application script shows recovery controls without loading the application',

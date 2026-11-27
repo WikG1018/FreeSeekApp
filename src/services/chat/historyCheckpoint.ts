@@ -92,11 +92,21 @@ export const historyCheckpointReader: {
   read?: () => Promise<{ present: boolean; sessionCount?: number; verifiedAt?: number }>
 } = {}
 
+function verifiedTime(checkpoint: ReturnType<typeof readLocalCheckpoint>): number {
+  const { present, sessionCount, verifiedAt } = checkpoint
+  if (sessionCount === undefined || !Number.isSafeInteger(sessionCount) || sessionCount < 0 ||
+      present !== (sessionCount > 0) || verifiedAt === undefined || !Number.isFinite(verifiedAt)) {
+    return 0
+  }
+  return Math.max(0, verifiedAt)
+}
+
 export const readPreviousHistory = async (): Promise<{
   present: boolean
   sessionCount?: number
   verifiedAt?: number
   timedOut?: boolean
+  confirmedEmpty?: boolean
 }> => {
   const local = readLocalCheckpoint()
   if (native()) {
@@ -116,13 +126,19 @@ export const readPreviousHistory = async (): Promise<{
           }, historyCheckpointTimeoutMs.value)
         }),
       ])
-      const nativeIsNewer =
-        stored.sessionCount !== undefined && (stored.verifiedAt ?? 0) >= (local.verifiedAt ?? 0)
+      const localTime = verifiedTime(local)
+      const nativeTime = verifiedTime(stored)
+      const useNative = nativeTime > localTime || (nativeTime === localTime && stored.present)
+      const [latest, earlier] = useNative ? [stored, local] : [local, stored]
+      // Only a dated, verified clear can supersede an older positive checkpoint.
+      // An undated positive marker may represent a later write that has not yet been counted.
+      const confirmedEmpty = latest.sessionCount === 0 && Math.max(localTime, nativeTime) > 0 &&
+        (!earlier.present || (Math.min(localTime, nativeTime) > 0 && localTime !== nativeTime))
       return {
-        ...(nativeIsNewer
-          ? { sessionCount: stored.sessionCount, verifiedAt: stored.verifiedAt }
-          : local),
-        present: local.present || stored.present,
+        sessionCount: latest.sessionCount,
+        verifiedAt: latest.verifiedAt,
+        present: !confirmedEmpty && (local.present || stored.present),
+        confirmedEmpty,
       }
     } catch (error) {
       logEvent('storage', 'history.native-checkpoint-read-failed', diagnosticError(error), 'warn')

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { hasTransientPanel } from '../base/transientPanel.js'
 import { hasOpenModal } from '../base/Modal.js'
@@ -29,15 +29,22 @@ export const MobileSider = ({
     const timer = setTimeout(() => setMounted(false), 300)
     return () => clearTimeout(timer)
   }, [open, dragging])
-  useEffect(() => {
-    if (!open || !mounted) {
+  useLayoutEffect(() => {
+    if (!open) {
       return
     }
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const element = drawer.current
     element?.focus({ preventScroll: true })
     const keydown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || hasSettingsOpen() || hasOpenModal() || hasTransientPanel()) {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        hasSettingsOpen() ||
+        hasOpenModal() ||
+        hasTransientPanel()
+      ) {
         return
       }
       if (event.key === 'Escape') {
@@ -70,17 +77,22 @@ export const MobileSider = ({
     document.addEventListener('keydown', keydown)
     return () => {
       document.removeEventListener('keydown', keydown)
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && element?.contains(focused)) {
+        focused.blur()
+      }
       if (!hasSettingsOpen() && !hasOpenModal()) {
-        if (previous?.isConnected && !element?.contains(previous)) {
-          previous.focus({ preventScroll: true })
-        } else {
-          document
-            .querySelector<HTMLElement>('[aria-controls="mobile-sider"]')
-            ?.focus({ preventScroll: true })
-        }
+        // 触摸打开抽屉时，原焦点可能仍在聊天输入框。回到抽屉按钮，避免键盘重新弹出。
+        const trigger =
+          previous?.isConnected &&
+          previous.matches('button, a[href]') &&
+          !element?.contains(previous)
+            ? previous
+            : document.querySelector<HTMLElement>('[aria-controls="mobile-sider"]')
+        trigger?.focus({ preventScroll: true })
       }
     }
-  }, [open, mounted])
+  }, [open])
   return (
     <>
       <div

@@ -1,5 +1,10 @@
 package app.freeseek.chat;
 
+import android.content.Context;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import android.util.Base64;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -42,11 +47,15 @@ public class HistoryFilesPlugin extends Plugin {
         return new File(getContext().getFilesDir(), "history-originals");
     }
 
-    private File file(String key) {
+    static File originalFile(Context context, String key) {
         if (key == null || !key.matches("[a-z0-9-]{12,64}")) {
             throw new IllegalArgumentException("Invalid history file key");
         }
-        return new File(directory(), key + ".bin");
+        return new File(new File(context.getFilesDir(), "history-originals"), key + ".bin");
+    }
+
+    private File file(String key) {
+        return originalFile(getContext(), key);
     }
 
     private long fileSize(PluginCall call) {
@@ -136,8 +145,20 @@ public class HistoryFilesPlugin extends Plugin {
             String key = call.getString("key");
             File local = file(key);
             long size = fileSize(call);
-            if (writes.containsKey(key) || !local.isFile() || local.length() != size) {
-                throw new IOException("Imported original is missing");
+            if (writes.containsKey(key)) {
+                call.reject("Original is still being saved", "BUSY");
+                return;
+            }
+            try {
+                StructStat attributes = Os.stat(local.getAbsolutePath());
+                if (!OsConstants.S_ISREG(attributes.st_mode) || attributes.st_size != size) {
+                    call.reject("Original is missing or incomplete", "MISSING_ORIGINAL");
+                    return;
+                }
+            } catch (ErrnoException failure) {
+                if (failure.errno != OsConstants.ENOENT) throw failure;
+                call.reject("Original is missing", "MISSING_ORIGINAL");
+                return;
             }
             JSObject result = new JSObject();
             result.put("path", local.getAbsolutePath());

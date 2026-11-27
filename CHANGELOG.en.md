@@ -1,5 +1,33 @@
 # Release notes
 
+## v3.1.16
+
+This release collects the changes since the previous public version, v3.1.11, and covers v3.1.12 through v3.1.16.
+
+### Chat, search, and usage
+
+- Fixed a WebView compatibility issue that showed an upload error even when sending plain text. You can regenerate affected replies in their original chats.
+- Fixed the sidebar flicker after opening a search result and added a clear-search control. Improved feedback for long replies, interrupted streams, and output limits.
+- Fixed missing cache hit rates and token usage after regenerating a reply. Each version shows its own usage, and totals include recorded requests. A reported zero hit rate appears as `0%`, and missing cache data appears as “—”.
+
+### Long conversations and memory
+
+- If the model declines to summarize a segment, compression preserves that segment's original messages and attachments and continues with the remaining history. The pending message and its attachments are sent after compression. If the request still exceeds the model's limit, FreeSeek explains the cause.
+- Automatic memory can recognize long-term preferences expressed in chat. Find saved preferences in **Manage memory** and manage access for saved model connections.
+
+### Chat history, backup, and recovery
+
+- Android creates an on-device recovery copy of messages, branches, and available original attachments in private app storage. Open **Data management** to see coverage and disk use, verify the copy, or restore missing records.
+- Back up one chat from its sidebar menu. Imports merge into the current list and let you choose which copy to keep for duplicate chats. Large Android backup exports, system save, and sharing are more reliable.
+- Improved conversation restoration after abrupt shutdown and reduced conflicting saves when multiple windows are open.
+
+### Background progress, diagnostics, and compatibility
+
+- Supported Android devices show live progress with the FreeSeek whale icon by default. Progress is submitted as soon as the app moves to the background. Tap the notification to return to the chat, or adjust the setting under **Chat preferences → Background & notifications**. Other devices use standard notifications.
+- Android can continue receiving replies from custom models in the background and replay the received content in order when you return. Partial answers are kept if the connection drops.
+- Diagnostic packages include more information about background operation, network interruptions, audio failures, and Windows renderer problems. If a log read times out, the export keeps available evidence and records collection status.
+- Improved compatibility with older Android WebViews and imported attachments, along with the stability of offline web startup, character voices, and artifact previews. In-app update notes combine skipped public releases.
+
 ## v3.1.11
 
 This release brings together the improvements from v3.1.7 through v3.1.11 since the previous public release, v3.1.6.

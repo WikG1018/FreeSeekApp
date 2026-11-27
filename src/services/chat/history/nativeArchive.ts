@@ -43,6 +43,7 @@ const LEGACY_TASK_VERSION = 5
 const TASK_VERSION = 6
 const WORKSPACE_VERSION = 7
 const PARTIAL_VERSION = 8
+const CONVERSATION_VERSION = 9
 const MAX_SESSION_PARTS = 1024
 const PART_ITEMS = 512
 const MAX_SPLIT_TOKENS = 8_000_000
@@ -66,22 +67,26 @@ type ZipEntry = { name: string; blob: Blob }
 type PartialBackup =
   | { kind: 'unreadable'; skippedSessions: number; missingOriginals?: number }
   | { kind: 'recovery' }
-type Manifest = {
+type ManifestEntries = {
   freeseek_backup_version: number
   sessions: string[]
   splitSessions?: SplitSession[]
   files: { id: string; size: number; type: string }[]
   workspaces?: string[]
   partial?: PartialBackup
+}
+type BackupConfiguration = {
   personas: Persona[]
   defaultPersonaId: string
   pricing?: FlashPricing
   modelPrices?: ModelPrices
 }
-export type NativeBackupSettings = Pick<
-  Manifest,
-  'personas' | 'defaultPersonaId' | 'pricing' | 'modelPrices'
-> & { importedWorkspaces?: string[]; workspacesBySession?: Map<string, string[]> }
+type Manifest = ManifestEntries & { configuration?: BackupConfiguration }
+export type NativeBackupSettings = {
+  configuration?: BackupConfiguration
+  importedWorkspaces?: string[]
+  workspacesBySession?: Map<string, string[]>
+}
 export const isNativeManifest = (value: unknown): boolean =>
   value !== null && typeof value === 'object' && 'freeseek_backup_version' in value
 
@@ -117,14 +122,16 @@ export const readNativeManifest = (value: unknown): Manifest => {
       TASK_VERSION,
       WORKSPACE_VERSION,
       PARTIAL_VERSION,
+      CONVERSATION_VERSION,
     ].includes(version)
   ) {
     return fail(
-      typeof version === 'number' && version > PARTIAL_VERSION
+      typeof version === 'number' && version > CONVERSATION_VERSION
         ? 'backupNewerVersion'
         : 'backupInvalidVersion'
     )
   }
+  const conversation = version === CONVERSATION_VERSION
   const manifest: Manifest = {
     freeseek_backup_version: version,
     sessions: list(item.sessions, id),
@@ -145,32 +152,44 @@ export const readNativeManifest = (value: unknown): Manifest => {
       return { id: id(file.id), size: number(file.size), type: string(file.type) }
     }),
     ...((version === WORKSPACE_VERSION ||
-      (version === PARTIAL_VERSION && item.workspaces !== undefined)) && {
+      ((version === PARTIAL_VERSION || conversation) && item.workspaces !== undefined)) && {
       workspaces: list(item.workspaces, id),
     }),
-    ...(version === PARTIAL_VERSION && { partial: readPartialBackup(item.partial) }),
-    personas: list(item.personas, (value) => {
-      const persona = record(value)
-      const personaId = id(persona.id)
-      if (personaId.startsWith('builtin-')) {
-        return fail('backupIncomplete')
-      }
-      return { id: personaId, name: string(persona.name), prompt: string(persona.prompt) }
+    ...((version === PARTIAL_VERSION || (conversation && item.partial !== undefined)) && {
+      partial: readPartialBackup(item.partial),
     }),
-    defaultPersonaId: id(item.defaultPersonaId),
-    ...(item.modelPrices === undefined ? {} : { modelPrices: readModelPrices(item.modelPrices) }),
-    ...(item.pricing === undefined
-      ? {}
-      : {
-          pricing: Object.fromEntries(
-            Object.keys(DEFAULT_PRICING).map((key) => [key, number(record(item.pricing)[key])])
-          ) as FlashPricing,
+    ...(!conversation && {
+      configuration: {
+        personas: list(item.personas, (value) => {
+          const persona = record(value)
+          const personaId = id(persona.id)
+          if (personaId.startsWith('builtin-')) {
+            return fail('backupIncomplete')
+          }
+          return { id: personaId, name: string(persona.name), prompt: string(persona.prompt) }
         }),
+        defaultPersonaId: id(item.defaultPersonaId),
+        ...(item.modelPrices === undefined ? {} : { modelPrices: readModelPrices(item.modelPrices) }),
+        ...(item.pricing === undefined
+          ? {}
+          : {
+              pricing: Object.fromEntries(
+                Object.keys(DEFAULT_PRICING).map((key) => [key, number(record(item.pricing)[key])])
+              ) as FlashPricing,
+            }),
+      },
+    }),
+  }
+  if (conversation && (
+    manifest.sessions.length !== 1 ||
+    (manifest.partial && (manifest.partial.kind !== 'unreadable' || manifest.partial.skippedSessions !== 0))
+  )) {
+    fail('backupIncomplete')
   }
   for (const ids of [
     manifest.sessions,
     manifest.files.map((file) => file.id),
-    manifest.personas.map((persona) => persona.id),
+    manifest.configuration?.personas.map((persona) => persona.id) ?? [],
     (manifest.splitSessions ?? []).map((entry) => entry.id),
     manifest.workspaces ?? [],
   ]) {
@@ -269,14 +288,22 @@ const packSession = (original: Session) => {
 }
 
 /** 无损本机备份；不写入 API Key，原件按文件 ID 去重。 */
-export const exportNativeArchive = async (
+const sessionWorkspaceIds = (session: Session) => new Set([
+  ...(session.workspaceId ? [session.workspaceId] : []),
+  ...allSessionMessages(session).flatMap((message) =>
+    message.role === 'assistant' && message.task?.workspaceId ? [message.task.workspaceId] : []
+  ),
+])
+
+export const planNativeArchive = async <Original extends { size: number; type: string }>(
   sessions: Iterable<Session> | AsyncIterable<Session>,
-  loadOriginal: (id: string) => Promise<Blob | undefined> = db.loadFile,
+  loadOriginal: (id: string) => Promise<Original | undefined>,
   getPartial?: () => PartialBackup | undefined,
-  onSkipped?: (error: unknown) => void
-): Promise<Blob> => {
+  onSkipped?: (error: unknown) => void,
+  conversationOnly = false
+): Promise<Array<{ name: string; source: Blob | Original }>> => {
   const entries: ZipEntry[] = []
-  const files = new Map<string, Blob>()
+  const files = new Map<string, Original>()
   const workspaces = new Map<string, Blob>()
   const checkedWorkspaces = new Set<string>()
   const ids: string[] = []
@@ -302,14 +329,8 @@ export const exportNativeArchive = async (
     ) {
       version = Math.max(version, TASK_VERSION)
     }
-    const workspaceIds = [
-      session.workspaceId,
-      ...messages.flatMap((message) =>
-        message.role === 'assistant' && message.task?.workspaceId ? [message.task.workspaceId] : []
-      ),
-    ]
-    for (const workspaceId of workspaceIds) {
-      if (workspaceId && !checkedWorkspaces.has(workspaceId)) {
+    for (const workspaceId of sessionWorkspaceIds(session)) {
+      if (!checkedWorkspaces.has(workspaceId)) {
         checkedWorkspaces.add(workspaceId)
         if (await getWorkspace(workspaceId)) {
           workspaces.set(workspaceId, await exportWorkspaceBackup(workspaceId))
@@ -339,24 +360,39 @@ export const exportNativeArchive = async (
   if (partial) {
     version = PARTIAL_VERSION
   }
-  const manifest: Manifest = {
+  if (conversationOnly) {
+    version = CONVERSATION_VERSION
+  }
+  const manifest: ManifestEntries & Partial<BackupConfiguration> = {
     freeseek_backup_version: version,
     sessions: ids,
     ...(version >= SPLIT_VERSION ? { splitSessions } : {}),
     files: [...files].map(([id, blob]) => ({ id, size: blob.size, type: blob.type })),
     ...(workspaces.size > 0 && { workspaces: [...workspaces.keys()] }),
     ...(partial && { partial }),
-    personas: personas.filter((persona) => !persona.id.startsWith('builtin-')),
-    defaultPersonaId: defaultId,
-    pricing: usePricing.getState().pricing,
-    modelPrices: usePricing.getState().modelPrices,
+    ...(!conversationOnly && {
+      personas: personas.filter((persona) => !persona.id.startsWith('builtin-')),
+      defaultPersonaId: defaultId,
+      pricing: usePricing.getState().pricing,
+      modelPrices: usePricing.getState().modelPrices,
+    }),
   }
-  return writeArchive([
-    { name: MANIFEST_PATH, blob: json(manifest) },
-    ...[...workspaces].map(([id, blob]) => ({ name: workspacePath(id), blob })),
-    ...entries,
-    ...[...files].map(([id, blob]) => ({ name: filePath(id), blob })),
-  ])
+  return [
+    { name: MANIFEST_PATH, source: json(manifest) },
+    ...[...workspaces].map(([id, blob]) => ({ name: workspacePath(id), source: blob })),
+    ...entries.map(({ name, blob }) => ({ name, source: blob })),
+    ...[...files].map(([id, source]) => ({ name: filePath(id), source })),
+  ]
+}
+
+export const exportNativeArchive = async (
+  sessions: Iterable<Session> | AsyncIterable<Session>,
+  loadOriginal: (id: string) => Promise<Blob | undefined> = db.loadFile,
+  getPartial?: () => PartialBackup | undefined,
+  onSkipped?: (error: unknown) => void
+): Promise<Blob> => {
+  const entries = await planNativeArchive(sessions, loadOriginal, getPartial, onSkipped)
+  return writeArchive(entries.map(({ name, source }) => ({ name, blob: source })))
 }
 
 const restoreSplitSession = async (
@@ -390,12 +426,12 @@ const restoreSplitSession = async (
     }
     size += next.value.size
     if (size > MAX_SESSION_JSON_BYTES) {
-      return fail('backupJsonTooLarge')
+      return fail('backupSessionJsonTooLarge')
     }
     const part = record(await read(next.value))
     tokens += assertJsonStructure(part)
     if (tokens > MAX_SPLIT_TOKENS) {
-      return fail('backupJsonTooLarge')
+      return fail('backupSessionJsonTooLarge')
     }
     const target = sections.get(part.field as PartField)
     if (
@@ -483,6 +519,18 @@ export const importNativeEntries = async (
         if (session.id !== sessionId) {
           fail('backupIncomplete')
         }
+        if (manifest.freeseek_backup_version === CONVERSATION_VERSION) {
+          // Count the same unique original IDs as the exporter, including artifacts and voice samples.
+          const referencedFiles = new Set(sessionOriginalIds(session))
+          const referencedWorkspaces = sessionWorkspaceIds(session)
+          const declaredMissing = manifest.partial?.kind === 'unreadable'
+            ? (manifest.partial.missingOriginals ?? 0) : 0
+          if (referencedFiles.size - manifest.files.length !== declaredMissing ||
+            manifest.files.some(({ id }) => !referencedFiles.has(id)) ||
+            manifest.workspaces?.some((id) => !referencedWorkspaces.has(id))) {
+            fail('backupIncomplete')
+          }
+        }
         const mapped = restored.size
           ? mapSessionMessages(session, (message) => {
               if (message.role !== 'assistant' || !message.task?.workspaceId) {
@@ -523,10 +571,7 @@ export const importNativeEntries = async (
       fail('backupIncomplete')
     }
     return {
-      personas: manifest.personas,
-      defaultPersonaId: manifest.defaultPersonaId,
-      pricing: manifest.pricing,
-      modelPrices: manifest.modelPrices,
+      configuration: manifest.configuration,
       ...(restored.size && { importedWorkspaces: [...restored.values()], workspacesBySession }),
     }
   } catch (error) {
@@ -538,13 +583,14 @@ export const importNativeEntries = async (
 }
 
 export const restoreNativeSettings = (settings: NativeBackupSettings | undefined): void => {
-  if (settings) {
-    restorePersonas(settings.personas, settings.defaultPersonaId)
-    if (settings.pricing) {
-      setPricing(settings.pricing)
+  const configuration = settings?.configuration
+  if (configuration) {
+    restorePersonas(configuration.personas, configuration.defaultPersonaId)
+    if (configuration.pricing) {
+      setPricing(configuration.pricing)
     }
-    if (settings.modelPrices) {
-      saveModelPrices(settings.modelPrices)
+    if (configuration.modelPrices) {
+      saveModelPrices(configuration.modelPrices)
     }
   }
 }

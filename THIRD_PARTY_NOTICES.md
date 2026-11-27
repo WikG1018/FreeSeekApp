@@ -7,7 +7,7 @@
 - **工程差异**使用 [jsdiff](https://github.com/kpdecker/jsdiff) 计算和导出补丁。BSD-3-Clause 许可随安装包保存在 static/third-party。
 - **Agent 网页阅读**使用 QuickJS／quickjs-emscripten（MIT）、LinkeDOM（ISC）和 es-module-lexer（MIT）。阅读器及其依赖的许可随安装包保存在 static/third-party。
 - **Android 后台任务**使用 Rhino 1.7.15.1（MPL 2.0）。许可随 APK 保存在 assets/third-party/rhino.txt。[对应版本源码](https://github.com/mozilla/rhino/tree/Rhino1_7_15_1_Release)
-- 其余 npm 依赖遵循各自的开源许可（见 `package.json` / `pnpm-lock.yaml`）。
+- 网页资源中的 npm 组件遵循各自的开源许可。正式构建把实际编入客户端的组件许可及随客户端分发的运行库许可放在 `static/third-party`，按组件和版本查阅。Micromark 的对应 2.0.0 组件使用其上游 MIT 许可。
 - **apksig** — Android Open Source Project 的 APK 签名验证库，Apache License 2.0；用于应用内更新包的密码学签名验证。
 
 ## 字体

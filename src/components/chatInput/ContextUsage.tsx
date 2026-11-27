@@ -79,6 +79,7 @@ export const ContextUsage = memo(function ContextUsage({
   const rejected =
     contextWasRejected(lastError) ||
     lastError?.key === 'compressionInputLarge' ||
+    lastError?.key === 'compressionRefusalTooLong' ||
     lastError?.key === 'replyDocumentInputLimit'
   const reported = lastError?.params
   const requestFiles = Number(

@@ -36,15 +36,16 @@ final class RetainedClientLog {
         + "count sourceCount requestCount searchAttempts standaloneSearches inputTokens cachedInputTokens outputTokens "
         + "requestedTokens contextTokens limit maxTokens messageCount omittedFiles segments segment completedSegments step maxSteps "
         + "size width height versionCode percent pendingCount streamingCount resultCount uploadedBytes "
-        + "retryAt rangeStart rangeEnd segmentRequests budgetRequests");
+        + "retryAt rangeStart rangeEnd segmentRequests budgetRequests dropped");
     private static final Set<String> flags = fields("available cancelled preparing diskStaging confirmedEmpty previousSelection expected "
         + "usingStagingStores createdDatabase repaired restored missing cached online secureContext native saved exhausted "
-        + "hasFile automatic canRetry complete retained hasMessageTarget blocking waitingForHistory checkpointPresent allowEmpty "
+        + "hasFile automatic canRetry complete retained hasMessageTarget blocking waitingForHistory checkpointPresent allowEmpty canStartFresh "
         + "selectorPresent committedSelectorPresent selectionConflict interruptedImport partial requestInFlight");
     private static final Set<String> codes = fields("Error TypeError SyntaxError ReferenceError RangeError AbortError TimeoutError "
         + "QuotaExceededError NetworkError NotAllowedError NotFoundError InvalidStateError NotSupportedError SecurityError DataError "
         + "ConstraintError UnknownError TransactionInactiveError EncodingError VersionError ApiError ProviderConfigError UnsupportedImageError "
         + "BackupError ArchiveError ArchiveLimitError StreamIdleTimeoutError StreamReadError InvalidModificationError "
+        + "HistoryMissingError HistoryUpgradeBlockedError "
         + "http stream network interrupted protocol no-space permission invalid-image quota invalid-file-id timeout json-format "
         + "context-limit output-limit unclassified endpoint-rejected provider-tools-configured sources-exhausted "
         + "deepseek freeseek anthropic openai responses gemini picker read validate write finalize chooser prepare browser-download "
@@ -67,6 +68,10 @@ final class RetainedClientLog {
     private static final Set<String> codeKeys = fields("name kind toolKind reason stage status stopReason protocol format action failureKey localKey source");
     private static final Set<String> correlationKeys = fields("requestId upstreamRequestId operationId replyId runId stepId");
     private static final Set<String> limitKeys = fields("contextLimitTokens requestedTokens outputLimitTokens");
+    private static final Set<String> startupSources = fields("native database legacy");
+    private static final Set<String> startupPages = fields("last-chat new-chat");
+    private static final Set<String> historyReasons = fields("empty-after-known-history unreadable read-timeout checkpoint-timeout selection-uncertain");
+    private static final Set<String> historyRepairStates = fields("both-empty consistent conflict one-store");
     private static final Pattern eventName = Pattern.compile("[a-z][a-z0-9.-]{0,89}");
     private static final Pattern id = Pattern.compile("(?i)(?:file-api-|custom-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-z]{8,10}-[0-9a-z]{1,20}");
     private static final Pattern frame = Pattern.compile("[\\w-]{1,64}\\.[a-f0-9]{8}\\.js:\\d{1,7}:\\d{1,7}");
@@ -94,6 +99,11 @@ final class RetainedClientLog {
 
     private static boolean issueLevel(String value) { return "warn".equals(value) || "error".equals(value); }
 
+    private static void copyEnum(JSONObject source, JSObject details, String key, Set<String> allowed) {
+        Object value = source.opt(key);
+        if (value instanceof String && allowed.contains(value)) details.put(key, (String) value);
+    }
+
     private static JSONObject sanitize(JSONObject input, long now) {
         if (input == null) return null;
         String scope = input.optString("scope"), event = input.optString("event"), level = input.optString("level");
@@ -117,6 +127,17 @@ final class RetainedClientLog {
             for (String key : codeKeys) {
                 String value = source.optString(key);
                 if (codes.contains(value)) details.put(key, value);
+            }
+            if ("app".equals(scope) && "startup.chat-route".equals(event)) {
+                copyEnum(source, details, "startupPreferenceSource", startupSources);
+                copyEnum(source, details, "lastSelectionSource", startupSources);
+                copyEnum(source, details, "startupPage", startupPages);
+            }
+            if ("storage".equals(scope) && event.startsWith("history.")) {
+                copyEnum(source, details, "historyReason", historyReasons);
+                if ("history.repaired".equals(event) || "history.retry-repaired".equals(event)) {
+                    copyEnum(source, details, "state", historyRepairStates);
+                }
             }
             for (String key : correlationKeys) {
                 String value = opaque(source.optString(key));
@@ -154,7 +175,8 @@ final class RetainedClientLog {
     private static boolean history(JSONObject entry) {
         String name = entry.optString("event"), scope = entry.optString("scope");
         return ("storage".equals(scope) && (name.startsWith("history.") || "sessions.loaded".equals(name))) ||
-            ("backup".equals(scope) && (name.startsWith("history.") || name.startsWith("import.")));
+            ("backup".equals(scope) && (name.startsWith("history.") || name.startsWith("import."))) ||
+            ("app".equals(scope) && "startup.chat-route".equals(name));
     }
 
     private static void prune(long now) {

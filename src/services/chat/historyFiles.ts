@@ -102,6 +102,15 @@ export const writeDiskOriginal = async (
   }
 }
 
+export const checkDiskOriginal = async (original: DiskOriginal) => {
+  if (nativeHistoryFiles()) {
+    await Native.locate({ key: original.key, size: original.size })
+  } else {
+    // OPFS validates the file handle and size without reading the contents into memory.
+    await readDiskOriginal(original)
+  }
+}
+
 export const readDiskOriginal = async ({ key, size, type }: DiskOriginal): Promise<Blob> => {
   if (!nativeHistoryFiles()) {
     const directory = await originalsDirectory()

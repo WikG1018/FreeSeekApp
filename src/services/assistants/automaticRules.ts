@@ -5,7 +5,7 @@ export type AutoPreference = {
   format?: string
 }
 
-const format = '(?:Markdown|Word|DOCX|PDF|Excel|XLSX|CSV|PPTX?|JSON|TXT)'
+const format = '(?:Markdown|Word|DOCX|PDF|Excel|XLSX|CSV|PPTX?|JSON|TXT|表格|列表|纯文本)'
 const useFormat = new RegExp(
   '^(.{0,80}?)\\s*(?:默认采用|默认使用|默认用|统一用|改为|改用|采用|使用|用)\\s*(' +
     format +
@@ -17,12 +17,14 @@ const englishFormat = new RegExp(
   'iu'
 )
 const enduring =
-  /^(?:(?:请|麻烦)?记住[：:\s]*|(?:以后|今后|从现在起|长期)[，,：:\s]*(?:都|要|请|默认)?\s*|(?:please\s+)?remember(?:\s+that)?[\s:]+|from now on[,\s]+|always\s+)/iu
+  /^(?:(?:请|麻烦)?(?:帮我)?记住[，,：:\s]*|(?:(?:我希望|我想要|请|麻烦)你?\s*)?(?:以后|今后|往后|从现在起|从现在开始|长期)[，,：:\s]*(?:都|要|请|默认)?\s*|(?:please\s+)?remember(?:\s+that)?[\s:]+|from now on[,\s]+|always\s+)/iu
 const habit = /^(?:我(?:通常|一直|平时|习惯|偏好|更喜欢)|i (?:usually|prefer|always)\b)/iu
 const temporary =
   /(?:这次|本次|本轮|今天|临时|只这一次|仅限本次|for this (?:one|reply|task)|just this once)/iu
 const imagined =
-  /(?:假设|假如|举例|虚构|角色扮演|小说里|引用|引述|as an example|pretend|roleplay|quoted)/iu
+  /(?:假设|假如|举例|举个例子|虚构|角色扮演|(?:小说|故事|剧本)[里中]|(?:对白|台词|角色说)[：:]|引用|引述|as an example|pretend|roleplay|quoted)/iu
+const preferenceCue =
+  /(?:喜欢|偏好|更想|希望|习惯|尽量|优先|一般|惯例|风格|prefer|usually|tend to|like to)/iu
 export const isMemoryEvidence = (text: string) =>
   !!text.trim() &&
   !/^(?:[>“「『"'‘\x60]|[-*] )/u.test(text.trim()) &&
@@ -35,20 +37,53 @@ const formatKey = (topic: string) =>
     .replace(/[\s的]+/gu, '')
     .slice(0, 80)
 
+// Preserve sentence boundaries without attributing quoted speech, example code or Markdown
+// quotes to the user. Skip a sentence containing masked text instead of saving a partial quote.
+function* statements(input: string) {
+  if (imagined.test(input)) {
+    return
+  }
+  const prose = input
+    .replace(
+      /\x60{3}[\s\S]*?(?:\x60{3}|(?![\s\S]))|~{3}[\s\S]*?(?:~{3}|(?![\s\S]))|^[ \t]*>[^\n]*|“[^”]*(?:”|$)|「[^」]*(?:」|$)|『[^』]*(?:』|$)|‘[^’]*(?:’|$)|"[^"]*(?:"|$)|\x60[^\x60\n]*(?:\x60|$)/gmu,
+      '\uFFFC'
+    )
+    .replace(/(^|[\s（(：:，,。！？!?])'[^']*(?:'|$)/gu, '$1\uFFFC')
+  const sentences = /[^。！？!?\n；;]+?(?:[。！？!?\n；;]|\.(?=\s)|$)/gu
+  let match: RegExpExecArray | null
+  while ((match = sentences.exec(prose))) {
+    const raw = match[0].trim()
+    if (!raw || raw.includes('\uFFFC') || /[？?]$/u.test(raw) || !isMemoryEvidence(raw)) {
+      continue
+    }
+    yield raw.replace(/[。！!；;.]$/u, '').trim()
+  }
+}
+
+export const maintenanceEvidence = (input: string) => {
+  for (const sentence of statements(input)) {
+    if (sentence.length <= 640 && preferenceCue.test(sentence)) {
+      return sentence
+    }
+  }
+  return undefined
+}
+
 export const automaticPreference = (input: string, stored = false): AutoPreference | undefined => {
-  const source = input.trim()
-  if (!source || source.length > 4_000) {
-    return
+  for (const sentence of statements(input)) {
+    const prefix = enduring.exec(sentence)
+    if (stored || prefix || habit.test(sentence)) {
+      const preference = parsePreference(prefix ? sentence.slice(prefix[0].length) : sentence)
+      if (preference) {
+        return preference
+      }
+    }
   }
-  const first = source.split(/[。！!?\n；;]/u, 1)[0].trim()
-  if (!isMemoryEvidence(first)) {
-    return
-  }
-  const prefix = enduring.exec(first)
-  if (!stored && !prefix && !habit.test(first)) {
-    return
-  }
-  const text = (prefix ? first.slice(prefix[0].length) : first)
+  return undefined
+}
+
+const parsePreference = (statement: string): AutoPreference | undefined => {
+  const text = statement
     .replace(/[,，]\s*(?:之前|以前|原来|原先).+$/u, '')
     .replace(/[.。]+$/u, '')
     .trim()

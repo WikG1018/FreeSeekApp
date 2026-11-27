@@ -3,10 +3,11 @@ import {
   describeReadAloudError,
   stopReadAloud,
   toggleReadAloud,
+  toggleReadAloudPause,
   toggleRoleReadAloud,
   useReadAloud,
 } from '../../services/speech/readAloud.js'
-import { IconPlayMediaOutline16 } from '../base/icons.js'
+import { IconPlayMediaOutline16, IconResumeOutline16, IconStopOutline16 } from '../base/icons.js'
 import { IconButton } from '../base/IconButton.js'
 import { showToast } from '../base/toastState.js'
 import { ReadingBars } from './ReadingBars.js'
@@ -71,7 +72,7 @@ export const playReplyRoles = (
 }
 
 /**
- * 朗读按钮：未朗读时点击开始，加载中或朗读中点击停止。
+ * 普通朗读可在合成或播放时暂停，并从同一进度继续。
  * 角色配音模式由选定的语音服务播放人物和旁白。Agent 和备用朗读使用 DeepSeek 音色。
  */
 export const ReadAloudButton = ({
@@ -95,26 +96,42 @@ export const ReadAloudButton = ({
     return null
   }
   return (
-    <IconButton
-      icon={status === 'loading' || status === 'playing' ? <ReadingBars mode={status} /> : <IconPlayMediaOutline16 />}
-      tooltip={status === 'idle' ? t('ttsPlay') : t('ttsStop')}
-      tooltipPlacement="bottom"
-      onClick={() => {
-        if (status !== 'idle') {
-          stopReadAloud()
-          return
+    <>
+      <IconButton
+        icon={
+          status === 'idle'
+            ? <IconPlayMediaOutline16 />
+            : status === 'paused'
+              ? <IconResumeOutline16 />
+              : <ReadingBars mode={status} />
         }
-        if (!hasDeepSeekKey) {
-          showToast({ key: characters ? 'settingsRoleVoiceNeedKey' : 'ttsNeedDeepSeek' })
-          if (characters) {
-            openSettings('chatSpeech', { backToConversation: true })
-          } else {
-            openSettings('account')
+        tooltip={t(status === 'idle' ? 'ttsPlay' : status === 'paused' ? 'ttsResume' : 'ttsPause')}
+        tooltipPlacement="bottom"
+        onClick={() => {
+          if (status !== 'idle') {
+            toggleReadAloudPause(messageId)
+            return
           }
-          return
-        }
-        toggleReadAloud(messageId, text, reportError)
-      }}
-    />
+          if (!hasDeepSeekKey) {
+            showToast({ key: characters ? 'settingsRoleVoiceNeedKey' : 'ttsNeedDeepSeek' })
+            if (characters) {
+              openSettings('chatSpeech', { backToConversation: true })
+            } else {
+              openSettings('account')
+            }
+            return
+          }
+          toggleReadAloud(messageId, text, reportError)
+        }}
+      />
+      {status !== 'idle' && (
+        <IconButton
+          icon={<IconStopOutline16 />}
+          tooltip={t('ttsStop')}
+          tooltipPlacement="bottom"
+          onClick={stopReadAloud}
+        />
+      )}
+    </>
   )
 }

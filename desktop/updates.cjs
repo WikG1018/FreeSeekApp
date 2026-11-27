@@ -11,9 +11,11 @@ const path = require('node:path')
 const releaseOrigin = 'https://github.com'
 const repository = 'WikG1018/FreeSeekApp'
 const releaseBase = `/${repository}/releases/download/`
+const releasesApi = `https://api.github.com/repos/${repository}/releases`
 const metadataUrls = new Set([
-  `https://api.github.com/repos/${repository}/releases/latest`,
+  `${releasesApi}/latest`,
   `${releaseOrigin}/${repository}/releases/latest/download/update.json`,
+  ...Array.from({ length: 10 }, (_, index) => `${releasesApi}?per_page=30&page=${index + 1}`),
 ])
 const allowedHosts = new Set([
   'github.com',
@@ -22,8 +24,35 @@ const allowedHosts = new Set([
   'objects.githubusercontent.com',
 ])
 const versionPattern = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
-const installerName = /^freeseek-v\d+\.\d+\.\d+-windows-x64-setup\.exe$/
+const installerName =
+  /^freeseek-v(\d{1,6}\.\d{1,6}\.\d{1,6})-windows-x64-setup\.exe(?:\.([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.part)?$/
 let downloading = false
+
+const updateFolder = () => path.join(app.getPath('userData'), 'updates')
+
+const isNewer = (version, installed) => {
+  const [major, minor, patch] = version.split('.').map(Number)
+  const [currentMajor, currentMinor, currentPatch] = installed.split('.').map(Number)
+  return (
+    major > currentMajor ||
+    (major === currentMajor &&
+      (minor > currentMinor || (minor === currentMinor && patch > currentPatch)))
+  )
+}
+
+const pruneInstallers = async (version, { keep, partials = false } = {}) => {
+  const folder = updateFolder()
+  const entries = await readdir(folder, { withFileTypes: true }).catch(() => [])
+  const hasVersion = versionPattern.test(version)
+  const obsolete = entries.filter((entry) => {
+    if (!entry.isFile() || entry.name === keep) return false
+    const match = installerName.exec(entry.name)
+    return match && (match[2] ? partials : hasVersion && !isNewer(match[1], version))
+  })
+  await Promise.all(
+    obsolete.map((entry) => rm(path.join(folder, entry.name), { force: true }).catch(() => {}))
+  )
+}
 
 const packageCheck = (options) => {
   const { version, expectedSize, sha256 } = options ?? {}
@@ -39,7 +68,7 @@ const packageCheck = (options) => {
     throw new Error('Invalid Windows update metadata')
   }
   const filename = `freeseek-v${version}-windows-x64-setup.exe`
-  const folder = path.join(app.getPath('userData'), 'updates')
+  const folder = updateFolder()
   return { filename, folder, target: path.join(folder, filename), expectedSize, sha256, version }
 }
 
@@ -100,8 +129,10 @@ const download = async (event, options) => {
   downloading = true
   const temporary = `${update.target}.${randomUUID()}.part`
   try {
-    if (await verified(update))
+    if (await verified(update)) {
+      await pruneInstallers(update.version, { keep: update.filename })
       return { path: update.target, size: update.expectedSize, cached: true }
+    }
     await mkdir(update.folder, { recursive: true })
     const signal = AbortSignal.timeout(6 * 60_000)
     const response = await fetchGithub(address, signal)
@@ -139,11 +170,7 @@ const download = async (event, options) => {
       throw new Error('Windows update verification failed')
     }
     await rename(temporary, update.target)
-    for (const entry of await readdir(update.folder)) {
-      if (installerName.test(entry) && entry !== update.filename) {
-        await rm(path.join(update.folder, entry), { force: true }).catch(() => {})
-      }
-    }
+    await pruneInstallers(update.version, { keep: update.filename })
     return { path: update.target, size: received }
   } finally {
     downloading = false
@@ -152,11 +179,13 @@ const download = async (event, options) => {
 }
 
 const registerWindowsUpdates = (authorize) => {
+  const startupCleanup = pruneInstallers(app.getVersion(), { partials: true })
   const handle = (name, action) =>
     ipcMain.handle(name, async (event, options) => {
       if (!authorize(event) || event.senderFrame !== event.sender.mainFrame) {
         throw new Error('Untrusted update request')
       }
+      await startupCleanup
       return action(event, options)
     })
   handle('freeseek:update:get', readMetadata)
@@ -168,13 +197,11 @@ const registerWindowsUpdates = (authorize) => {
   handle('freeseek:update:download', download)
   handle('freeseek:update:install', async (_event, options) => {
     const update = packageCheck(options)
-    const [major, minor, patch] = update.version.split('.').map(Number)
-    const [currentMajor, currentMinor, currentPatch] = app.getVersion().split('.').map(Number)
-    const newer =
-      major > currentMajor ||
-      (major === currentMajor &&
-        (minor > currentMinor || (minor === currentMinor && patch > currentPatch)))
-    if (!newer || options.path !== update.target || !(await verified(update))) {
+    if (
+      !isNewer(update.version, app.getVersion()) ||
+      options.path !== update.target ||
+      !(await verified(update))
+    ) {
       return { installed: false, reason: 'verification-or-install-failed' }
     }
     const child = spawn(update.target, [], { detached: true, stdio: 'ignore', shell: false })

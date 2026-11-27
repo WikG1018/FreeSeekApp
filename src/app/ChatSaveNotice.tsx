@@ -3,7 +3,7 @@ import { Button } from '../components/base/Button.js'
 import { IconWarningOutline16 } from '../components/base/icons.js'
 import { showToast } from '../components/base/toastState.js'
 import { useTranslate, type TranslationMessage } from '../i18n/index.js'
-import { retrySaveSessions, useChatStore } from '../services/chat/store.js'
+import { keepConflictingChats, retrySaveSessions, useChatStore } from '../services/chat/store.js'
 import { saveBackup } from '../services/saveBackup.js'
 import styles from './App.module.css'
 
@@ -11,9 +11,13 @@ export const ChatSaveNotice = () => {
   const t = useTranslate()
   const failures = useChatStore((state) => state.sessionSaveErrors)
   const importing = useChatStore((state) => state.importingHistory)
+  const conflictIsStreaming = useChatStore((state) =>
+    Object.keys(state.streaming).some((id) => state.sessionSaveErrors[id] === 'conflict')
+  )
   const [busy, setBusy] = useState<'retry' | 'backup'>()
   const [feedback, setFeedback] = useState<TranslationMessage>()
   const reasons = Object.values(failures)
+  const conflict = reasons.includes('conflict')
   if (!reasons.length) {
     return null
   }
@@ -23,13 +27,21 @@ export const ChatSaveNotice = () => {
     setFeedback(undefined)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const saved = await Promise.race([
-        retrySaveSessions(),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), 10_000)
-        }),
-      ])
-      if (saved) {
+      const saved = conflict
+        ? await keepConflictingChats()
+        : await Promise.race([
+            retrySaveSessions(),
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), 10_000)
+            }),
+          ])
+      if (typeof saved === 'number') {
+        showToast(
+          saved
+            ? { key: 'sessionConflictPartial', params: { count: saved } }
+            : { key: 'sessionConflictSaved' }
+        )
+      } else if (saved) {
         showToast({ key: 'sessionSaveRetried' })
       } else {
         setFeedback({ key: saved === null ? 'sessionSaveWaiting' : 'sessionSaveStillFailed' })
@@ -62,11 +74,13 @@ export const ChatSaveNotice = () => {
     }
   }
 
-  const reason = reasons.includes('space')
-    ? 'sessionSaveNoSpace'
-    : reasons.includes('connection')
-      ? 'sessionSaveConnection'
-      : 'sessionSaveHelp'
+  const reason = conflict
+    ? 'sessionSaveConflict'
+    : reasons.includes('space')
+      ? 'sessionSaveNoSpace'
+      : reasons.includes('connection')
+        ? 'sessionSaveConnection'
+        : 'sessionSaveHelp'
   return (
     <section
       className={styles.saveError}
@@ -85,10 +99,16 @@ export const ChatSaveNotice = () => {
         <Button
           variant="outlined"
           size="s"
-          disabled={importing || !!busy}
+          disabled={importing || !!busy || conflictIsStreaming}
           onClick={() => void retry()}
         >
-          {t(busy === 'retry' ? 'sessionSaveRetrying' : 'sessionSaveRetry')}
+          {t(
+            busy === 'retry'
+              ? 'sessionSaveRetrying'
+              : conflict
+                ? 'sessionKeepBoth'
+                : 'sessionSaveRetry'
+          )}
         </Button>
         <Button
           variant="outlined"

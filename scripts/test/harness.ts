@@ -106,6 +106,7 @@ const response = (
 import * as taskReaderWeb from '../../src/services/tasks/web.js'
 import * as taskReaderBrowser from '../../src/services/tasks/browser.js'
 import * as db from '../../src/services/chat/db.js'
+import * as historyVault from '../../src/services/chat/historyVault.js'
 import * as store from '../../src/services/chat/store.js'
 import * as settings from '../../src/services/settings.js'
 import * as providers from '../../src/services/providers.js'
@@ -190,6 +191,7 @@ Object.assign(window, {
     toIndexEntry,
     personas,
     assistantLibrary,
+    historyVault,
     assistantMemory,
     taskArtifacts,
     workspaces,

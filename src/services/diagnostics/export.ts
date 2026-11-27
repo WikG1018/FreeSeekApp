@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { strToU8, zipSync } from 'fflate'
 import { NativeDiagnostics } from './native.js'
 import { flushRetainedClientEvents, retainedClientWriteStatus } from './retained.js'
 import { browserEnvironment } from './browser.js'
@@ -16,13 +17,20 @@ import {
 } from './log.js'
 import { getStorageSummary } from '../chat/db.js'
 import { readLocalCheckpoint } from '../chat/historyCheckpoint.js'
+import { useHistoryVault } from '../chat/historyVault.js'
+import { historyVaultAvailable, NativeVault } from '../chat/historyVaultNative.js'
 import { useChatStore } from '../chat/store.js'
+import { useAssistantLibrary } from '../assistants/library.js'
 import { useSettings } from '../settings.js'
 import { useUploads } from '../attachments.js'
 import { useUpdate } from '../update.js'
 import { API_ORIGIN } from '../api/client.js'
-import { writeArchive } from '../chat/history/zipWriter.js'
-import { providerModelContextWindow, providerModelOutputLimit, providerModelParameters, useProviders } from '../providers.js'
+import {
+  providerModelContextWindow,
+  providerModelOutputLimit,
+  providerModelParameters,
+  useProviders,
+} from '../providers.js'
 
 type Capture<T> =
   | { status: 'available'; value: T }
@@ -49,12 +57,9 @@ const capture = async <T>(task: () => Promise<T>, timeoutMs = 4000): Promise<Cap
     clearTimeout(timer)
   }
 }
-const objectBlob = (value: unknown) =>
-  new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })
+const jsonBytes = (value: unknown) => strToU8(JSON.stringify(value, null, 2))
 const jsonl = (entries: unknown[]) =>
-  new Blob([entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'], {
-    type: 'application/x-ndjson',
-  })
+  strToU8(entries.map((entry) => JSON.stringify(entry) + '\n').join(''))
 
 const timeline = (events: { timestamp: number }[]) => ({
   count: events.length,
@@ -67,6 +72,40 @@ const timeline = (events: { timestamp: number }[]) => ({
 })
 
 const unavailable = { unavailable: true } as const
+
+const historyVaultPhases = ['checking', 'idle', 'protecting', 'restoring', 'error']
+
+const readHistoryVaultStatus = async () => {
+  try {
+    const { sessionCount, originalCount, missingOriginalCount, bytes, pendingId } =
+      await NativeVault.status()
+    if (![sessionCount, originalCount, missingOriginalCount, bytes].every(
+      (value) => Number.isSafeInteger(value) && value >= 0
+    )) {
+      return { status: 'failed' as const }
+    }
+    return {
+      status: 'available' as const,
+      sessionCount,
+      originalCount,
+      missingOriginalCount,
+      bytes,
+      pendingCommit: typeof pendingId === 'string' && pendingId.length > 0,
+    }
+  } catch (error) {
+    const { name, code } = error && typeof error === 'object'
+      ? (error as { name?: string; code?: string })
+      : {}
+    if (name === 'SecurityError' || name === 'NotAllowedError' ||
+        (code && ['PERMISSION', 'PERMISSION_DENIED', 'EACCES', 'EPERM'].includes(code))) {
+      return { status: 'permission' as const }
+    }
+    if (name === 'TimeoutError' || code === 'TIMEOUT') {
+      return { status: 'timeout' as const }
+    }
+    return { status: 'failed' as const }
+  }
+}
 
 const eventFields = (entry: unknown, source: 'client' | 'native') => {
   if (!entry || typeof entry !== 'object') {
@@ -112,7 +151,10 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
   })
   logEvent('diagnostics', 'export.started')
   const platform = isWindowsDesktop() ? 'windows' : Capacitor.getPlatform()
-  const [client, storage, browserStorage, browser, native] = await Promise.all([
+  const desktopDiagnostics = platform === 'windows' ? window.freeseekDesktopDiagnostics : undefined
+  const hasVault = platform === 'android' && historyVaultAvailable()
+  const vaultPhase = useHistoryVault.getState().phase
+  const [client, storage, browserStorage, browser, native, vault] = await Promise.all([
     readDiagnosticLogs(),
     capture(getStorageSummary),
     navigator.storage?.estimate
@@ -124,8 +166,14 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
           await capture(flushRetainedClientEvents, 800)
           return NativeDiagnostics.snapshot()
         }, 4800)
+      : desktopDiagnostics
+        ? capture(desktopDiagnostics)
+        : { status: 'unsupported' as const, value: undefined },
+    hasVault
+      ? capture(readHistoryVaultStatus, 1600)
       : { status: 'unsupported' as const, value: undefined },
   ])
+  const vaultStatus = vault.value?.status ?? vault.status
   const nativeLog = native.value
     ? { status: 'available' as const, value: native.value }
     : platform === 'android'
@@ -139,6 +187,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     ? retained.events.slice(-512).flatMap((entry) => eventFields(entry, 'client'))
     : []
   const state = useChatStore.getState()
+  const library = useAssistantLibrary.getState()
   const active = state.activeId ? state.sessionCache[state.activeId] : undefined
   const lastReply = active?.messages.findLast((message) => message.role === 'assistant')
   const usage =
@@ -173,9 +222,11 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
                 'DiagnosticShare',
                 'Backup',
                 'HistoryFiles',
+                'HistoryVault',
                 'Update',
                 'CustomHttp',
                 'StartupHandoff',
+                'StartupRoute',
                 'MicPermission',
               ].map((plugin) => [plugin, Capacitor.isPluginAvailable(plugin)])
             )
@@ -205,8 +256,10 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
         providers.selection.providerId === 'deepseek' ? providers.selection.model : undefined,
       customStream: modelParameters?.stream,
       customStreamUsage: modelParameters?.streamUsage,
-      customContextTokens: profile && providerModelContextWindow(profile, providers.selection.model),
-      customOutputLimitTokens: profile && providerModelOutputLimit(profile, providers.selection.model),
+      customContextTokens:
+        profile && providerModelContextWindow(profile, providers.selection.model),
+      customOutputLimitTokens:
+        profile && providerModelOutputLimit(profile, providers.selection.model),
       customMaxOutputTokens: modelParameters?.maxOutputTokens,
       customVision: modelParameters?.vision,
       customPdf: modelParameters?.pdf,
@@ -224,8 +277,21 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
       initError: state.initError,
       historyUpgradeBlocked: state.historyUpgradeBlocked,
       historyMissing: state.historyMissing,
+      historyRecoveryReason: state.historyRecoveryReason,
       importing: state.importingHistory,
       sessionCount: state.sessions.length,
+      memory:
+        library.ready && !library.failed
+          ? {
+              status: 'available',
+              enabled: library.data.enabled,
+              automatic: library.data.automatic,
+              currentChatPaused: active?.memoryPaused ?? false,
+              notes: library.data.memories.length,
+              requests: library.data.maintenance.requests,
+              lastAttemptAt: library.data.maintenance.lastAt,
+            }
+          : { status: library.failed ? 'failed' : 'not-loaded' },
       cachedSessions: Object.keys(state.sessionCache).length,
       activeMessages: active?.messages.length,
       inheritedMessages: active?.inherited?.messages.length ?? 0,
@@ -252,6 +318,12 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     storage: storage.value ?? unavailable,
     localHistoryCheckpoint: readLocalCheckpoint(),
     historyCheckpoint: nativeLog.value?.historyCheckpoint,
+    historyVault: platform === 'android'
+      ? {
+          ...(vault.value ?? { status: vault.status }),
+          phase: hasVault && historyVaultPhases.includes(vaultPhase) ? vaultPhase : undefined,
+        }
+      : undefined,
     browserStorage: browserStorage.value ?? unavailable,
     native: native.value?.environment ?? unavailable,
   })
@@ -286,6 +358,9 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     clientStorageAvailable: client.storageAvailable,
     nativeSnapshotAvailable: Boolean(native.value?.environment),
     unavailableClientWrites: client.unavailableWrites,
+    clientLogRead: client.readStatus,
+    clientLogFlush: client.flushStatus,
+    clientPendingEvicted: client.pendingEvicted,
     unavailableNativeWrites: nativeLog.value?.failedWrites,
     retainedClient: retained
       ? {
@@ -307,6 +382,7 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     collection: {
       clientEvents: client.storageAvailable ? 'available' : 'memory-only',
       native: native.status,
+      historyVault: vaultStatus,
       nativeEvents: nativeLog.status,
       retainedClient:
         retained?.readState ??
@@ -347,22 +423,22 @@ export const createDiagnosticBundle = async (): Promise<{ name: string; blob: Bl
     },
   }
   try {
-    const blob = await writeArchive([
-      { name: 'manifest.json', blob: objectBlob(manifest) },
-      { name: 'environment.json', blob: objectBlob(environment) },
-      { name: 'summary.json', blob: objectBlob(summary) },
-      { name: 'client-events.jsonl', blob: jsonl(events) },
-      { name: 'native-events.jsonl', blob: jsonl(nativeEvents) },
+    // Android sharing targets often read their content URI sequentially with ZipInputStream.
+    // These six bounded metadata files have known sizes. Include sizes and CRCs in local headers.
+    const bytes = zipSync(
       {
-        name: 'README.txt',
-        blob: new Blob(
-          [
-            'FreeSeek 诊断包\n设备、当前存储和最后核实的历史数量见 environment.json。采集状态、各来源的时间范围、日志淘汰及写入失败计数见 summary.json。\nclient-events.jsonl 与 native-events.jsonl 记录操作、处理结果和失败阶段。相同 operationId 或 requestId 可串起同一次操作。recoveredFromNative 表示从安卓独立日志中补回的记录。\n不包含 API Key、聊天正文、搜索词、附件原件、录音或设备唯一标识。\n日志最多保留最近 7 天。客户端最多 2000 条，原生系统日志最多 1000 条，安卓额外保存最多 512 条关键客户端记录。\n',
-          ],
-          { type: 'text/plain' }
+        'manifest.json': jsonBytes(manifest),
+        'environment.json': jsonBytes(environment),
+        'summary.json': jsonBytes(summary),
+        'client-events.jsonl': jsonl(events),
+        'native-events.jsonl': jsonl(nativeEvents),
+        'README.txt': strToU8(
+          'FreeSeek 诊断包\n设备、当前存储和最后核实的历史数量见 environment.json。采集状态、各来源的时间范围、日志淘汰及写入失败计数见 summary.json。\nclient-events.jsonl 与 native-events.jsonl 记录操作、处理结果和失败阶段。相同 operationId 或 requestId 可串起同一次操作。recoveredFromNative 表示从安卓独立日志中补回的记录。\n不包含 API Key、聊天正文、搜索词、附件原件、录音或设备唯一标识。\n日志最多保留最近 7 天。客户端最多 2000 条，原生系统日志最多 1000 条，安卓额外保存最多 512 条关键客户端记录。\n'
         ),
       },
-    ])
+      { level: 0 }
+    )
+    const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' })
     logEvent('diagnostics', 'export.created', {
       bytes: blob.size,
       clientEvents: events.length,

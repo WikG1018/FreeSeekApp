@@ -18,7 +18,12 @@ self.addEventListener('install', (event) => {
     (async () => {
       const cache = await caches.open(cacheName)
       // Leave the previous worker active if a deployment is still missing a startup file.
-      await cache.addAll(['./', ...STARTUP_FILES].map(stagedRequest))
+      try {
+        await cache.addAll(['./', ...STARTUP_FILES].map(stagedRequest))
+      } catch (error) {
+        await caches.delete(cacheName).catch(() => {})
+        throw error
+      }
       await Promise.all(icons.map((path) => cache.add(stagedRequest(path)).catch(() => undefined)))
       await self.skipWaiting()
     })()
@@ -76,13 +81,9 @@ const network = async (request) => {
 }
 
 const navigate = async (request) => {
-  try {
-    const response = await fetch(request)
-    // The offline HTML only changes when its matching scripts were staged at install.
-    return { response: response.status < 500 ? response : (await lookup(shell)) || response }
-  } catch {
-    return { response: (await lookup(shell)) || Response.error() }
-  }
+  // The active worker serves only the HTML whose startup assets it staged together.
+  const staged = await lookup(shell)
+  return { response: staged || (await fetch(request).catch(() => Response.error())) }
 }
 
 const loadAsset = async (request) => {

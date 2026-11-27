@@ -6,6 +6,7 @@ import type { MessageParam } from './types.js'
 import { loadFile } from '../chat/db.js'
 import { readArchive, readEntry, skipEntry } from '../chat/history/zipReader.js'
 import { normalizeImageFile } from '../image.js'
+import { abortReason } from '../../utils/abort.js'
 
 export type ProviderPart =
   | { type: 'text'; text: string }
@@ -17,12 +18,17 @@ export type ProviderConversation = {
   prefix?: AssistantMessage
   inherited?: { messages: Message[] } | null
 }
-const base64 = (blob: Blob) =>
+const base64 = (blob: Blob, signal: AbortSignal) =>
   new Promise<string>((resolve, reject) => {
+    signal.throwIfAborted()
     const reader = new FileReader()
+    const abort = () => reader.abort()
     reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
     reader.onerror = () => reject(reader.error)
+    reader.onabort = () => reject(abortReason(signal))
+    reader.onloadend = () => signal.removeEventListener('abort', abort)
     reader.readAsDataURL(blob)
+    signal.addEventListener('abort', abort, { once: true })
   })
 
 export const wordText = (document: Document, paragraph: Element, namespace: string) => {
@@ -163,20 +169,28 @@ export const prepareProviderMessages = async (
   onMissingHistory?: (count: number) => void
 ): Promise<ProviderMessage[]> => {
   let inlineBytes = 0
-  const cache = new Map<string, ProviderPart>()
+  const cache = new Map<string, { part: ProviderPart; bytes: number }>()
   const missingHistory = new Set<string>()
+  const include = (part: ProviderPart, bytes: number) => {
+    // The original is read once, but every reference is serialized in the request body.
+    inlineBytes += bytes
+    if (inlineBytes > 24 * 1024 * 1024) {
+      throw new ApiError('protocol', { key: 'providerFileTooLarge' })
+    }
+    return part
+  }
   const attachment = async (file: FileAttachment, historical: boolean) => {
     signal.throwIfAborted()
     const cached = cache.get(file.id)
     if (cached) {
-      return cached
+      return include(cached.part, cached.bytes)
     }
     if (historical && missingHistory.has(file.id)) {
       return undefined
     }
     const blob = await getOriginal(file.id)
+    signal.throwIfAborted()
     if (!blob) {
-      signal.throwIfAborted()
       if (!historical) {
         throw new ApiError('protocol', { key: 'providerCurrentOriginalMissing' })
       }
@@ -200,13 +214,18 @@ export const prepareProviderMessages = async (
         type: 'image',
         name: file.name,
         mime: normalized.type,
-        data: await base64(normalized),
+        data: await base64(normalized, signal),
       }
     } else if (ext === 'pdf' || file.mimeType === 'application/pdf') {
       if (!parameters.pdf) {
         throw new ApiError('protocol', { key: 'providerPdfDisabled' })
       }
-      part = { type: 'pdf', name: file.name, mime: 'application/pdf', data: await base64(blob) }
+      part = {
+        type: 'pdf',
+        name: file.name,
+        mime: 'application/pdf',
+        data: await base64(blob, signal),
+      }
     } else {
       const text =
         ext === 'docx'
@@ -222,12 +241,9 @@ export const prepareProviderMessages = async (
       }
       part = { type: 'text', text: `\n[${file.name}]\n${text}\n` }
     }
-    inlineBytes += part.type === 'text' ? new Blob([part.text]).size : part.data.length
-    if (inlineBytes > 24 * 1024 * 1024) {
-      throw new ApiError('protocol', { key: 'providerFileTooLarge' })
-    }
-    cache.set(file.id, part)
-    return part
+    const bytes = part.type === 'text' ? new Blob([part.text]).size : part.data.length
+    cache.set(file.id, { part, bytes })
+    return include(part, bytes)
   }
   const user = async (message: UserMessage, historical: boolean): Promise<ProviderMessage> => {
     const content: ProviderPart[] = []

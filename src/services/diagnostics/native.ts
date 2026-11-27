@@ -21,6 +21,11 @@ export type NativeLogSnapshot = {
   historyCheckpoint?: { present: boolean; sessionCount?: number; verifiedAt?: number }
 }
 export type NativeSnapshot = NativeLogSnapshot & { environment: Record<string, unknown> }
+declare global {
+  interface Window {
+    freeseekDesktopDiagnostics?: () => Promise<NativeSnapshot>
+  }
+}
 export const NativeDiagnostics = registerPlugin<{
   checkHistory: () => Promise<{ present: boolean; sessionCount?: number; verifiedAt?: number }>
   recordHistory: (options: { present: boolean; sessionCount?: number }) => Promise<void>

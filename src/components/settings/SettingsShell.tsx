@@ -56,8 +56,7 @@ export const SettingsShell = ({
   }, [wideLayout, requested, closing])
   const parent = backTarget ?? parentSettingsPage(page)
   const canGoBack = page !== 'home' && (!wideLayout || parent !== 'home')
-  const speechDetail = page === 'chatSpeech' || page === 'providerSpeech'
-  const showBack = canGoBack && (!wideLayout || (speechDetail && !backToConversation))
+  const showBack = canGoBack && (!wideLayout || !backToConversation)
   const scale = useSettings((s) => s.fontScale)
   const layer = useMobileViewport(true, Capacitor.getPlatform() === 'android' ? 1 : scale)
   const dialog = useRef<HTMLDivElement>(null),

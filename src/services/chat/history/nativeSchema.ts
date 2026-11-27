@@ -11,7 +11,7 @@ import {
 } from '../../speech/roleMarkers.js'
 import { fail } from './errors.js'
 import { isTranslationKey, type TranslationMessage } from '../../../i18n/index.js'
-import { MAX_SUMMARY_CHARS } from '../contextCompression.js'
+import { MAX_SUMMARY_CHARS, validRetainedRanges } from '../contextCompression.js'
 import { validModel } from '../../providers.js'
 import { isReasoningAdapter, isReasoningLevel } from '../../reasoning.js'
 import {
@@ -682,12 +682,27 @@ const contextSummary = (value: unknown) => {
     const estimate = record(value)
     return { before: number(estimate.before), after: number(estimate.after) }
   })
+  const retainedRanges = optional(raw.retainedRanges, (value) =>
+    list(value, (item) => {
+      const range = record(item)
+      return { start: number(range.start), end: number(range.end) }
+    })
+  )
+  if (
+    retainedRanges?.length &&
+    (raw.recentOnly === true ||
+      !validRetainedRanges(retainedRanges, 0, coveredRounds) ||
+      retainedRanges.reduce((count, range) => count + range.end - range.start, 0) >= coveredRounds)
+  ) {
+    return invalid()
+  }
   return {
     text,
     coveredRounds,
     signature,
     updatedAt: number(raw.updatedAt),
     historyEstimate,
+    ...(retainedRanges?.length && { retainedRanges }),
     ...(raw.recentOnly === undefined ? {} : { recentOnly: boolean(raw.recentOnly) }),
   }
 }

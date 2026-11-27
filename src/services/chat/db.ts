@@ -1,10 +1,12 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { toSessionSummary, type ChatMode, type Session, type SessionSummary } from './types.js'
 import { sessionOriginalIds } from './sessionData.js'
 import { diagnosticError, logEvent } from '../diagnostics/log.js'
 import { blobChunks, jsonBlob } from './history/jsonBlob.js'
 import {
   browserHistoryLocks,
+  checkDiskOriginal,
   historyFilesAvailable,
   pruneDiskOriginals,
   readDiskOriginal,
@@ -14,6 +16,8 @@ import {
 import { BackupError } from './history/errors.js'
 import { readLocalCheckpoint, readPreviousHistory, recordHistoryCheckpoint } from './historyCheckpoint.js'
 import { createId } from '../../utils/id.js'
+import type { StartupPagePreference } from '../settings.js'
+import { historyVaultAvailable } from './historyVaultNative.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
 const DB_VERSION = 15
@@ -25,19 +29,35 @@ export type StoredFile = {
   id: string
   blob: Blob
 }
-type ArchivedFile = StoredFile | { id: string; disk: DiskOriginal }
+type ArchivedFile = (StoredFile | { id: string; disk: DiskOriginal }) & { revision?: string }
 
 /** 文件引用留在摘要中，删除会话时通过索引判断原件是否仍被引用。 */
 type StoredSessionSummary = SessionSummary & {
   fileIds: string[]
   goalRunIds?: string[]
   revision?: string
+  vaultRevision?: string
 }
 
 // Large conversations can exceed WebView's single IndexedDB value limit. Store their text in a
 // Blob with the list metadata alongside it, so copying and renaming don't deserialize the text.
 type PackedSession = { id: string; payload: Blob; summary: StoredSessionSummary }
 type StoredSession = Session | PackedSession
+// This token follows an in-memory edit only. It is never included in an archive or API request.
+type EditVersion = { exists: boolean; revision?: string; writing?: Promise<void> }
+const editVersions = new WeakMap<Session, EditVersion>()
+export const continueSessionEdit = (previous: Session, next: Session) => {
+  const version = editVersions.get(previous)
+  if (version) {
+    editVersions.set(next, version)
+  }
+}
+export class ChangedSessionError extends Error {
+  constructor() {
+    super('Saved conversation changed in another window')
+    this.name = 'ChangedSessionError'
+  }
+}
 const isPacked = (session: StoredSession): session is PackedSession => 'payload' in session
 
 interface ChatDB extends DBSchema {
@@ -46,7 +66,7 @@ interface ChatDB extends DBSchema {
   files: { key: string; value: ArchivedFile }
   sessionsStaging: { key: string; value: StoredSession }
   filesStaging: { key: string; value: ArchivedFile }
-  historyState: { key: string; value: boolean }
+  historyState: { key: string; value: boolean | StartupPagePreference | { activeChat: string | null } | { vaultCommit: string } }
   sessionSummaries: {
     key: string
     value: StoredSessionSummary
@@ -67,12 +87,21 @@ const CONFIRMED_EMPTY_KEY = 'confirmedEmpty'
 const INCOMPLETE_STAGING_KEY = 'incompleteStaging'
 const INCOMPLETE_FILE_REFERENCES_KEY = 'incompleteFileReferences'
 
+export type HistoryRecoveryReason =
+  | 'empty-after-known-history'
+  | 'unreadable'
+  | 'read-timeout'
+  | 'checkpoint-timeout'
+  | 'selection-uncertain'
+
 export class HistoryMissingError extends Error {
   constructor(
+    readonly reason: HistoryRecoveryReason,
     readonly canStartFresh = false,
     readonly previousHistoryKnown = true
   ) {
-    super('Previously saved conversations could not be found')
+    super('Previously saved conversations could not be read')
+    this.name = 'HistoryMissingError'
   }
 }
 
@@ -352,10 +381,69 @@ const openHistory = () => {
 }
 const getDB = () => (dbPromise ??= openHistory())
 
-const historyTransaction = async <Mode extends 'readonly' | 'readwrite'>(mode: Mode) => {
+// The WebView can be killed after a chat is committed but before localStorage flushes.
+// A stored null preserves an explicitly opened home screen across the same interruption.
+const ACTIVE_CHAT_KEY = 'activeChat'
+type StartupRoute = { activeChat?: string | null; startupPage?: StartupPagePreference }
+const nativeRoute = registerPlugin<{
+  read(): Promise<StartupRoute>
+  save(value: StartupRoute): Promise<void>
+}>('StartupRoute')
+const hasNativeRoute = () =>
+  Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('StartupRoute')
+export const saveActiveChat = async (id: string | null) => {
+  if (hasNativeRoute()) {
+    await nativeRoute.save({ activeChat: id })
+    return
+  }
+  const db = await getDB()
+  await db.put('historyState', { activeChat: id }, ACTIVE_CHAT_KEY)
+}
+
+export const saveStartupPreference = async (startupPage: StartupPagePreference) => {
+  if (hasNativeRoute()) {
+    await nativeRoute.save({ startupPage })
+    return
+  }
+  await (await getDB()).put('historyState', startupPage, 'startupPage')
+}
+
+export const loadStartupRoute = async () => {
+  const native = hasNativeRoute() ? await nativeRoute.read().catch((error: unknown) => {
+    logEvent('storage', 'active-session.native-route-unavailable', diagnosticError(error), 'warn')
+    return undefined
+  }) : undefined
+  if (native && native.startupPage !== undefined && native.activeChat !== undefined) {
+    return { ...native, pageSource: 'native', chatSource: 'native' }
+  }
+  const tx = (await getDB()).transaction('historyState', 'readonly')
+  const [value, choice] = await Promise.all([tx.store.get(ACTIVE_CHAT_KEY), tx.store.get('startupPage'), tx.done])
+  const activeChat = value && typeof value === 'object' && 'activeChat' in value &&
+    (value.activeChat === null || typeof value.activeChat === 'string') ? value.activeChat : undefined
+  const startupPage = choice === 'last-chat' || choice === 'new-chat' ? choice : undefined
+  return {
+    activeChat, startupPage, ...native,
+    pageSource: native?.startupPage !== undefined ? 'native' : 'database',
+    chatSource: native?.activeChat !== undefined ? 'native' : 'database',
+  }
+}
+
+const historyTransaction = async <Mode extends 'readonly' | 'readwrite'>(mode: Mode, durable = false) => {
   const opening = getDB()
   let database = await opening
-  const begin = () => database.transaction(HISTORY_STORES, mode)
+  const begin = () => {
+    if (durable) {
+      try {
+        return database.transaction(HISTORY_STORES, mode, { durability: 'strict' })
+      } catch (error) {
+        // Older WebViews may reject the optional transaction dictionary.
+        if (!(error instanceof TypeError)) {
+          throw error
+        }
+      }
+    }
+    return database.transaction(HISTORY_STORES, mode)
+  }
   let tx: ReturnType<typeof begin>
   try {
     tx = begin()
@@ -497,10 +585,13 @@ const checkEmptyHistory = async (
     return
   }
   if (index.alternateCount > 0 && (!index.interruptedImport || view.selectionConflict)) {
+    const historyReason = 'selection-uncertain'
     logEvent(
       'storage',
       'history.selection-uncertain',
       {
+        historyReason,
+        activeCount: index.activeCount,
         indexCount: index.indexCount,
         alternateCount: index.alternateCount,
         selectorPresent: view.selectorPresent,
@@ -509,19 +600,33 @@ const checkEmptyHistory = async (
       },
       'warn'
     )
-    throw new HistoryMissingError()
+    throw new HistoryMissingError(historyReason)
   }
   const previous = await readPreviousHistory()
-  const expected = previousSelection || previous.present
+  const expected = previous.present || (previousSelection && !previous.confirmedEmpty)
   const canStartFresh = index.indexCount === 0 && index.alternateCount === 0
   if (!expected && previous.timedOut && !allowEmpty) {
-    logEvent('storage', 'history.checkpoint-read-timed-out', { canStartFresh }, 'warn')
+    logEvent('storage', 'history.checkpoint-read-timed-out', {
+      historyReason: 'checkpoint-timeout',
+      canStartFresh,
+    }, 'warn')
   }
   if (index.indexCount > 0 || (expected && (!allowEmpty || index.alternateCount > 0))) {
+    const knownEmpty =
+      expected && index.activeCount === 0 && index.current && canStartFresh && !index.interruptedImport
+    const historyReason = view.selectionConflict
+      ? 'selection-uncertain'
+      : previous.timedOut
+        ? 'checkpoint-timeout'
+        : knownEmpty
+          ? 'empty-after-known-history'
+          : 'unreadable'
     logEvent(
       'storage',
       'history.unexpected-empty',
       {
+        historyReason,
+        activeCount: index.activeCount,
         indexCount: index.indexCount,
         alternateCount: index.alternateCount,
         previousSelection,
@@ -529,10 +634,11 @@ const checkEmptyHistory = async (
         previousSessionCount: previous.sessionCount,
         verifiedAt: previous.verifiedAt,
         checkpointPresent: previous.present,
+        canStartFresh,
       },
       'warn'
     )
-    throw new HistoryMissingError(canStartFresh)
+    throw new HistoryMissingError(historyReason, canStartFresh)
   }
 }
 
@@ -671,7 +777,7 @@ const reconstructHistoryIndex = async (
     const source = switched ? history.stagingSessions : history.sessions
     const count = switched ? latest.alternateCount : latest.activeCount
     if (!switched && historySelectionUnresolved(history, latest)) {
-      throw new HistoryMissingError()
+      throw new HistoryMissingError('selection-uncertain')
     }
     rebuilt = await rebuildHistorySummaries(history, source, count, latest.stored)
     if (switched || !history.selectionConfirmed) {
@@ -749,7 +855,9 @@ export const repairHistoryStateAndIndex = async (): Promise<HistoryRepair> => {
       !switched &&
       (!sessionCount || (!index.current && historySelectionUnresolved(view, index)))
     ) {
-      throw new HistoryMissingError()
+      throw new HistoryMissingError(
+        historySelectionUnresolved(view, index) ? 'selection-uncertain' : 'unreadable'
+      )
     }
     await confirmHistorySelection(view, target)
     await view.state.delete(CONFIRMED_EMPTY_KEY)
@@ -855,8 +963,8 @@ export const backfillSessionModes = async (
 }
 
 export const loadSession = async (id: string): Promise<Session | undefined> => {
-  const { sessions, tx } = await historyTransaction('readonly')
-  let record = await sessions.get(id)
+  const { sessions, summaries, tx } = await historyTransaction('readonly')
+  let [record, summary] = await Promise.all([sessions.get(id), summaries.get(id)])
   if (record === undefined) {
     record = (await sessions.openCursor(id))?.value
     if (record !== undefined) {
@@ -864,7 +972,74 @@ export const loadSession = async (id: string): Promise<Session | undefined> => {
     }
   }
   await tx.done
-  return record === undefined ? undefined : unpackSession(record)
+  if (record === undefined) {
+    return undefined
+  }
+  const session = await unpackSession(record)
+  editVersions.set(session, { exists: true, revision: summary?.revision })
+  return session
+}
+
+export type VaultReceipt = { id: string; revisions: Map<string, string> }
+const VAULT_COMMIT_KEY = 'lastCommittedRecoveryBatch'
+export const vaultCommitProof = async () => {
+  const view = await historyTransaction('readonly')
+  const [marker, active, alternate, index, empty] = await Promise.all([
+    view.state.get(VAULT_COMMIT_KEY), view.sessions.count(), view.stagingSessions.count(),
+    view.summaries.count(), view.state.get(CONFIRMED_EMPTY_KEY), view.tx.done,
+  ])
+  return {
+    id: marker && typeof marker === 'object' && 'vaultCommit' in marker ? marker.vaultCommit : undefined,
+    emptyAfterLoss: active === 0 && alternate === 0 && index === 0 && empty !== true,
+  }
+}
+const vaultRevision = (summary: StoredSessionSummary) =>
+  summary.vaultRevision ?? summary.revision ?? 'legacy-' + summary.createdAt + '-' + summary.updatedAt
+
+export const vaultSessionIndex = async (staging = false) => {
+  const view = await historyTransaction('readonly')
+  if (staging) {
+    const [keys, count] = await Promise.all([view.stagingSessions.getAllKeys(), view.stagingSessions.count(), view.tx.done])
+    if (keys.length !== count) {
+      throw new BackupError('backupIncomplete')
+    }
+    return keys.map((id) => ({ id, revision: '' }))
+  }
+  const [rows, count] = await Promise.all([view.summaries.getAll(), view.sessions.count(), view.tx.done])
+  if (rows.length !== count) {
+    throw new BackupError('sessionListLoadFailed')
+  }
+  return rows.map((summary) => ({ id: summary.id, revision: vaultRevision(summary) }))
+}
+
+export const vaultSession = async (id: string, staging: boolean) => {
+  const view = await historyTransaction('readonly')
+  const [record, summary] = await Promise.all([
+    (staging ? view.stagingSessions : view.sessions).get(id),
+    staging ? undefined : view.summaries.get(id), view.tx.done,
+  ])
+  if (!record) {
+    return undefined
+  }
+  return { session: await unpackSession(record), revision: summary ? vaultRevision(summary) : createId() }
+}
+
+export const vaultOriginal = async (id: string, staging: boolean) => {
+  const view = await historyTransaction('readonly')
+  const [file] = await Promise.all([(staging ? view.stagingFiles : view.files).get(id), view.tx.done])
+  if (!file || 'disk' in file || file.revision) {
+    return file
+  }
+  // Legacy Blob records have no version. Stamp the current bytes in the same transaction that reads them.
+  const write = await historyTransaction('readwrite')
+  const store = staging ? write.stagingFiles : write.files
+  let current = await store.get(id)
+  if (current && 'blob' in current && !current.revision) {
+    current = { ...current, revision: createId() }
+    await store.put(current)
+  }
+  await write.tx.done
+  return current
 }
 
 /** 读取全部会话详情；用于本地用量统计等一次性遍历 */
@@ -919,18 +1094,40 @@ export const visitStoredSessions = async (
   }
 }
 
-export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
+type CopyOriginals = { missing: number; disk: DiskOriginal[] }
+export const saveSession = async (
+  session: Session,
+  files: StoredFile[] = [],
+  edit?: EditVersion,
+  originals?: CopyOriginals
+): Promise<void> => {
   const summary = { ...storedSummary(session), revision: createId() }
   const record = sessionRecord(session, summary)
-  const history = await historyTransaction('readwrite')
+  const history = await historyTransaction('readwrite', true)
   let newSessionCount: number | undefined
   await Promise.all([
     (async () => {
       try {
-        for (const file of files) {
-          await history.files.put(file)
-        }
         const existing = await history.sessions.getKey(session.id)
+        if (edit && (
+          edit.exists !== (existing !== undefined) ||
+          (edit.exists && (await history.summaries.get(session.id))?.revision !== edit.revision)
+        )) {
+          throw new ChangedSessionError()
+        }
+        for (const file of files) {
+          await history.files.put({ ...file, revision: createId() })
+        }
+        if (originals) {
+          for (const id of summary.fileIds) {
+            const record = await history.files.get(id)
+            if (!record) {
+              originals.missing++
+            } else if ('disk' in record) {
+              originals.disk.push(record.disk)
+            }
+          }
+        }
         await history.sessions.put(record)
         await history.summaries.put(summary)
         await history.state.delete(CONFIRMED_EMPTY_KEY)
@@ -947,6 +1144,10 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
     })(),
     history.tx.done,
   ])
+  const committed = edit ?? { exists: true }
+  committed.exists = true
+  committed.revision = summary.revision
+  editVersions.set(session, committed)
   recordHistoryCheckpoint(true, newSessionCount)
   if (newSessionCount !== undefined) {
     logEvent('storage', 'history.session-created', {
@@ -954,6 +1155,23 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
       fileCount: files.length,
     })
   }
+  if (historyVaultAvailable()) {
+    await (await import('./historyVault.js')).protectChangedSession(session.id)
+  }
+}
+
+/** Serialize this window’s snapshots and compare the revision again inside each write transaction. */
+export const saveEditedSession = (session: Session, files?: StoredFile[]) => {
+  const edit: EditVersion = editVersions.get(session) ?? { exists: false }
+  editVersions.set(session, edit)
+  const save = () => saveSession(session, files, edit)
+  const write = edit.writing ? edit.writing.then(save, save) : save()
+  edit.writing = write
+  return write.finally(() => {
+    if (edit.writing === write) {
+      delete edit.writing
+    }
+  })
 }
 
 /** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */
@@ -981,6 +1199,9 @@ export const renameSession = async (id: string, title: string): Promise<void> =>
     })(),
     tx.done,
   ])
+  if (historyVaultAvailable()) {
+    await (await import('./historyVault.js')).protectChangedSession(id)
+  }
 }
 
 export const loadSessionGoalRuns = async (sessionId: string): Promise<string[]> => {
@@ -991,7 +1212,14 @@ export const loadSessionGoalRuns = async (sessionId: string): Promise<string[]> 
 
 /** 删除会话，仅清理已无会话引用的本地原件；远端文件不删。 */
 export const deleteSession = async (sessionId: string): Promise<void> => {
-  const { sessions, files, summaries, state, tx } = await historyTransaction('readwrite')
+  if (historyVaultAvailable()) {
+    const vault = await import('./historyVault.js')
+    return vault.protectDeletion(sessionId, (receipt) => deleteSessionRecord(sessionId, receipt))
+  }
+  return deleteSessionRecord(sessionId)
+}
+const deleteSessionRecord = async (sessionId: string, receipt?: VaultReceipt): Promise<void> => {
+  const { sessions, files, summaries, state, tx } = await historyTransaction('readwrite', true)
   const removed: string[] = []
   let sessionCount: number | undefined
   await Promise.all([
@@ -1001,6 +1229,9 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
         const incomplete = await state.get(INCOMPLETE_FILE_REFERENCES_KEY)
         await sessions.delete(sessionId)
         await summaries.delete(sessionId)
+        if (receipt) {
+          await state.put({ vaultCommit: receipt.id }, VAULT_COMMIT_KEY)
+        }
         for (const id of incomplete ? [] : summary?.fileIds ?? []) {
           if ((await summaries.index('fileIds').count(id)) === 0) {
             const file = await files.get(id)
@@ -1036,22 +1267,63 @@ const putFiles = async (staging: boolean, files: ArchivedFile[]) => {
   const history = await historyTransaction('readwrite')
   const store = staging ? history.stagingFiles : history.files
   try {
-    await Promise.all([
-      ...files.map((file) => store.put(file)),
-      ...(staging && files.length ? [history.state.put(true, INCOMPLETE_STAGING_KEY)] : []),
-      history.tx.done,
-    ])
+    await Promise.all(files.map((file) => store.put('disk' in file ? file : { ...file, revision: createId() })))
+    if (staging && files.length) {
+      await history.state.put(true, INCOMPLETE_STAGING_KEY)
+    } else if (historyVaultAvailable()) {
+      for (const file of files) {
+        const rows = await history.summaries.index('fileIds').getAll(file.id)
+        for (const row of rows) {
+          await history.summaries.put({ ...row, vaultRevision: createId() })
+        }
+      }
+    }
+    await history.tx.done
   } catch (error) {
     abortTransaction(history.tx)
     throw error
   }
 }
 
-export const saveFiles = (files: StoredFile[]): Promise<void> => putFiles(false, files)
+export const saveFiles = async (files: StoredFile[]): Promise<void> => {
+  await putFiles(false, files)
+  if (historyVaultAvailable() && files.length) {
+    const view = await historyTransaction('readonly')
+    const rows = await Promise.all(files.map(({ id }) => view.summaries.index('fileIds').getAllKeys(id)))
+    await view.tx.done
+    const vault = await import('./historyVault.js')
+    for (const sessionId of new Set(rows.flat())) {
+      await vault.protectChangedSession(sessionId)
+    }
+  }
+}
 
-export const loadFile = async (id: string): Promise<Blob | undefined> => {
+const loadFileRecord = async (id: string): Promise<ArchivedFile | undefined> => {
   const { files, tx } = await historyTransaction('readonly')
   const [record] = await Promise.all([files.get(id), tx.done])
+  return record
+}
+
+export const loadDiskOriginalRef = async (id: string): Promise<DiskOriginal | undefined> => {
+  const record = await loadFileRecord(id)
+  return record && 'disk' in record ? record.disk : undefined
+}
+
+export const saveConflictCopy = async (session: Session, files?: StoredFile[]): Promise<number> => {
+  const originals: CopyOriginals = { missing: 0, disk: [] }
+  await saveSession(session, files, { exists: false }, originals)
+  for (const disk of originals.disk) {
+    try {
+      await checkDiskOriginal(disk)
+    } catch {
+      originals.missing++
+    }
+  }
+  return originals.missing
+}
+
+export const loadFile = async (id: string): Promise<Blob | undefined> => {
+  const record = await loadFileRecord(id)
   return record && ('disk' in record ? readDiskOriginal(record.disk) : record.blob)
 }
 
@@ -1198,7 +1470,14 @@ export const updateStagingFileTypes = async (
 export const commitStaging = async ({
   allowEmpty = true,
 }: { allowEmpty?: boolean } = {}): Promise<SessionSummary[]> => {
-  const history = await historyTransaction('readwrite')
+  if (historyVaultAvailable()) {
+    const vault = await import('./historyVault.js')
+    return vault.protectStagedChange('replace', undefined, (receipt) => commitStagedRecords(allowEmpty, receipt))
+  }
+  return commitStagedRecords(allowEmpty)
+}
+const commitStagedRecords = async (allowEmpty: boolean, receipt?: VaultReceipt): Promise<SessionSummary[]> => {
+  const history = await historyTransaction('readwrite', true)
   const imported: SessionSummary[] = []
   let keep: string[] | undefined
   let previousSessionCount: number
@@ -1214,7 +1493,7 @@ export const commitStaging = async ({
       cursor;
       cursor = await cursor.continue()
     ) {
-      const summary = recordSummary(cursor.value)
+      const summary = { ...recordSummary(cursor.value), revision: receipt?.revisions.get(cursor.primaryKey) ?? createId() }
       await history.summaries.put(summary)
       imported.push(toSessionSummary(summary))
     }
@@ -1222,6 +1501,9 @@ export const commitStaging = async ({
       throw new Error('Incomplete history replacement')
     }
     keep = await diskKeys(history.stagingFiles)
+    if (receipt) {
+      await history.state.put({ vaultCommit: receipt.id }, VAULT_COMMIT_KEY)
+    }
     await Promise.all([
       confirmHistorySelection(history, !history.useStagingStores),
       history.state.put(expected === 0, CONFIRMED_EMPTY_KEY),
@@ -1276,7 +1558,7 @@ export const prepareHistoryMerge = async () => {
   return new Set([...keys, ...current.flatMap(({ fileIds }) => fileIds)])
 }
 
-export const previewHistoryMerge = async (): Promise<HistoryImportPreview> => {
+export const previewHistoryMerge = async (allowOriginalsOnly = false): Promise<HistoryImportPreview> => {
   const { tx, stagingSessions, summaries, sessions, useStagingStores } =
     await historyTransaction('readonly')
   const [expected, count, current] = await Promise.all([
@@ -1299,7 +1581,7 @@ export const previewHistoryMerge = async (): Promise<HistoryImportPreview> => {
     }
   }
   await tx.done
-  if (scanned !== expected || !scanned) {
+  if (scanned !== expected || (!scanned && !allowOriginalsOnly)) {
     throw new BackupError(scanned === expected ? 'backupEmptyHistory' : 'backupIncomplete')
   }
   return {
@@ -1321,9 +1603,23 @@ const sameConversationVersion = (
 /** Keep the archive payload in staging and copy existing records into that same bank before switching. */
 export const commitHistoryMerge = async (
   preview: HistoryImportPreview,
-  useBackup: ReadonlySet<string>
+  useBackup: ReadonlySet<string>,
+  repairs?: ReadonlyMap<string, string | null>
 ) => {
-  const history = await historyTransaction('readwrite')
+  if (historyVaultAvailable() && !repairs) {
+    const vault = await import('./historyVault.js')
+    const keep = new Set(preview.conflicts.filter(({ local }) => !useBackup.has(local.id)).map(({ local }) => local.id))
+    return vault.protectStagedChange('merge', keep, (receipt) => commitMergedRecords(preview, useBackup, receipt))
+  }
+  return commitMergedRecords(preview, useBackup, undefined, repairs)
+}
+const commitMergedRecords = async (
+  preview: HistoryImportPreview,
+  useBackup: ReadonlySet<string>,
+  receipt?: VaultReceipt,
+  repairs?: ReadonlyMap<string, string | null>
+) => {
+  const history = await historyTransaction('readwrite', true)
   const { tx, sessions, files, summaries, stagingSessions, stagingFiles, state } = history
   const imported: StoredSessionSummary[] = []
   const replaced = new Set<string>()
@@ -1332,6 +1628,7 @@ export const commitHistoryMerge = async (
   const importedFiles = new Set<string>()
   let kept = 0
   let originalCount: number
+  let repairedOriginals = 0
   let merged: SessionSummary[]
   let keep: string[] | undefined
   try {
@@ -1344,6 +1641,18 @@ export const commitHistoryMerge = async (
       throw new BackupError('backupMergeChanged')
     }
     const locals = new Map(current.map((summary) => [summary.id, summary]))
+    for (const [id, expectedKey] of repairs ?? []) {
+      const prior = await files.get(id)
+      const staged = await stagingFiles.get(id)
+      if (!staged) {
+        throw new BackupError('backupIncomplete')
+      }
+      if (!prior || ('disk' in prior && prior.disk.key === expectedKey)) {
+        await files.put(staged)
+        repairedOriginals++
+      }
+      await stagingFiles.delete(id)
+    }
     const choices = new Map(preview.conflicts.map((conflict) => [conflict.local.id, conflict]))
     let scanned = 0
     for (let cursor = await stagingSessions.openCursor(); cursor; cursor = await cursor.continue()) {
@@ -1364,7 +1673,7 @@ export const commitHistoryMerge = async (
         current.fileIds.forEach((file) => replacedFiles.add(file))
         current.goalRunIds?.forEach((run) => replacedRuns.add(run))
       }
-      const summary = { ...recordSummary(cursor.value), revision: createId() }
+      const summary = { ...recordSummary(cursor.value), revision: receipt?.revisions.get(id) ?? createId() }
       summary.fileIds.forEach((file) => importedFiles.add(file))
       locals.set(id, summary)
       imported.push(summary)
@@ -1434,6 +1743,9 @@ export const commitHistoryMerge = async (
       keep = await diskKeys(files)
       await Promise.all([stagingSessions.clear(), stagingFiles.clear()])
     }
+    if (receipt) {
+      await state.put({ vaultCommit: receipt.id }, VAULT_COMMIT_KEY)
+    }
     await Promise.all([state.delete(INCOMPLETE_STAGING_KEY), tx.done])
   } catch (error) {
     abortTransaction(tx)
@@ -1447,6 +1759,7 @@ export const commitHistoryMerge = async (
   }
   return {
     summaries: merged,
+    repairedOriginals,
     imported: imported.map(toSessionSummary),
     replaced,
     replacedRuns,

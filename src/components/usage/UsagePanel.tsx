@@ -4,11 +4,13 @@ import { beginDiagnosticOperation, diagnosticError } from '../../services/diagno
 import {
   collectUsage,
   formatCacheHitRate,
+  hasUsageEstimate,
   totalCacheCounts,
   recentDays,
   todayKey,
   usePricing,
   type UsageStats,
+  type UsageTotals,
 } from '../../services/usage.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
 import { Button } from '../base/Button.js'
@@ -21,6 +23,8 @@ const formatTokens = (value: number) => value.toLocaleString()
 
 const formatCost = (value: number) =>
   value >= 1 || value === 0 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
+const displayCost = (usage?: UsageTotals) =>
+  usage?.requests && !hasUsageEstimate(usage) ? '—' : formatCost(usage?.costCny ?? 0)
 
 /** 紧凑金额：面板里的大数字用 */
 /** 千分位紧凑：42,319 → 42.3k */
@@ -147,18 +151,10 @@ export const UsageContent = ({
           {pricingLink}
         </div>
         <div className={styles.ledgerTotals}>
-          <div className={styles.heroValue}>
-            {stats.total.unpricedRequests === stats.total.requests
-              ? '—'
-              : formatCost(stats.total.costCny)}
-          </div>
+          <div className={styles.heroValue}>{displayCost(stats.total)}</div>
           <div className={styles.heroToday}>
             <span>{t('usageToday')}</span>
-            <strong>
-              {today?.requests && today.requests === today.unpricedRequests
-                ? '—'
-                : formatCost(today?.costCny ?? 0)}
-            </strong>
+            <strong>{displayCost(today)}</strong>
           </div>
         </div>
         {stats.total.unpricedRequests > 0 ? (
@@ -205,7 +201,7 @@ export const UsageContent = ({
         <div className={styles.sectionHeader}>
           <span className={styles.sectionTitle}>{t('usageLast14Days')}</span>
           <span className={styles.sectionHint}>
-            {t('usageToday')} {formatCost(today?.costCny ?? 0)}
+            {t('usageToday')} {displayCost(today)}
           </span>
         </div>
         <div className={styles.chart} aria-label={t('usageLast14Days')}>
@@ -213,7 +209,7 @@ export const UsageContent = ({
             <div
               key={day.date}
               className={styles.chartBarWrap}
-              title={`${day.date} · ${formatCost(day.costCny)} · ${formatTokens(day.requests)} ${t('usageRequests')}`}
+              title={`${day.date} · ${displayCost(day)} · ${formatTokens(day.requests)} ${t('usageRequests')}`}
             >
               <div
                 className={styles.chartBar}
@@ -238,9 +234,7 @@ export const UsageContent = ({
               <span className={styles.sessionTitle}>{item.title || t('untitledChat')}</span>
               <span className={styles.sessionMeta}>
                 {compactTokens(item.cacheReadTokens + item.cacheMissTokens + item.outputTokens)} tok
-                <span className={styles.sessionCost}>
-                  {item.unpricedRequests === item.requests ? '—' : formatCost(item.costCny)}
-                </span>
+                <span className={styles.sessionCost}>{displayCost(item)}</span>
               </span>
             </div>
           ))}

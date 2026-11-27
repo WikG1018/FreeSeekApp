@@ -23,6 +23,8 @@ import {
 } from './zipReader.js'
 import { stageArchiveFile, useDiskForArchive } from './stageArchiveFile.js'
 
+export type ArchivePartial = { skippedSessions: number; missingOriginals: number }
+
 /** 从原件字节补充图片 MIME；无法识别时为空字符串，图片身份仍由归档的 is_image 决定。 */
 const imageType = (bytes: Uint8Array): string => {
   const startsWith = (...prefix: number[]) => prefix.every((byte, index) => bytes[index] === byte)
@@ -91,7 +93,7 @@ export const importArchive = async (
   file: File,
   mapFileId: (id: string) => string,
   onProgress?: ImportProgress
-): Promise<{ settings?: NativeBackupSettings; skipped: number }> => {
+): Promise<{ settings?: NativeBackupSettings; skipped: number; archivePartial?: ArchivePartial }> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
   }
@@ -152,7 +154,13 @@ export const importArchive = async (
           const settings = await importNativeEntries(
             entries, native, total, useDisk, mapFileId, onProgress
           )
-          return { settings, skipped: 0 }
+          const archivePartial = native.partial?.kind === 'unreadable'
+            ? {
+                skippedSessions: native.partial.skippedSessions,
+                missingOriginals: native.partial.missingOriginals ?? 0,
+              }
+            : undefined
+          return { settings, skipped: 0, archivePartial }
         }
         checkManifest(data)
         logEvent('backup', 'import.format-detected', { format: 'deepseek' })

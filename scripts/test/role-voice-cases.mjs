@@ -81,6 +81,241 @@ export const runRoleVoiceCases = async (run) => {
     assert.deepEqual(await page.evaluate(() => window.__microphoneFixture), { captures: 1, stopped: 1, samples: 1 })
   })
 
+  await run('ordinary read-aloud pauses before audio and resumes buffered audio without another request', async (page) => {
+    let requests = 0
+    let disconnected = false
+    let sendAudio
+    const audioReady = new Promise((resolve) => { sendAudio = resolve })
+    await page.route('**/v1/tools/tts', async (route) => {
+      requests++
+      assert.equal(route.request().postDataJSON().format, 'pcm')
+      if (disconnected) {
+        await route.abort('internetdisconnected')
+        return
+      }
+      await audioReady
+      await route.fulfill({
+        headers: { 'access-control-allow-origin': '*' },
+        contentType: 'application/octet-stream',
+        body: Buffer.alloc(24_000 * 2 * 4),
+      })
+    })
+    await page.evaluate(async () => {
+      const a = window.__audit
+      a.settings.setApiKey('tts-fixture')
+      await a.seed([a.fixtures.session({
+        messages: [a.fixtures.user('tts-q', '检查朗读'), a.fixtures.assistant('tts-a', '这是普通朗读样本。')],
+      })])
+      window.AudioContext = class extends window.AudioContext {
+        constructor(options) {
+          super(options)
+          window.__ttsContext = this
+        }
+      }
+    })
+    const reply = page.locator('[data-message-id="tts-a"]')
+    const play = reply.getByRole('button', { name: '朗读', exact: true })
+    const pause = reply.getByRole('button', { name: '暂停朗读', exact: true })
+    const resume = reply.getByRole('button', { name: '继续朗读', exact: true })
+    const pauseAndMeasure = async () => {
+      await pause.click({ timeout: 3000 })
+      await resume.waitFor()
+      await page.waitForFunction(() => window.__ttsContext.state === 'suspended')
+      const times = await page.evaluate(async () => {
+        const time = window.__ttsContext.currentTime
+        await new Promise((resolve) => setTimeout(resolve, 180))
+        return [time, window.__ttsContext.currentTime]
+      })
+      assert.equal(times[0], times[1], 'the audio clock stays stopped while paused')
+    }
+    const playback = () => window.__audit.readAloud.useReadAloud.getState().status
+    try {
+      await play.click()
+      await pauseAndMeasure()
+      sendAudio()
+      await resume.click()
+      await page.waitForFunction(() => window.__audit.readAloud.useReadAloud.getState().status === 'playing')
+      await pauseAndMeasure()
+      if (process.env.FREESEEK_SPEECH_PREVIEWS) {
+        await page.screenshot({ path: 'tmp/regression/tts-paused-zh.png', animations: 'disabled' })
+      }
+      await resume.click()
+      await page.waitForFunction(() => window.__ttsContext.state === 'running')
+      await reply.getByRole('button', { name: '停止朗读', exact: true }).click()
+      await play.waitFor()
+      await page.waitForFunction(() => window.__ttsContext.state === 'closed')
+      assert.equal(await page.evaluate(playback), 'idle')
+      assert.equal(requests, 1, 'pause and resume stay in the original TTS request')
+      disconnected = true
+      await play.click()
+      await page.getByText('语音服务连接失败，请检查网络后重试。', { exact: true }).waitFor()
+      await play.waitFor()
+      assert.equal(await page.evaluate(playback), 'idle')
+      disconnected = false
+      await play.click()
+      await page.waitForFunction(() => window.__audit.readAloud.useReadAloud.getState().status === 'playing')
+      await reply.getByRole('button', { name: '停止朗读', exact: true }).click()
+      assert.equal(requests, 3)
+    } finally {
+      sendAudio()
+    }
+  })
+
+  await run('voice capture releases late permission and never plays audio into the mic', async (page) => {
+    let plays = 0
+    let uploads = 0
+    await page.route('**/v1/tools/tts', async (route) => {
+      plays++
+      await route.fulfill({
+        headers: { 'access-control-allow-origin': '*' },
+        contentType: 'application/octet-stream',
+        body: Buffer.alloc(24_000 * 2 * 4),
+      })
+    })
+    await page.route('**/v1/tools/asr', async (route) => {
+      uploads++
+      await route.abort()
+    })
+    await page.evaluate(async () => {
+      const a = window.__audit
+      a.settings.setApiKey('voice-focus-fixture')
+      await a.seed([
+        a.fixtures.session({
+          id: 'voice-focus', title: '录音与朗读', messages: [
+            a.fixtures.user('focus-q', '检查录音'), a.fixtures.assistant('focus-a', '两者应当互斥。'),
+          ],
+        }),
+        a.fixtures.session({ id: 'voice-other', title: '另一个测试会话' }),
+      ])
+      const counts = { attempts: 0, stopped: 0 }
+      window.__micUse = counts
+      let hidden = false
+      Object.defineProperty(document, 'visibilityState', { get: () => hidden ? 'hidden' : 'visible' })
+      window.__changeVisibility = (value) => {
+        hidden = value
+        document.dispatchEvent(new Event('visibilitychange'))
+      }
+      navigator.mediaDevices.getUserMedia = async () => {
+        const attempt = ++counts.attempts
+        if (attempt === 1) {
+          throw new DOMException('Synthetic permission denial', 'NotAllowedError')
+        }
+        const generator = new AudioContext()
+        const destination = generator.createMediaStreamDestination()
+        const track = destination.stream.getAudioTracks()[0]
+        const stop = track.stop.bind(track)
+        track.stop = () => {
+          counts.stopped++
+          stop()
+          void generator.close()
+        }
+        if (attempt === 2) {
+          await new Promise((resolve) => { window.__grantLateMic = resolve })
+        }
+        return destination.stream
+      }
+    })
+    const composer = page.getByTestId('chat-composer')
+    const microphone = composer.getByRole('button', { name: '语音输入', exact: true })
+    const discard = composer.getByRole('button', { name: '丢弃录音', exact: true })
+    const record = composer.getByRole('button', { name: '结束录音并转写', exact: true })
+    const reply = page.locator('[data-message-id="focus-a"]')
+    const play = reply.getByRole('button', { name: '朗读', exact: true })
+    await composer.locator('textarea').fill('这是未发送的草稿。')
+    await microphone.click()
+    await composer.getByRole('alert').waitFor()
+    await microphone.click()
+    await page.waitForFunction(() => Boolean(window.__grantLateMic))
+    await page.evaluate(() => {
+      window.__changeVisibility(true)
+      window.__changeVisibility(false)
+      window.__grantLateMic()
+    })
+    await page.waitForFunction(() => window.__micUse.stopped === 1, undefined, { timeout: 3000 })
+    await microphone.click()
+    await record.waitFor()
+    await play.click()
+    await page.getByText('请先结束录音，再朗读。', { exact: true }).waitFor({ timeout: 3000 })
+    assert.equal(plays, 0)
+    await discard.click()
+    await page.waitForFunction(() => window.__micUse.stopped === 2)
+    await play.click()
+    await page.waitForFunction(() => window.__audit.readAloud.useReadAloud.getState().status === 'playing')
+    await microphone.click()
+    await record.waitFor()
+    assert.equal(await page.evaluate(() => window.__audit.readAloud.useReadAloud.getState().status), 'idle')
+    const chooseConversation = async (id) => {
+      if (page.viewportSize().width < 768) {
+        await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+      }
+      await page.locator('[data-session-id="' + id + '"] [data-sider-swipe-row]').click()
+    }
+    await chooseConversation('voice-other')
+    await page.waitForFunction(() => window.__micUse.stopped === 3)
+    await chooseConversation('voice-focus')
+    assert.equal(await composer.locator('textarea').inputValue(), '这是未发送的草稿。')
+    assert.equal(plays, 1)
+    assert.equal(uploads, 0)
+  })
+
+  await run('role playback aligns the second speaker with the audio clock after a short pause', async (page) => {
+    let requests = 0
+    await page.route('https://api.xiaomimimo.com/v1/chat/completions', (route) => {
+      requests++
+      return route.fulfill({
+        headers: { 'access-control-allow-origin': '*' },
+        contentType: 'application/json',
+        json: { choices: [{ message: { audio: { data: Buffer.alloc(24_000 * 2).toString('base64') } } }] },
+      })
+    })
+    await page.evaluate(async () => {
+      const a = window.__audit
+      a.settings.setRoleVoice({ enabled: true })
+      a.providers.saveProvider({
+        ...a.providers.emptyProfile(), name: '小米 MiMo', protocol: 'openai',
+        url: 'https://api.xiaomimimo.com/v1', apiKey: 'speech-timeline-fixture',
+        model: 'mimo-v2.5-tts', models: ['mimo-v2.5-tts'],
+      }, false)
+      await a.seed([a.fixtures.session({ messages: [
+        a.fixtures.user('clock-q', '检查换人时机'),
+        a.fixtures.assistant('clock-a', '⟦旁白|音色=白桦⟧门开了。\n\n⟦林悦|音色=茉莉|重要性=主角⟧我回来了。'),
+      ] })])
+      const times = { scheduled: [], spoken: {} }
+      window.__speakerTimes = times
+      window.AudioContext = class extends window.AudioContext {
+        constructor(options) {
+          super(options)
+          window.__voiceClock = this
+        }
+        createBufferSource() {
+          const source = super.createBufferSource()
+          const start = source.start.bind(source)
+          source.start = (when) => {
+            times.scheduled.push(when)
+            return start(when)
+          }
+          return source
+        }
+      }
+      a.readAloud.useReadAloud.subscribe(({ status, speakingRole }) => {
+        if (status === 'playing' && speakingRole && !Object.hasOwn(times.spoken, speakingRole)) {
+          times.spoken[speakingRole] = window.__voiceClock.currentTime
+        }
+      })
+    })
+    const controls = page.getByTestId('role-speech-controls')
+    await controls.getByRole('button', { name: '朗读', exact: true }).click()
+    await page.waitForFunction(() => window.__speakerTimes.scheduled.length === 2 && window.__speakerTimes.spoken['旁白'] !== undefined)
+    await controls.getByRole('button', { name: '暂停朗读', exact: true }).click()
+    await page.waitForFunction(() => window.__voiceClock.state === 'suspended')
+    await page.waitForTimeout(260)
+    await controls.getByRole('button', { name: '继续朗读', exact: true }).click()
+    await page.waitForFunction(() => window.__speakerTimes.spoken['林悦'] !== undefined)
+    const { scheduled, spoken } = await page.evaluate(() => window.__speakerTimes)
+    assert.ok(spoken['林悦'] >= scheduled[1] - 0.02, JSON.stringify({ scheduled, spoken }))
+    assert.equal(requests, 2)
+  })
+
   const parse = async (page, text, existing = [], options) =>
     page.evaluate(
       async ({ text, existing, options }) => {
@@ -957,10 +1192,16 @@ export const runRoleVoiceCases = async (run) => {
           results.push({ notice: a.readAloud.describeReadAloudError(error).key })
         }
       }
-      return results
+      return { results, logs: (await a.diagnostics.readDiagnosticLogs()).events.filter(
+        ({ event }) => event.startsWith('mimo.synthesis.')
+      ) }
     }, profile())
     assert.deepEqual(models, ['designed-voice', 'preset-voice'])
-    assert.deepEqual(result, [{ bytes: [1, 2] }, { notice: 'ttsInterrupted' }])
+    assert.deepEqual(result.results, [{ bytes: [1, 2] }, { notice: 'ttsInterrupted' }])
+    const failure = result.logs.find(({ event }) => event === 'mimo.synthesis.failed')
+    assert.equal(failure?.details.stage, 'audio-stream')
+    assert.equal(failure?.details.audioBytes, 2)
+    assert.doesNotMatch(JSON.stringify(result.logs), /测试。|说话轻柔|白桦/)
   })
 
   // ---------- 多段播放队列 ----------
@@ -968,7 +1209,6 @@ export const runRoleVoiceCases = async (run) => {
   const fakeAudio = (page) =>
     page.evaluate(() => {
       const log = []
-      let t = 0
       class FakeSource {
         constructor() {
           this.buffer = null
@@ -989,9 +1229,10 @@ export const runRoleVoiceCases = async (run) => {
           this.state = 'running'
           this.destination = {}
           this.sources = []
+          this.startedAt = performance.now()
         }
         get currentTime() {
-          return t
+          return (performance.now() - this.startedAt) / 1000
         }
         resume() {
           return Promise.resolve()
@@ -2508,9 +2749,12 @@ export const runRoleVoiceCases = async (run) => {
       assert.match(await speech.innerText(), /从下方链接创建的密钥请选「按量 API」/)
       await speech.getByRole('button', { name: '创建按量 API 密钥' }).click()
       await speech.getByRole('button', { name: '语音模型说明' }).click()
+      await speech.getByRole('button', { name: 'Token Plan 套餐规则' }).click()
+      assert.match(await speech.innerText(), /套餐额度限编程工具使用/)
       assert.deepEqual(await page.evaluate(() => window.__guideLinks), [
         'https://platform.xiaomimimo.com/#/console/api-keys',
         'https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5',
+        'https://mimo.mi.com/docs/zh-CN/tokenplan/Token%20Plan/subscription',
       ])
       assert.equal(await speech.locator('[data-settings-target="chat"]').count(), 0)
       await page.getByRole('button', { name: '返回', exact: true }).click()
@@ -2536,7 +2780,14 @@ export const runRoleVoiceCases = async (run) => {
       await listen(narratorPreview)
       await chooseType(/^Token Plan 订阅/)
       assert.equal(await address.inputValue(), 'https://token-plan-cn.xiaomimimo.com/v1')
-      assert.equal(await key.inputValue(), 'sk-paygo-test')
+      assert.equal(await key.inputValue(), '', 'changing hosts cannot reuse the previous credential')
+      await speech.getByText('请填写此服务地址对应的密钥。', { exact: true }).waitFor()
+      assert.equal(await narratorPreview.count(), 0)
+      assert.equal(await save.isEnabled(), false)
+      assert.equal(previews.length, 1)
+      await chooseType(/^按量 API/)
+      assert.equal(await key.inputValue(), 'sk-paygo-test', 'returning before editing restores the key')
+      await chooseType(/^Token Plan 订阅/)
       assert.equal(await speech.getByRole('link', { name: '获取密钥' }).getAttribute('href'),
         'https://platform.xiaomimimo.com/#/console/plan-manage')
       await key.fill('tp-subscription-test')
@@ -2550,7 +2801,14 @@ export const runRoleVoiceCases = async (run) => {
       await chooseType('自定义地址')
       assert.equal(await address.inputValue(), '')
       await address.fill('https://tts.example/v1')
+      assert.equal(await key.inputValue(), '')
+      assert.equal(await narratorPreview.count(), 0)
       await key.fill('sk-speech-only')
+      await address.fill('https://tts-other.example/v1')
+      assert.equal(await key.inputValue(), '')
+      assert.equal(await save.isEnabled(), false)
+      await address.fill('https://tts.example/v1')
+      assert.equal(await key.inputValue(), 'sk-speech-only')
       await page.getByLabel('预置音色模型').fill('custom-tts')
       await page.getByLabel('描述音色模型').fill('custom-design')
       assert.equal(await page.getByLabel('服务地址').getAttribute('type'), 'url')

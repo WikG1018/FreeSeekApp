@@ -1,7 +1,8 @@
 import clsx from 'clsx'
 import { memo, useId, useState } from 'react'
-import { useTranslate } from '../../i18n/index.js'
+import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
+  IconDownloadOutline16,
   IconEditOutline16,
   IconBookOutline16,
   IconEllipsisOutline16,
@@ -16,6 +17,7 @@ import {
   startInheritSession,
   useChatStore,
 } from '../../services/chat/store.js'
+import { BackupError, saveHistoryBackup } from '../../services/chat/backup.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { useNativeGoalActivity } from '../../services/tasks/goalBridge.js'
 import { openContextSummary } from '../messages/ContextSummaryDialog.js'
@@ -37,6 +39,9 @@ export const SessionItem = memo(function SessionItem({
 }) {
   const t = useTranslate()
   const [editing, setEditing] = useState(false)
+  const [backingUp, setBackingUp] = useState(false)
+  const [backupReport, setBackupReport] = useState<Awaited<ReturnType<typeof saveHistoryBackup>>>()
+  const [backupError, setBackupError] = useState<TranslationKey>()
   const displayTitle = session.title || t('untitledChat')
   const kindId = useId()
   const mode = session.mode ?? 'chat'
@@ -51,6 +56,19 @@ export const SessionItem = memo(function SessionItem({
         ? 'siderAgentRunning'
         : 'siderReplyRunning'
       : undefined
+
+  const backup = async () => {
+    setBackingUp(true)
+    setBackupReport(undefined)
+    setBackupError(undefined)
+    try {
+      setBackupReport(await saveHistoryBackup(session.id))
+    } catch (error) {
+      setBackupError(error instanceof BackupError ? error.key : 'historyExportWriteFailed')
+    } finally {
+      setBackingUp(false)
+    }
+  }
 
   if (editing) {
     const finish = (title: string) => {
@@ -78,105 +96,136 @@ export const SessionItem = memo(function SessionItem({
   }
 
   return (
-    <div
-      className={clsx(styles.item, active && styles.active)}
-      data-session-id={session.id}
-      data-session-mode={mode}
-      data-session-activity={activity}
-    >
-      <button
-        type="button"
-        className={styles.openSession}
-        data-sider-swipe-row
-        aria-current={active ? 'page' : undefined}
-        aria-describedby={kindId}
-        onClick={() => {
-          selectSession(session.id)
-          closeMobileSider()
-        }}
+    <>
+      <div
+        className={clsx(styles.item, active && styles.active)}
+        data-session-id={session.id}
+        data-session-mode={mode}
+        data-session-activity={activity}
       >
-        <span className={styles.kind} title={kind} aria-hidden>
-          <ConversationIcon mode={mode} />
-        </span>
-        <span className={styles.copy}>
-          <span className={styles.title}>{displayTitle}</span>
-        </span>
-        {activity && (
-          <span className={styles.activity} aria-hidden="true">
-            <span className={styles.activityDot} />
-            {t(activity)}
-          </span>
-        )}
-        {session.pinned && (
-          <span className={styles.pin} aria-hidden>
-            <IconPinOutline16 />
-          </span>
-        )}
-      </button>
-      <span id={kindId} className={styles.accessibleKind}>
-        {kind}
-        {activity && ' · ' + t(activity)}
-        {session.pinned && ' · ' + t('sessionPinned')}
-      </span>
-      <div className={styles.action} onClick={(event) => event.stopPropagation()}>
-        <Menu
-          options={[
-            {
-              key: 'pin',
-              label: t(session.pinned ? 'sessionUnpin' : 'sessionPin'),
-              icon: <IconPinOutline16 />,
-              onSelect: () =>
-                void setSessionPinned(session.id, !session.pinned).then((updated) => {
-                  if (!updated) {
-                    showToast({ key: 'sessionPinFailed', type: 'error' })
-                  }
-                }),
-            },
-            {
-              key: 'continue',
-              label: t('sessionItemMenuContinueOption'),
-              icon: <IconLinkOutline16 />,
-              onSelect: () => {
-                startInheritSession(session.id)
-                closeMobileSider()
-              },
-            },
-            {
-              key: 'compress',
-              label: t('compressTitle'),
-              icon: <IconBookOutline16 />,
-              onSelect: () => {
-                selectSession(session.id)
-                closeMobileSider()
-                openContextSummary(session.id)
-              },
-            },
-            {
-              key: 'rename',
-              label: t('sessionItemMenuRenameOption'),
-              icon: <IconEditOutline16 />,
-              onSelect: () => setEditing(true),
-            },
-            {
-              key: 'delete',
-              label: t('delete'),
-              icon: <IconTrashOutline16 />,
-              danger: true,
-              onSelect: onDelete,
-            },
-          ]}
+        <button
+          type="button"
+          className={styles.openSession}
+          data-sider-swipe-row
+          aria-current={active ? 'page' : undefined}
+          aria-describedby={kindId}
+          onClick={() => {
+            selectSession(session.id)
+            closeMobileSider()
+          }}
         >
-          {({ toggle, open }) => (
-            <IconButton
-              icon={<IconEllipsisOutline16 />}
-              aria-label={t('more')}
-              aria-haspopup="menu"
-              aria-expanded={open}
-              onClick={toggle}
-            />
+          <span className={styles.kind} title={kind} aria-hidden>
+            <ConversationIcon mode={mode} />
+          </span>
+          <span className={styles.copy}>
+            <span className={styles.title}>{displayTitle}</span>
+          </span>
+          {activity && (
+            <span className={styles.activity} aria-hidden="true">
+              <span className={styles.activityDot} />
+              {t(activity)}
+            </span>
           )}
-        </Menu>
+          {session.pinned && (
+            <span className={styles.pin} aria-hidden>
+              <IconPinOutline16 />
+            </span>
+          )}
+        </button>
+        <span id={kindId} className={styles.accessibleKind}>
+          {kind}
+          {activity && ' · ' + t(activity)}
+          {session.pinned && ' · ' + t('sessionPinned')}
+        </span>
+        <div className={styles.action} onClick={(event) => event.stopPropagation()}>
+          <Menu
+            options={[
+              {
+                key: 'pin',
+                label: t(session.pinned ? 'sessionUnpin' : 'sessionPin'),
+                icon: <IconPinOutline16 />,
+                onSelect: () =>
+                  void setSessionPinned(session.id, !session.pinned).then((updated) => {
+                    if (!updated) {
+                      showToast({ key: 'sessionPinFailed', type: 'error' })
+                    }
+                  }),
+              },
+              {
+                key: 'continue',
+                label: t('sessionItemMenuContinueOption'),
+                icon: <IconLinkOutline16 />,
+                onSelect: () => {
+                  startInheritSession(session.id)
+                  closeMobileSider()
+                },
+              },
+              {
+                key: 'compress',
+                label: t('compressTitle'),
+                icon: <IconBookOutline16 />,
+                onSelect: () => {
+                  selectSession(session.id)
+                  closeMobileSider()
+                  openContextSummary(session.id)
+                },
+              },
+              {
+                key: 'backup',
+                label: t('sessionItemMenuBackupOption'),
+                icon: <IconDownloadOutline16 />,
+                disabled: backingUp,
+                onSelect: () => void backup(),
+              },
+              {
+                key: 'rename',
+                label: t('sessionItemMenuRenameOption'),
+                icon: <IconEditOutline16 />,
+                onSelect: () => setEditing(true),
+              },
+              {
+                key: 'delete',
+                label: t('delete'),
+                icon: <IconTrashOutline16 />,
+                danger: true,
+                onSelect: onDelete,
+              },
+            ]}
+          >
+            {({ toggle, open }) => (
+              <IconButton
+                icon={<IconEllipsisOutline16 />}
+                aria-label={t('more')}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                onClick={toggle}
+              />
+            )}
+          </Menu>
+        </div>
       </div>
-    </div>
+      {backupError ? (
+        <div className={clsx(styles.backupStatus, styles.backupError)} role="alert">
+          {t('historyExportFailed', { message: t(backupError) })}
+        </div>
+      ) : (
+        (backingUp || backupReport) && (
+          <div className={styles.backupStatus} role="status">
+            {backingUp
+              ? t('sessionRecoveryPreparing')
+              : t(
+                  backupReport?.destination === 'document'
+                    ? 'historyExportSaved'
+                    : 'historyExportDownloadStarted'
+                )}
+            {!!backupReport?.missingOriginals && (
+              <div>
+                {t('historyExportMissingOriginals', { count: backupReport.missingOriginals })}
+              </div>
+            )}
+          </div>
+        )
+      )}
+    </>
   )
 })

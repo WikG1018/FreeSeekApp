@@ -28,11 +28,11 @@
   container-type: inline-size;
 }
 
-button.image {
+button.image:not(:disabled) {
   cursor: pointer;
 }
 
-button.previewTrigger {
+button.previewTrigger:not(:disabled) {
   cursor: zoom-in;
 }
 

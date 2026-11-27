@@ -124,12 +124,14 @@ public class UpdatePlugin extends Plugin {
             if (direct.startsWith(mirror)) { direct = direct.substring(mirror.length()); break; }
         }
         URL url = new URL(direct);
+        boolean history = metadata && direct.matches(
+            "https://api\\.github\\.com/repos/" + REPO + "/releases\\?per_page=30&page=([1-9]|10)");
         if (!"https".equals(url.getProtocol()) || url.getUserInfo() != null ||
-            url.getPort() != -1 || url.getQuery() != null || url.getRef() != null) {
+            url.getPort() != -1 || (url.getQuery() != null && !history) || url.getRef() != null) {
             throw new IllegalArgumentException("invalid update URL");
         }
         boolean allowed = metadata
-            ? (direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest") ||
+            ? (history || direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest") ||
                direct.equals("https://github.com/" + REPO + "/releases/latest/download/update.json"))
             : url.getHost().equals("github.com") && url.getPath().matches(
                 "/" + REPO + "/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/freeseek-v[0-9]+\\.[0-9]+\\.[0-9]+-release\\.apk");

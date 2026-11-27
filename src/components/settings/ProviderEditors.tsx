@@ -1092,14 +1092,17 @@ const SPEECH_ACCESS_URLS = {
 } as const
 type SpeechAccess = keyof typeof SPEECH_ACCESS_URLS
 
-const speechAccessFromUrl = (address: string): SpeechAccess => {
+const speechEndpoint = (address: string) => {
   try {
-    const { protocol, hostname } = new URL(address.trim())
-    if (protocol === 'https:' && isMiMoHost(hostname)) {
-      return hostname === 'api.xiaomimimo.com' ? 'api' : 'tokenPlan'
-    }
+    return new URL(validateProviderUrl(address))
   } catch {
-    // Keep the custom choice while the address is incomplete.
+    return undefined
+  }
+}
+
+const speechAccessFromUrl = (url: URL | undefined): SpeechAccess => {
+  if (url?.protocol === 'https:' && isMiMoHost(url.hostname)) {
+    return url.hostname === 'api.xiaomimimo.com' ? 'api' : 'tokenPlan'
   }
   return 'custom'
 }
@@ -1108,6 +1111,7 @@ const SpeechSetupGuide = ({ defaultOpen }: { defaultOpen: boolean }) => {
   const t = useTranslate()
   const locale = useSettings((state) => state.locale)
   const voiceDocs = `https://mimo.mi.com/docs/${locale}/quick-start/usage-guide/audio/speech-synthesis-v2.5`
+  const planDocs = `https://mimo.mi.com/docs/${locale}/tokenplan/Token%20Plan/subscription`
   return (
     <SettingsDisclosure
       guide
@@ -1131,6 +1135,14 @@ const SpeechSetupGuide = ({ defaultOpen }: { defaultOpen: boolean }) => {
           onClick={() => void openExternal(voiceDocs)}
         >
           {t('providerSpeechGuideOpenDocs')}
+          <IconRightUpOutline14 />
+        </button>
+        <button
+          className={settingsStyles.tutorialButton}
+          type="button"
+          onClick={() => void openExternal(planDocs)}
+        >
+          {t('providerSpeechGuidePlanTerms')}
           <IconRightUpOutline14 />
         </button>
       </div>
@@ -1161,16 +1173,20 @@ export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
     },
   }
   const [form, setForm] = useState(initial)
+  const [keyOrigin, setKeyOrigin] = useState(() => speechEndpoint(initial.custom.url)?.origin)
   const [error, setError] = useState<{ text: string; preview?: SpeechPreview }>()
   const previewing = useReadAloud((state) => state.messageId)
   const loadingAudio = useReadAloud((state) => state.status === 'loading')
   const leave = useSettingsLeave(JSON.stringify(form) !== JSON.stringify(initial))
   const available = reusableVoiceProfiles(profiles)
-  const profile = roleVoiceProfile(profiles, form)
-  const speechAccess = speechAccessFromUrl(form.custom.url)
+  const endpoint = speechEndpoint(form.custom.url)
+  const keyFromAnotherAddress = Boolean(keyOrigin && keyOrigin !== endpoint?.origin && form.custom.apiKey)
+  const key = keyFromAnotherAddress ? '' : form.custom.apiKey
+  const profile = roleVoiceProfile(profiles, { ...form, custom: { ...form.custom, apiKey: key } })
+  const speechAccess = speechAccessFromUrl(endpoint)
   const canSave = form.source === 'follow'
     ? Boolean(profile)
-    : Boolean(form.custom.url.trim() && form.custom.apiKey.trim())
+    : Boolean(form.custom.url.trim() && key.trim())
   const previewStatus = t(loadingAudio ? 'ttsPreparing' : 'providerSpeechStopPreview')
 
   const stopPreview = () => {
@@ -1184,10 +1200,17 @@ export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
   const patch = (next: Partial<typeof form>) => {
     stopPreview()
     setError(undefined)
+    if (!keyOrigin && next.custom?.apiKey.trim()) {
+      setKeyOrigin(speechEndpoint(next.custom.url)?.origin)
+    }
     setForm((current) => ({ ...current, ...next }))
   }
-  const patchCustom = (key: keyof typeof form.custom, value: string) =>
-    patch({ custom: { ...form.custom, [key]: value } })
+  const patchCustom = (field: keyof typeof form.custom, value: string) => {
+    if (field === 'apiKey') {
+      setKeyOrigin(endpoint?.origin)
+    }
+    patch({ custom: { ...form.custom, [field]: value } })
+  }
 
   const selectSource = (source: typeof form.source) => {
     patch({
@@ -1201,7 +1224,7 @@ export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
   const save = () => {
     const url = form.custom.url.trim()
     if (form.source === 'custom') {
-      if (!url || !form.custom.apiKey.trim()) {
+      if (!url || !key.trim()) {
         setError({ text: t('providerSpeechMissingCustom') })
         return
       }
@@ -1218,7 +1241,7 @@ export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
     }
     if (!setRoleVoice({ ...form, custom: {
       url,
-      apiKey: form.custom.apiKey.trim(),
+      apiKey: key.trim(),
       model: form.custom.model.trim(),
       designModel: form.custom.designModel.trim(),
     } })) {
@@ -1321,10 +1344,13 @@ export const ProviderSpeechPage = ({ onDone }: { onDone: () => void }) => {
               </Field>
               <KeyField
                 label={t('providerKey')}
-                value={form.custom.apiKey}
+                value={key}
                 change={(apiKey) => patchCustom('apiKey', apiKey)}
                 helpHref={speechAccess === 'tokenPlan' ? MIMO_PLAN_KEYS_PAGE : undefined}
               />
+              {keyFromAnotherAddress && (
+                <p className={styles.hint}>{t('providerSpeechKeyForAddress')}</p>
+              )}
               <Field label={t('providerSpeechPresetModel')}>
                 <input autoCapitalize="none" autoComplete="off" spellCheck={false}
                   value={form.custom.model} placeholder={MIMO_TTS_MODEL}

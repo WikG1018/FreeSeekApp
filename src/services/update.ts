@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App as CapacitorApp } from '@capacitor/app'
+import { abortReason } from '../utils/abort.js'
 import { openExternal } from '../utils/openExternal.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from './diagnostics/log.js'
 import { isWindowsDesktop } from './api/windowsTransport.js'
@@ -13,7 +14,8 @@ import { isWindowsDesktop } from './api/windowsTransport.js'
  * - 原生流式下载与已下载包均须验证大小、摘要、包名、版本与签名
  */
 const REPO = 'WikG1018/FreeSeekApp'
-const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
+const RELEASES_API = `https://api.github.com/repos/${REPO}/releases`
+const RELEASE_API = `${RELEASES_API}/latest`
 const RELEASE_MANIFEST = `https://github.com/${REPO}/releases/latest/download/update.json`
 /** 国内网络常见的 GitHub 反代；顺序即优先级 */
 const MIRRORS = ['', 'https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']
@@ -31,6 +33,11 @@ const cacheKey = () =>
       : 'freeseek:web-update-cache'
 const CACHE_TTL = 6 * 3600_000
 const FETCH_TIMEOUT = 8000
+const NOTES_CACHE_KEY = 'freeseek:upgrade-notes'
+const RELEASES_PER_PAGE = 30
+// Keep this fixed range in sync with the native update metadata allowlists.
+const RELEASES_MAX_PAGES = 10
+const RELEASE_TAG = /^v\d+\.\d+\.\d+$/
 
 type NativeUpdate = {
   /** 原生代发 GET：镜像站普遍不带 CORS 头，WebView 的 fetch 会被拦 */
@@ -129,6 +136,25 @@ export const isNewer = (latest: string, current: string): boolean => {
   }
   return false
 }
+
+export const skipsVersions = (installed: string, available: string) => {
+  const [major, minor, patch] = parseVersion(installed)
+  return isNewer(available, `${major}.${minor}.${patch + 1}`)
+}
+
+export const publicReleaseNotes = (body: unknown): string =>
+  typeof body === 'string'
+    ? body
+        .split(/\r?\n/)
+        .filter(
+          (line) =>
+            !/打[赏賞]|收款[码碼]|感谢开发者|彩蛋|\bdonat(?:e|ion|ions)\b|\beaster eggs?\b/i.test(
+              line
+            )
+        )
+        .join('\n')
+        .trim()
+    : ''
 
 type Cache = { at: number; release: ReleaseInfo | null }
 
@@ -231,7 +257,7 @@ const releaseAsset = (asset: GithubAsset | undefined, tag: string): ReleaseAsset
 
 export const toRelease = (data: GithubRelease): ReleaseInfo => {
   const tag = data.tag_name ?? ''
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+  if (!RELEASE_TAG.test(tag)) {
     throw new Error('Invalid release tag')
   }
   const assets = data.assets ?? []
@@ -331,6 +357,123 @@ const readText = async (url: string): Promise<{ status: number; text: string }> 
   } finally {
     clearTimeout(timer)
   }
+}
+
+type VersionNotes = { version: string; notes: string }
+type UpgradeNotes = { entries: VersionNotes[]; complete: boolean }
+type NotesCache = { range: string; at: number; entries: VersionNotes[] }
+let pendingNotes: { range: string; result: Promise<UpgradeNotes> } | undefined
+
+const readNotesPage = async (page: number) => {
+  const url = `${RELEASES_API}?per_page=${RELEASES_PER_PAGE}&page=${page}`
+  const sources =
+    Capacitor.getPlatform() === 'android' ? [url, `https://gh-proxy.com/${url}`] : [url]
+  for (const source of sources) {
+    try {
+      const { status, text } = await readText(source)
+      if (status !== 200) {
+        continue
+      }
+      const data: unknown = JSON.parse(text)
+      if (Array.isArray(data) && data.length <= RELEASES_PER_PAGE) {
+        return data
+      }
+    } catch {
+      // Notes can fall back independently of the package update.
+    }
+  }
+  return null
+}
+
+const collectUpgradeNotes = async (installed: string, available: string): Promise<UpgradeNotes> => {
+  let cached: NotesCache | undefined
+  const range = `${installed}..${available}`
+  try {
+    const stored = JSON.parse(localStorage.getItem(NOTES_CACHE_KEY) ?? 'null') as NotesCache | null
+    if (stored?.range === range && Number.isFinite(stored.at) && Array.isArray(stored.entries)) {
+      cached = {
+        ...stored,
+        entries: stored.entries.filter(
+          (entry) =>
+            typeof entry?.version === 'string' &&
+            RELEASE_TAG.test('v' + entry.version) &&
+            typeof entry.notes === 'string' &&
+            isNewer(entry.version, installed) &&
+            !isNewer(entry.version, available)
+        ),
+      }
+      if (Date.now() - cached.at < CACHE_TTL) {
+        return { entries: cached.entries, complete: true }
+      }
+    }
+  } catch {
+    // A damaged or unavailable cache does not prevent history retrieval.
+  }
+
+  const notes = new Map<string, string>()
+  let complete = false
+  let foundTarget = false
+  for (let page = 1; page <= RELEASES_MAX_PAGES; page += 1) {
+    const releases = await readNotesPage(page)
+    if (!releases) {
+      break
+    }
+    for (const item of releases) {
+      if (
+        !item ||
+        item.draft !== false ||
+        item.prerelease !== false ||
+        typeof item.tag_name !== 'string' ||
+        !RELEASE_TAG.test(item.tag_name)
+      ) {
+        continue
+      }
+      const version = item.tag_name.slice(1)
+      if (!isNewer(version, installed) || isNewer(version, available)) {
+        continue
+      }
+      if (version === available) {
+        foundTarget = true
+      }
+      const body = publicReleaseNotes(item.body)
+      if (body && !notes.has(version)) {
+        notes.set(version, body)
+      }
+    }
+    if (releases.length < RELEASES_PER_PAGE) {
+      complete = foundTarget || browserUpdate()
+      break
+    }
+  }
+  if (!complete && cached) {
+    return { entries: cached.entries, complete: true }
+  }
+  const entries = Array.from(notes, ([version, notes]) => ({ version, notes })).sort(
+    (left, right) => (isNewer(left.version, right.version) ? -1 : 1)
+  )
+  if (complete) {
+    try {
+      localStorage.setItem(NOTES_CACHE_KEY, JSON.stringify({ range, at: Date.now(), entries }))
+    } catch {
+      // History remains usable with storage disabled or full.
+    }
+  }
+  logEvent('update', 'notes.loaded', { version: available, versions: entries.length, complete })
+  return { entries, complete }
+}
+
+export const loadUpgradeNotes = (installed: string, available: string): Promise<UpgradeNotes> => {
+  const range = `${installed}..${available}`
+  if (pendingNotes?.range === range) {
+    return pendingNotes.result
+  }
+  const result = collectUpgradeNotes(installed, available).finally(() => {
+    if (pendingNotes?.result === result) {
+      pendingNotes = undefined
+    }
+  })
+  pendingNotes = { range, result }
+  return result
 }
 
 /** 依次尝试直连与镜像，返回第一个可用结果；全部失败返回 null */
@@ -435,6 +578,49 @@ const showRelease = async (
   return newer
 }
 
+const activateWebShell = async (signal: AbortSignal) => {
+  if (!navigator.serviceWorker?.controller) {
+    return
+  }
+  const registration = await navigator.serviceWorker.getRegistration()
+  if (!registration) {
+    return
+  }
+  if (!registration.installing && !registration.waiting) {
+    await registration.update()
+  }
+  const worker = registration.installing ?? registration.waiting
+  if (!worker) {
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      worker.removeEventListener('statechange', check)
+      signal.removeEventListener('abort', abort)
+    }
+    const abort = () => {
+      cleanup()
+      reject(abortReason(signal))
+    }
+    const check = () => {
+      if (worker.state === 'activated') {
+        cleanup()
+        resolve()
+      } else if (worker.state === 'redundant') {
+        cleanup()
+        reject(new Error('Web update could not stage the application shell'))
+      }
+    }
+    if (signal.aborted) {
+      abort()
+    } else {
+      signal.addEventListener('abort', abort, { once: true })
+      worker.addEventListener('statechange', check)
+      check()
+    }
+  })
+}
+
 const prepareWebUpdate = async (release: ReleaseInfo, files: string[], trigger: string) => {
   useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
   const finish = beginDiagnosticOperation('update', 'web.prepare', {
@@ -455,8 +641,9 @@ const prepareWebUpdate = async (release: ReleaseInfo, files: string[], trigger: 
         throw new Error('Web update resource unavailable')
       }
       await response.arrayBuffer()
-      useUpdate.setState({ percent: Math.round(((index + 1) / files.length) * 100) })
+      useUpdate.setState({ percent: Math.min(99, Math.round(((index + 1) / files.length) * 100)) })
     }
+    await activateWebShell(controller.signal)
     preparedWebVersion = release.version
     useUpdate.setState({ status: 'ready', percent: 100 })
     finish('completed', { files: files.length })

@@ -102,6 +102,7 @@ export const useVoiceInput = (owner: string | null, onText: (text: string) => vo
       logEvent('speech', 'transcription.completed', { empty: !transcript })
       if (transcript) {
         onTextRef.current(transcript)
+        logEvent('speech', 'transcription.inserted-in-composer', { sessionId: owner ?? undefined })
       } else {
         setError({ key: 'voiceInputEmpty' })
       }
@@ -259,7 +260,7 @@ export const useVoiceInput = (owner: string | null, onText: (text: string) => vo
       if (phase.current === 'transcribing') {
         pauseTranscription()
       }
-      if (phase.current === 'recording') {
+      if (phase.current === 'recording' || phase.current === 'starting') {
         cancel()
       }
     }

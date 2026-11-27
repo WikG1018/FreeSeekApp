@@ -239,6 +239,7 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
         return { transcript, logs: JSON.stringify(logs.events) }
       })
       assert.equal(result.transcript, 'TRANSCRIPT_PRIVACY_CANARY')
+      assert.match(result.logs, /transcription\.completed/)
       assert.doesNotMatch(result.logs, /TRANSCRIPT_PRIVACY_CANARY|fake-asr-key|test audio/)
     }
   )
@@ -884,7 +885,7 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
     async (page) => {
       await page.evaluate(async () => {
         const a = window.__audit
-        a.settings.setStartupPage('new-chat')
+        await a.settings.setStartupPage('new-chat')
         a.settings.saveThirdPartySearch({
           enabled: true,
           keySource: 'separate',
@@ -1059,6 +1060,49 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
           return open(name, version)
         }
       })
+    }
+  )
+
+  await run(
+    'diagnostic export reads persisted history when the current log write stalls',
+    async (page) => {
+      await page.evaluate(async () => {
+        const diagnostics = window.__audit.diagnostics
+        diagnostics.logEvent('storage', 'previous-run.saved')
+        await diagnostics.flushDiagnosticLogs()
+      })
+      await page.reload()
+      await page.waitForFunction(() => Boolean(window.__audit))
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        await a.diagnostics.flushDiagnosticLogs()
+        const blocker = await new Promise((resolve, reject) => {
+          const request = indexedDB.open('diagnostic-write-fixture', 1)
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+        const blocked = indexedDB.open('diagnostic-write-fixture', 2)
+        const put = IDBObjectStore.prototype.put
+        IDBObjectStore.prototype.put = function (...args) {
+          return this.transaction.db.name === 'freeseek-diagnostics' ? blocked : put.apply(this, args)
+        }
+        try {
+          a.diagnostics.logEvent('storage', 'current-run.pending')
+          const pack = await a.diagnosticBundle.createDiagnosticBundle(), texts = {}
+          for await (const entry of a.readArchive(new File([pack.blob], pack.name))) {
+            texts[entry.path] = await (await a.readEntry(entry)).text()
+          }
+          return texts
+        } finally {
+          IDBObjectStore.prototype.put = put
+          blocker.close()
+        }
+      })
+      const summary = JSON.parse(result['summary.json'])
+      assert.match(result['client-events.jsonl'], /previous-run\.saved/)
+      assert.match(result['client-events.jsonl'], /current-run\.pending/)
+      assert.equal(summary.clientLogFlush, 'timeout')
+      assert.equal(summary.clientLogRead, 'available')
     }
   )
 

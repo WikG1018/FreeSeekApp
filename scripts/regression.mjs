@@ -24,6 +24,7 @@ import { runDocumentLayoutCases } from './test/document-layout-cases.mjs'
 import { runTaskReaderCases } from './test/task-reader-cases.mjs'
 import { runNativeBrowserCases } from './test/native-browser-cases.mjs'
 import { runHistoryRecoveryCases } from './test/history-recovery-cases.mjs'
+import { runHistoryVaultCases } from './test/history-vault-cases.mjs'
 import { runFontCases } from './test/font-cases.mjs'
 import { runDiagnosticRetentionCases } from './test/diagnostic-retention-cases.mjs'
 
@@ -174,6 +175,7 @@ try {
   await runCompressionCases(run)
   await runCompatibilityCases(run)
   await runHistoryRecoveryCases(run)
+  await runHistoryVaultCases(run)
   await runFontCases(run)
   await runDiagnosticRetentionCases(run)
   await runAndroidStabilityCases({

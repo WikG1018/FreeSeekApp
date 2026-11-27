@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+contextBridge.exposeInMainWorld('freeseekDesktopDiagnostics', () =>
+  ipcRenderer.invoke('freeseek:diagnostics:snapshot')
+)
+
 contextBridge.exposeInMainWorld('freeseekCopyTaskOutput', (options) =>
   ipcRenderer.invoke('freeseek:file:copy-task-output', options)
 )

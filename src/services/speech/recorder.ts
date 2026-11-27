@@ -3,11 +3,16 @@
  *
  * Prefer 16 kHz, with a WAV resampling fallback for devices that require their native rate.
  */
+import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
+
 export const SAMPLE_RATE = 16000
 /** ASR 单次时长上限 120 秒 */
 export const MAX_SECONDS = 120
 
 const BUFFER_SIZE = 4096
+let activeRecordings = 0
+
+export const hasActiveRecording = () => activeRecordings > 0
 
 export type Recording = {
   /** 停止录音并返回 WAV；没有采到声音时返回 null */
@@ -30,6 +35,10 @@ export const startRecording = async ({
   onInterrupted: () => void
   signal: AbortSignal
 }): Promise<Recording> => {
+  signal.throwIfAborted()
+  activeRecordings++
+  const start = beginDiagnosticOperation('speech', 'recording.start')
+  let stage = 'audio-context'
   let stream: MediaStream | undefined
   let context: AudioContext | undefined
   let source: MediaStreamAudioSourceNode | undefined
@@ -42,7 +51,8 @@ export const startRecording = async ({
       return
     }
     released = true
-    signal.removeEventListener('abort', release)
+    activeRecordings--
+    signal.removeEventListener('abort', cancel)
     if (processor) {
       processor.onaudioprocess = null
     }
@@ -55,14 +65,23 @@ export const startRecording = async ({
       }
     }
     for (const track of stream?.getTracks() ?? []) {
-      track.removeEventListener('ended', onInterrupted)
+      track.removeEventListener('ended', interrupted)
       track.stop()
     }
     void context?.close().catch(() => {})
   }
+  const interrupted = () => {
+    logEvent('speech', 'recording.interrupted', { reason: 'microphone-ended' }, 'warn')
+    onInterrupted()
+  }
+  const cancel = () => {
+    if (!released) {
+      logEvent('speech', 'recording.cancelled', { stage })
+    }
+    release()
+  }
 
   try {
-    signal.throwIfAborted()
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new DOMException('Microphone unavailable', 'NotSupportedError')
     }
@@ -78,11 +97,13 @@ export const startRecording = async ({
     if (context.state === 'suspended') {
       void context.resume().catch(() => {})
     }
-    signal.addEventListener('abort', release, { once: true })
+    stage = 'permission'
+    signal.addEventListener('abort', cancel, { once: true })
     if (!(await authorize())) {
       throw new DOMException('Microphone permission denied', 'NotAllowedError')
     }
     signal.throwIfAborted()
+    stage = 'microphone'
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     })
@@ -91,8 +112,9 @@ export const startRecording = async ({
       throw new DOMException('Recording cancelled', 'AbortError')
     }
     for (const track of stream.getAudioTracks()) {
-      track.addEventListener('ended', onInterrupted)
+      track.addEventListener('ended', interrupted)
     }
+    stage = 'audio-graph'
     const inputRate = context.sampleRate
     const maxSamples = inputRate * MAX_SECONDS
     source = context.createMediaStreamSource(stream)
@@ -125,17 +147,29 @@ export const startRecording = async ({
     if (context.state === 'suspended') {
       void context.resume().catch(() => {})
     }
+    stage = 'capture'
+    start('completed', { sampleRate: inputRate })
 
     return {
       stop: async () => {
         release()
-        return !hasSound || !length ? null : encodeWav(chunks, length, inputRate)
+        const durationMs = Math.round(length * 1000 / inputRate)
+        try {
+          const audio = !hasSound || !length ? null : encodeWav(chunks, length, inputRate)
+          logEvent('speech', 'recording.stopped', { durationMs, audioBytes: audio?.size ?? 0, limited })
+          return audio
+        } catch (error) {
+          logEvent('speech', 'recording.encode-failed', { durationMs, ...diagnosticError(error) }, 'warn')
+          throw error
+        }
       },
-      cancel: release,
+      cancel,
       analyser,
     }
   } catch (error) {
     release()
+    const aborted = signal.aborted || (error instanceof DOMException && error.name === 'AbortError')
+    start(aborted ? 'cancelled' : 'failed', { stage, ...diagnosticError(error) })
     throw error
   }
 }

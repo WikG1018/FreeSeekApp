@@ -61,6 +61,12 @@ try {
     viewport: { width: 390, height: 844 },
   })
   await context.addInitScript(() => {
+    // The shell must cache compatibility chunks even if they loaded before worker activation.
+    Object.defineProperty(Array.prototype, 'toReversed', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
     localStorage.setItem('freeseek:notice-version', '1')
     localStorage.setItem('freeseek:onboarded', '1')
   })
@@ -112,7 +118,7 @@ try {
   try {
     await offline.goto(origin + '/free-a/', { waitUntil: 'domcontentloaded', timeout: 10_000 })
     await offline.getByTestId('chat-composer').waitFor({ timeout: 10_000 })
-    composerReady = true
+    composerReady = await offline.evaluate(() => typeof Array.prototype.toReversed === 'function')
   } catch (error) {
     console.log('Offline startup:', error.message.split('\n')[0])
     const state = await offline
@@ -143,6 +149,80 @@ try {
   console.log(
     'PASS production PWA cold offline startup, separate cache scopes and network-only responses'
   )
+  await context.close()
+
+  // The development harness imports all polyfills. Exercise the real bootstrap on partially
+  // modern runtimes, where the startup APIs existed but newer array methods did not.
+  for (const missing of ['toReversed', 'toSorted', 'findLast']) {
+    const search = missing === 'toReversed'
+    const legacy = await browser.newContext({
+      locale: 'zh-CN',
+      viewport: { width: 390, height: 844 },
+      serviceWorkers: 'block',
+    })
+    try {
+      await legacy.addInitScript(({ missing, search }) => {
+        Object.defineProperty(Array.prototype, missing, {
+          configurable: true,
+          writable: true,
+          value: undefined,
+        })
+        localStorage.setItem('freeseek:notice-version', '1')
+        localStorage.setItem('freeseek:onboarded', '1')
+        localStorage.setItem('freeseek:role-voice-intro-seen', '1')
+        localStorage.setItem('freeseek:api-key', 'sk-production-compat-fixture')
+        localStorage.setItem('freeseek:search', String(search))
+      }, { missing, search })
+
+      const messages = []
+      let uploads = 0
+      await legacy.route('**/*', async (route) => {
+        const url = new URL(route.request().url())
+        if (url.origin === origin) {
+          await route.continue()
+          return
+        }
+        if (url.pathname === '/anthropic/v1/files') uploads++
+        if (url.pathname !== '/anthropic/v1/messages') {
+          await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' })
+          return
+        }
+        messages.push(route.request().postDataJSON())
+        const usage = { input_tokens: 3, output_tokens: 2 }
+        const body = [
+          { type: 'message_start', message: { usage: { ...usage, output_tokens: 0 } } },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '兼容性测试回复' },
+          },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage },
+          { type: 'message_stop' },
+        ].map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('')
+        await route.fulfill({ status: 200, contentType: 'text/event-stream', body })
+      })
+
+      const page = await legacy.newPage()
+      await page.goto(origin + '/free-a/')
+      const input = page.getByTestId('chat-composer').locator('textarea')
+      await input.waitFor()
+      assert.equal(await page.evaluate(() => typeof structuredClone), 'function')
+      assert.equal(await page.evaluate((name) => typeof Array.prototype[name], missing), 'function')
+      await input.fill('111')
+      await page.getByRole('button', { name: '发送', exact: true }).click()
+      await page.getByText('兼容性测试回复', { exact: true }).waitFor()
+      assert.equal(messages.length, 1)
+      assert.equal(uploads, 0)
+      assert.equal(
+        messages[0].tools?.some((tool) => tool.type === 'deepseek_web_search') ?? false,
+        search
+      )
+      console.log('PASS production chat when WebView lacks ' + missing)
+    } finally {
+      await legacy.close()
+    }
+  }
 } finally {
   await browser.close()
   server.close()

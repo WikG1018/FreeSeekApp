@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
-import { browserLicensePatterns } from './scripts/browser-license-patterns.mjs'
+import {
+  browserLicensePatterns,
+  bundledBrowserLicenses,
+} from './scripts/browser-license-patterns.mjs'
 import { rspack, type Compiler, type Configuration } from '@rspack/core'
 
 // 以 CLI 子命令判断模式（serve 为开发、build 为生产），避免依赖 shell 设置 NODE_ENV
@@ -113,9 +116,10 @@ export const createConfig = ({
             },
             () => {
               const entry = compilation.entrypoints.get('main')?.getFiles() ?? []
-              // The app group also contains the split dependencies needed before mounting.
+              // Offline startup needs the optional compatibility group and its split dependencies.
               const app = compilation.namedChunkGroups.get('app')?.getFiles() ?? []
-              const files = [...new Set([...entry, ...app])].filter((name) =>
+              const compatibility = compilation.namedChunkGroups.get('polyfills')?.getFiles() ?? []
+              const files = [...new Set([...entry, ...app, ...compatibility])].filter((name) =>
                 /\.(?:js|css)$/.test(name)
               )
               const worker = !dev && compilation.getAsset('sw.js')
@@ -141,6 +145,23 @@ export const createConfig = ({
                   JSON.stringify({ version, notes: currentNotes, files })
                 )
               )
+              if (!dev) {
+                const { chunks = [] } = compilation.getStats().toJson({
+                  preset: 'verbose',
+                  source: false,
+                  reasons: false,
+                  modules: false,
+                  chunkModules: true,
+                  nestedModules: true,
+                  chunkModulesSpace: Infinity,
+                  nestedModulesSpace: Infinity,
+                })
+                for (const [name, content] of bundledBrowserLicenses(chunks, root)) {
+                  if (!compilation.getAsset(name)) {
+                    compilation.emitAsset(name, new rspack.sources.RawSource(content))
+                  }
+                }
+              }
             }
           )
         })

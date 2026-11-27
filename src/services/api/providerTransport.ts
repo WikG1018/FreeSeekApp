@@ -1,9 +1,9 @@
-import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { createId } from '../../utils/id.js'
 import { abortReason } from '../../utils/abort.js'
 import { fetchApiRequest } from './windowsTransport.js'
+import { ApiError } from './errorTypes.js'
 
-type TransferEvent = { id: string; type: 'chunk' | 'end' | 'error'; data?: string }
 const Native = registerPlugin<{
   start(options: {
     id: string
@@ -13,16 +13,24 @@ const Native = registerPlugin<{
     headers: Record<string, string>
     body?: string
   }): Promise<{ status: number; contentType: string; mcpSessionId?: string }>
-  ack(options: { id: string }): Promise<void>
+  read(options: { id: string }): Promise<{ data: string } | { done: true }>
   cancel(options: { id: string }): Promise<void>
   requestLocalNetwork(): Promise<{ granted: boolean }>
-  addListener(
-    event: 'transfer',
-    listener: (event: TransferEvent) => void
-  ): Promise<PluginListenerHandle>
 }>('CustomHttp')
 
-/** 原生分片有确认窗口，JS 暂停时不会无限积压通知；网页仍遵循浏览器 CORS。 */
+const androidResponses = new WeakSet<Response>()
+export const isAndroidProviderResponse = (response: Response) => androidResponses.has(response)
+
+const nativeBodyFailure = (error: unknown) => {
+  switch ((error as { code?: unknown } | undefined)?.code) {
+    case 'TIMEOUT': return new ApiError('network', { key: 'streamIdleTimeout' })
+    case 'BUFFER_ERROR': return new ApiError('network', { key: 'providerResponseBufferFailed' })
+    case 'RESPONSE_TOO_LARGE': return new ApiError('protocol', { key: 'providerResponseTooLarge' })
+    default: return new ApiError('network', { key: 'streamConnectionLost' })
+  }
+}
+
+/** Android keeps receiving in native code and WebView pulls the bytes when it can run. */
 export const providerFetch = async (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
@@ -34,58 +42,56 @@ export const providerFetch = async (
     return fetchApiRequest(url, { ...init, redirect: 'error', credentials: 'omit' })
   }
   const id = createId()
-  let controller: ReadableStreamDefaultController<Uint8Array>,
-    listener: PluginListenerHandle | undefined
+  let controller: ReadableStreamDefaultController<Uint8Array>
   let ended = false
   const clean = () => {
+    ended = true
     init.signal.removeEventListener('abort', onAbort)
-    void listener?.remove()
   }
   const finish = (error?: unknown) => {
     if (ended) {
       return
     }
-    ended = true
+    clean()
     if (error) {
       controller.error(error)
     } else {
       controller.close()
     }
+  }
+  const cancel = () => {
     clean()
+    return Native.cancel({ id }).catch(() => {})
   }
   const onAbort = () => {
-    void Native.cancel({ id }).catch(() => {})
     finish(abortReason(init.signal))
+    void cancel()
   }
   const body = new ReadableStream<Uint8Array>({
     start(value) {
       controller = value
     },
-    cancel() {
-      ended = true
-      clean()
-      return Native.cancel({ id })
-    },
-  })
-  listener = await Native.addListener('transfer', (event) => {
-    if (event.id !== id || ended) {
-      return
-    }
-    if (event.type === 'chunk') {
+    async pull() {
       try {
-        const binary = atob(event.data ?? '')
+        const part = await Native.read({ id })
+        if (ended) {
+          return
+        }
+        if ('done' in part) {
+          finish()
+          return
+        }
+        const binary = atob(part.data)
         controller.enqueue(Uint8Array.from(binary, (c) => c.charCodeAt(0)))
-        void Native.ack({ id }).catch((error) => finish(error))
       } catch (error) {
-        onAbort()
-        finish(error)
+        if (!ended) {
+          finish(init.signal.aborted ? abortReason(init.signal) : nativeBodyFailure(error))
+          void cancel()
+        }
       }
-    } else if (event.type === 'end') {
-      finish()
-    } else {
-      finish(new Error(event.data ?? 'NETWORK_ERROR'))
-    }
-  })
+    },
+    cancel,
+  }, { highWaterMark: 0 })
   init.signal.addEventListener('abort', onAbort, { once: true })
   try {
     init.signal.throwIfAborted()
@@ -98,17 +104,21 @@ export const providerFetch = async (
       body: init.body,
     })
     init.signal.throwIfAborted()
-    return new Response([101, 204, 205, 304].includes(response.status) ? null : body, {
+    const noBody = [101, 204, 205, 304].includes(response.status)
+    const result = new Response(noBody ? null : body, {
       status: response.status,
       headers: {
         'Content-Type': response.contentType,
         ...(response.mcpSessionId && { 'Mcp-Session-Id': response.mcpSessionId }),
       },
     })
+    if (noBody) {
+      void cancel()
+    }
+    androidResponses.add(result)
+    return result
   } catch (error) {
-    ended = true
-    clean()
-    void Native.cancel({ id }).catch(() => {})
+    void cancel()
     if (
       !init.signal.aborted &&
       allowPermission &&

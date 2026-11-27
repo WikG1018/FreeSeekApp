@@ -2,7 +2,7 @@ import { agentProbePrompt, agentProbeSystem, verifyAgentTools } from './toolProb
 import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
-import { providerFetch } from './providerTransport.js'
+import { isAndroidProviderResponse, providerFetch } from './providerTransport.js'
 import {
   streamWithProviderSearch,
   streamWithTaskTools,
@@ -23,7 +23,7 @@ import { isOfficialMiMoV26, isOpenCodeGoUrl, OPEN_CODE_GO_PATH } from '../provid
 import { applyReasoning, customReasoning, type ReasoningChoice } from '../reasoning.js'
 import type { ProviderMessage, ProviderPart } from './providerContent.js'
 import type { MessageStreamEvent, MessageUsage, StopReason } from './types.js'
-import { normalizeProviderUsage } from './providerUsage.js'
+import { createProviderUsageReader } from './providerUsage.js'
 import {
   beginDiagnosticOperation,
   logEvent,
@@ -88,7 +88,7 @@ export const providerEndpoint = (
   }
   return url.toString()
 }
-type RequestContext = { requestId?: string; sessionId?: string }
+type RequestContext = { requestId?: string; sessionId?: string; operationId?: string }
 const browserGoSessions = new Map<string, string>()
 const goSessionHeader = async (profile: ProviderProfile, sessionId?: string) => {
   if (!sessionId) {
@@ -176,18 +176,23 @@ export const readApiJson = async (
     timedOut = true
     abort()
   }
-  let timer = setTimeout(timeout, timing?.idleMs ?? 60000)
+  let timer = timing || !isAndroidProviderResponse(response)
+    ? setTimeout(timeout, timing?.idleMs ?? 60000)
+    : undefined
   const deadline = timing && setTimeout(timeout, timing.maxMs)
   signal.addEventListener('abort', abort, { once: true })
   try {
     for (;;) {
       signal.throwIfAborted()
-      const { done, value } = await reader.read().catch(() => {
+      const { done, value } = await reader.read().catch((error: unknown) => {
         signal.throwIfAborted()
         if (timedOut) {
           throw new ApiError('network', { key: 'streamIdleTimeout' })
         }
-        throw new StreamReadError(size)
+        if (error instanceof ApiError) {
+          throw error
+        }
+        throw new StreamReadError(size, error)
       })
       if (done) {
         break
@@ -225,7 +230,7 @@ export const fetchProviderResponse = async (
   url: string,
   body: unknown | undefined,
   signal: AbortSignal,
-  { requestId = createId(), sessionId }: RequestContext = {}
+  { requestId = createId(), sessionId, operationId }: RequestContext = {}
 ) => {
   const started = performance.now()
   const serialized = body === undefined ? undefined : JSON.stringify(body)
@@ -252,6 +257,7 @@ export const fetchProviderResponse = async (
   }, 120000)
   logEvent('api', 'provider.request', {
     requestId,
+    operationId,
     protocol: profile.protocol,
     operation: body === undefined ? 'models' : 'chat',
     bodyBytes,
@@ -270,6 +276,8 @@ export const fetchProviderResponse = async (
     )
     logEvent('api', 'provider.response', {
       requestId,
+      operationId,
+      upstreamRequestId: response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? response.headers.get('x-ds-request-id'),
       status: response.status,
       openCodeGo: go,
       streaming: response.headers.get('Content-Type')?.includes('text/event-stream'),
@@ -306,6 +314,7 @@ export const fetchProviderResponse = async (
       signal.aborted ? 'provider.cancelled' : 'provider.failed',
       {
         requestId,
+        operationId,
         timedOut,
         elapsedMs: Math.round(performance.now() - started),
         ...diagnosticError(error),
@@ -318,7 +327,8 @@ export const fetchProviderResponse = async (
     if (error instanceof ApiError) {
       throw error
     }
-    throw new ApiError('network', { key: timedOut ? 'streamIdleTimeout' : 'providerNetworkError' })
+    const nativeTimeout = (error as { code?: unknown } | undefined)?.code === 'TIMEOUT'
+    throw new ApiError('network', { key: timedOut || nativeTimeout ? 'streamIdleTimeout' : 'providerNetworkError' })
   } finally {
     clearTimeout(timer)
   }
@@ -517,20 +527,47 @@ export const providerBody = (
   }
 }
 
-const stopReason = (value: unknown, prior: StopReason): StopReason => {
-  const reason = text(value)
-  if (
-    prior === 'refusal' ||
-    /^(?:refusal|content_filter|safety|blocklist|prohibited_content|spii|recitation)$/i.test(reason)
-  ) {
-    return 'refusal'
+const providerStopReason = (
+  value: unknown
+): StopReason | 'interrupted' | 'context-limit' | undefined => {
+  switch (text(value).toLowerCase()) {
+    case 'stop':
+    case 'end_turn':
+    case 'stop_sequence':
+      return 'end_turn'
+    case 'length':
+    case 'max_tokens':
+    case 'max_output_tokens':
+      return 'max_tokens'
+    case 'tool_calls':
+    case 'tool_use':
+    case 'function_call':
+      return 'tool_use'
+    case 'refusal':
+    case 'content_filter':
+    case 'safety':
+    case 'blocklist':
+    case 'prohibited_content':
+    case 'spii':
+    case 'recitation':
+    case 'image_safety':
+    case 'image_prohibited_content':
+    case 'image_recitation':
+      return 'refusal'
+    case 'pause_turn':
+      return 'interrupted'
+    case 'model_context_window_exceeded':
+      return 'context-limit'
+    default:
+      return undefined
   }
-  return /length|max_tokens|max_output_tokens/i.test(reason)
-    ? 'max_tokens'
-    : /tool_calls|tool_use/.test(reason)
-      ? 'tool_use'
-      : 'end_turn'
 }
+
+const responseEnded = (type: unknown) =>
+  type === 'response.completed' ||
+  type === 'response.incomplete' ||
+  type === 'response.cancelled' ||
+  type === 'response.canceled'
 
 export async function* streamProviderMessage(
   input: ProviderProfile,
@@ -587,7 +624,7 @@ export async function* streamProviderMessage(
       throw new ApiError('protocol', { key: 'providerMiMoTemperatureRange' })
     }
   }
-  const context = { requestId, sessionId }
+  const context = { requestId, sessionId, operationId: requestId }
   if (managedTools || task) {
     // Agent runs expose the app's allowed tools, not tools inherited from provider options.
     delete body.tools
@@ -633,7 +670,7 @@ export async function* streamProviderMessage(
       model,
       round,
       requestSignal,
-      { requestId, sessionId },
+      { ...context, requestId },
       collector,
       Boolean(task),
       Boolean(!task && requestId && retryInitialRequest)
@@ -652,14 +689,14 @@ async function* streamProviderRound(
   model: string,
   body: Json,
   signal: AbortSignal,
-  { requestId = createId(), sessionId }: RequestContext,
+  { requestId = createId(), sessionId, operationId }: RequestContext,
   collector?: SearchTurnCollector,
   showToolInput = false,
   retryInitialRequest = false
 ): AsyncGenerator<MessageStreamEvent, ReturnType<SearchTurnCollector['finish']>> {
   const url = providerEndpoint(profile, 'chat', model, profile.stream)
   let activeRequestId = requestId
-  const { response, dispose } = await fetchProviderResponse(profile, url, body, signal, { requestId, sessionId })
+  const { response, dispose } = await fetchProviderResponse(profile, url, body, signal, { requestId, sessionId, operationId })
     .catch(async (error: unknown) => {
       if (!retryInitialRequest || signal.aborted || !(error instanceof ApiError) || !(
         [502, 503, 504].includes(error.status ?? 0) || error.localMessage?.key === 'providerNetworkError'
@@ -668,17 +705,36 @@ async function* streamProviderRound(
       }
       activeRequestId = createId()
       logEvent('api', 'provider.initial-request-retry', {
-        requestId, retryRequestId: activeRequestId, sessionId, ...diagnosticError(error),
+        requestId, retryRequestId: activeRequestId, operationId, sessionId, ...diagnosticError(error),
       }, 'warn')
       await abortableDelay(650, signal)
-      return fetchProviderResponse(profile, url, body, signal, { requestId: activeRequestId, sessionId })
+      return fetchProviderResponse(profile, url, body, signal, { requestId: activeRequestId, sessionId, operationId })
     })
   let completed = false,
     emitted = false,
     emittedText = false,
     reason: StopReason = 'end_turn',
     usage: MessageUsage | undefined
-  let rawAnthropicUsage: Json = {}
+  let stopFailure: ApiError | undefined
+  const readUsage = createProviderUsageReader(profile.protocol)
+  const rememberUsage = (raw: unknown) => {
+    usage = readUsage(raw) ?? usage
+  }
+  const setReason = (value: unknown) => {
+    if (value == null || value === '' || reason === 'refusal') {
+      return
+    }
+    const parsed = providerStopReason(value)
+    if (parsed === 'context-limit') {
+      stopFailure ??= new ApiError('protocol', { key: 'replyContextTooLong' })
+    } else if (parsed === 'interrupted') {
+      stopFailure ??= new ApiError('interrupted', { key: 'providerInterrupted' })
+    } else if (parsed === undefined) {
+      stopFailure ??= new ApiError('interrupted', { key: 'providerUnknownStopReason' })
+    } else {
+      reason = parsed
+    }
+  }
   let nextBlock = 0
   let activeBlock: { index: number; thinking: boolean } | undefined
   const closeBlock = function* (): Generator<MessageStreamEvent> {
@@ -723,6 +779,9 @@ async function* streamProviderRound(
   }
   const consume = function* (data: Json): Generator<MessageStreamEvent> {
     if (data.error || data.type === 'error' || data.type === 'response.failed') {
+      if (data.type === 'response.failed') {
+        rememberUsage(record(data.response).usage)
+      }
       throw new ApiError('stream', remoteLimit(data) ?? { key: 'providerRemoteError' })
     }
     collector?.read(data)
@@ -750,12 +809,10 @@ async function* streamProviderRound(
         yield* toolInput()
       }
       if (choice.finish_reason) {
-        reason = stopReason(choice.finish_reason, reason)
+        setReason(choice.finish_reason)
         completed = true
       }
-      if (data.usage) {
-        usage = normalizeProviderUsage(data.usage, profile.protocol)
-      }
+      rememberUsage(data.usage)
     } else if (profile.protocol === 'responses') {
       if (
         data.type === 'response.function_call_arguments.delta' ||
@@ -776,11 +833,7 @@ async function* streamProviderRound(
         yield* delta(data.delta, true)
       }
       const result = data.response ? record(data.response) : data
-      if (
-        data.type === 'response.completed' ||
-        data.type === 'response.incomplete' ||
-        (!data.type && Array.isArray(data.output))
-      ) {
+      if (responseEnded(data.type) || (!data.type && Array.isArray(data.output))) {
         const includeText = !emittedText
         if (Array.isArray(result.output)) {
           for (const value of result.output) {
@@ -798,14 +851,22 @@ async function* streamProviderRound(
             }
           }
         }
+        rememberUsage(result.usage)
         if (result.status === 'failed' || result.error) {
           throw new ApiError('stream', remoteLimit(result) ?? { key: 'providerRemoteError' })
         }
-        completed = true
-        reason = stopReason(record(result.incomplete_details).reason, reason)
-        if (result.usage) {
-          usage = normalizeProviderUsage(result.usage, profile.protocol)
+        setReason(record(result.incomplete_details).reason)
+        const status = text(result.status)
+        const incomplete = status === 'incomplete' || data.type === 'response.incomplete'
+        if (
+          (status && status !== 'completed' && status !== 'incomplete') ||
+          data.type === 'response.cancelled' ||
+          data.type === 'response.canceled' ||
+          (incomplete && reason !== 'max_tokens' && reason !== 'refusal')
+        ) {
+          stopFailure ??= new ApiError('interrupted', { key: 'providerInterrupted' })
         }
+        completed = true
       }
     } else if (profile.protocol === 'gemini') {
       const candidate = record(Array.isArray(data.candidates) ? data.candidates[0] : undefined)
@@ -826,15 +887,12 @@ async function* streamProviderRound(
       }
       if (candidate.finishReason) {
         completed = true
-        reason = stopReason(candidate.finishReason, reason)
+        setReason(candidate.finishReason)
       }
-      if (data.usageMetadata) {
-        usage = normalizeProviderUsage(data.usageMetadata, profile.protocol)
-      }
+      rememberUsage(data.usageMetadata)
     } else {
       if (data.type === 'message_start') {
-        rawAnthropicUsage = record(record(data.message).usage)
-        usage = normalizeProviderUsage(rawAnthropicUsage, profile.protocol)
+        rememberUsage(record(data.message).usage)
       }
       if (data.type === 'content_block_start') {
         const block = record(data.content_block)
@@ -865,11 +923,8 @@ async function* streamProviderRound(
         yield* closeBlock()
       }
       if (data.type === 'message_delta') {
-        reason = stopReason(record(data.delta).stop_reason, reason)
-        if (data.usage) {
-          rawAnthropicUsage = { ...rawAnthropicUsage, ...record(data.usage) }
-          usage = normalizeProviderUsage(rawAnthropicUsage, profile.protocol)
-        }
+        setReason(record(data.delta).stop_reason)
+        rememberUsage(data.usage)
       }
       if (data.type === 'message_stop') {
         completed = true
@@ -879,8 +934,8 @@ async function* streamProviderRound(
           const block = record(part)
           yield* delta(block.text || block.thinking, block.type === 'thinking')
         }
-        reason = stopReason(data.stop_reason, reason)
-        usage = data.usage ? normalizeProviderUsage(data.usage, profile.protocol) : undefined
+        setReason(data.stop_reason)
+        rememberUsage(data.usage)
         completed = true
       }
     }
@@ -891,7 +946,9 @@ async function* streamProviderRound(
       if (!response.body) {
         throw new ApiError('protocol', { key: 'providerInvalidResponse' })
       }
-      for await (const event of readServerSentEvents(response.body, signal)) {
+      // For native responses, the Android socket owns the idle timeout while WebView is suspended.
+      const idleMs = isAndroidProviderResponse(response) ? null : undefined
+      for await (const event of readServerSentEvents(response.body, signal, idleMs)) {
         if (event.data.trim() === '[DONE]') {
           completed = true
           break
@@ -903,11 +960,7 @@ async function* streamProviderRound(
           throw new ApiError('protocol', { key: 'providerInvalidResponse' })
         }
         yield* consume(data)
-        if (
-          data.type === 'message_stop' ||
-          data.type === 'response.completed' ||
-          data.type === 'response.incomplete'
-        ) {
+        if (data.type === 'message_stop' || responseEnded(data.type)) {
           break
         }
       }
@@ -916,6 +969,9 @@ async function* streamProviderRound(
     }
     signal.throwIfAborted()
     const finalReason = reason as StopReason
+    if (stopFailure && finalReason !== 'refusal') {
+      throw stopFailure
+    }
     if (!completed && finalReason !== 'refusal') {
       throw new ApiError('interrupted', { key: 'providerInterrupted' })
     }
@@ -939,18 +995,22 @@ async function* streamProviderRound(
     yield { type: 'message_stop' }
     return undefined
   } catch (error) {
+    if (usage) {
+      yield { type: 'message_usage', usage }
+    }
     if ((reason as StopReason) === 'refusal') {
       signal.throwIfAborted()
       throw new ApiError('protocol', { key: 'replyRefused' })
     }
     if (error instanceof StreamReadError) {
+      const nativeError = error.cause instanceof ApiError ? error.cause : undefined
       logEvent(
         'api',
         'response.body.failed',
-        { requestId: activeRequestId, receivedBytes: error.receivedBytes },
+        { requestId: activeRequestId, operationId, receivedBytes: error.receivedBytes, localKey: nativeError?.localMessage?.key },
         'warn'
       )
-      throw new ApiError('network', { key: 'streamConnectionLost' })
+      throw nativeError ?? new ApiError('network', { key: 'streamConnectionLost' })
     }
     if (error instanceof StreamIdleTimeoutError) {
       throw new ApiError('network', { key: 'streamIdleTimeout' })
@@ -994,13 +1054,17 @@ export const testProviderModel = async (
           reason = event.delta.stop_reason
         }
       }
-      if (result.trim()) {
+      if (reason === 'max_tokens') {
+        continue
+      }
+      if (reason === 'refusal') {
+        throw new ApiError('protocol', { key: 'replyRefused' })
+      }
+      if (reason === 'end_turn' && result.trim()) {
         finish('completed')
         return { text: result.slice(0, 200), elapsedMs: Math.round(performance.now() - started) }
       }
-      if (reason !== 'max_tokens') {
-        throw new ApiError('protocol', { key: 'providerInvalidResponse' })
-      }
+      throw new ApiError('protocol', { key: 'providerInvalidResponse' })
     }
     throw new ApiError('protocol', { key: 'providerTestOutputExhausted' })
   } catch (error) {

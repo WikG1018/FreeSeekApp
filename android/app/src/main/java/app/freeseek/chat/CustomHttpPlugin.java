@@ -1,6 +1,7 @@
 package app.freeseek.chat;
 
 import android.os.Build;
+import android.os.SystemClock;
 import android.util.Base64;
 import com.getcapacitor.*;
 import com.getcapacitor.annotation.*;
@@ -15,17 +16,33 @@ import java.util.concurrent.*;
     @Permission(alias = "localNetwork", strings = { "android.permission.ACCESS_LOCAL_NETWORK" })
 })
 public class CustomHttpPlugin extends Plugin {
+    private static final long RESPONSE_LIMIT = 64L * 1024 * 1024;
     private final ExecutorService io = Executors.newFixedThreadPool(4);
     private final ConcurrentHashMap<String, Transfer> transfers = new ConcurrentHashMap<>();
     private static class Transfer {
         volatile boolean cancelled;
         volatile HttpURLConnection connection;
-        final Semaphore window = new Semaphore(4);
-    }
-    private void event(String id, String type, String data) {
-        JSObject item = new JSObject(); item.put("id", id); item.put("type", type);
-        if (data != null) item.put("data", data);
-        notifyListeners("transfer", item);
+        volatile long receivedAt;
+        final HttpResponseBuffer buffer;
+        final String requestId;
+        boolean reportedDelayedRead;
+
+        Transfer(File cache, String requestId) {
+            this.buffer = new HttpResponseBuffer(cache);
+            this.requestId = requestId;
+        }
+
+        void finish(String code) {
+            receivedAt = SystemClock.elapsedRealtime();
+            buffer.finish(code);
+        }
+
+        void cancel() {
+            cancelled = true;
+            buffer.cancel();
+            HttpURLConnection active = connection;
+            if (active != null) new Thread(active::disconnect, "freeseek-api-cancel").start();
+        }
     }
     private boolean localAddress(URL url) throws Exception {
         for (InetAddress address : InetAddress.getAllByName(url.getHost())) {
@@ -40,13 +57,15 @@ public class CustomHttpPlugin extends Plugin {
         String correlation = call.getString("requestId", "");
         String requestId = correlation.matches("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
             ? correlation : null;
-        Transfer transfer = new Transfer();
+        Transfer transfer = new Transfer(getContext().getCacheDir(), requestId);
         if (!id.matches("[A-Za-z0-9-]{1,100}") || transfers.size() >= 8 || transfers.putIfAbsent(id, transfer) != null) {
             call.reject("Invalid or busy request", "INVALID_REQUEST"); return;
         }
         io.execute(() -> {
             boolean started = false;
             long received = 0;
+            long lastByteAt = 0;
+            String stage = "headers";
             try {
                 URL url = new URL(call.getString("url", ""));
                 if ((!url.getProtocol().equals("https") && !url.getProtocol().equals("http")) || url.getUserInfo() != null || url.getRef() != null) {
@@ -94,55 +113,99 @@ public class CustomHttpPlugin extends Plugin {
                 call.resolve(result); started = true;
                 JSObject meta = new JSObject().put("status", status).put("method", method).put("requestId", requestId);
                 DiagnosticsLog.record(getContext(), "api", "custom.response", meta);
+                stage = "response-body";
                 InputStream input = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
                 String encoding = connection.getContentEncoding();
                 if (input != null && "gzip".equalsIgnoreCase(encoding)) input = new java.util.zip.GZIPInputStream(input);
                 else if (input != null && "deflate".equalsIgnoreCase(encoding)) input = new java.util.zip.InflaterInputStream(input);
                 if (input != null) try (InputStream in = input) {
-                    byte[] buffer = new byte[16384];
-                    for (;;) {
-                        if (transfer.cancelled || !transfer.window.tryAcquire(120, TimeUnit.SECONDS)) throw new InterruptedIOException();
+                    byte[] buffer = new byte[HttpResponseBuffer.CHUNK_BYTES];
+                    while (!transfer.cancelled) {
+                        stage = "response-body";
                         int count = in.read(buffer);
                         if (count == -1) break;
+                        if (count == 0 || transfer.cancelled) continue;
+                        lastByteAt = SystemClock.elapsedRealtime();
                         received += count;
-                        if (received > 64L * 1024 * 1024) throw new IOException("Response too large");
-                        event(id, "chunk", Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP));
+                        if (received > RESPONSE_LIMIT) {
+                            stage = "response-limit";
+                            throw new IOException("Response too large");
+                        }
+                        stage = "buffer-write";
+                        transfer.buffer.write(buffer, count);
                     }
                 }
                 if (!transfer.cancelled) {
                     DiagnosticsLog.record(getContext(), "api", "custom.body-completed",
-                        new JSObject().put("requestId", requestId).put("receivedBytes", received));
-                    event(id, "end", null);
+                        new JSObject().put("requestId", requestId).put("receivedBytes", received)
+                            .put("pendingBytes", transfer.buffer.pendingBytes()).put("spooledBytes", transfer.buffer.spooledBytes())
+                            .put("appVisible", TaskNotifications.appVisible));
+                    transfer.finish(null);
                 }
             } catch (Exception error) {
-                String code = transfer.cancelled ? "CANCELLED" : error instanceof SocketTimeoutException ? "TIMEOUT" : "NETWORK_ERROR";
+                String code = transfer.cancelled ? "CANCELLED"
+                    : error instanceof SocketTimeoutException ? "TIMEOUT"
+                    : "buffer-write".equals(stage) ? "BUFFER_ERROR"
+                    : "response-limit".equals(stage) ? "RESPONSE_TOO_LARGE" : "NETWORK_ERROR";
                 JSObject meta = new JSObject().put("requestId", requestId)
-                    .put("stage", started ? "response-body" : "headers")
-                    .put("receivedBytes", received).put("code", code);
+                    .put("stage", stage).put("receivedBytes", received).put("code", code)
+                    .put("exception", error.getClass().getName()).put("appVisible", TaskNotifications.appVisible)
+                    .put("pendingBytes", transfer.buffer.pendingBytes()).put("spooledBytes", transfer.buffer.spooledBytes());
+                if (lastByteAt != 0) meta.put("lastByteAgeMs", SystemClock.elapsedRealtime() - lastByteAt);
                 if (transfer.cancelled) {
                     DiagnosticsLog.record(getContext(), "api", "custom.cancelled", meta);
                 } else {
+                    try { meta.put("network", DiagnosticDevice.network(getContext())); }
+                    catch (RuntimeException unavailable) { meta.put("networkState", "unavailable"); }
                     DiagnosticsLog.warn(getContext(), "api", "custom.failed", meta);
                 }
-                if (started) event(id, "error", code); else call.reject(code, code);
+                if (started) transfer.finish(code); else call.reject(code, code);
             } finally {
-                transfers.remove(id, transfer);
+                if (!started || transfer.cancelled) transfers.remove(id, transfer);
                 if (transfer.connection != null) transfer.connection.disconnect();
+                transfer.connection = null;
             }
         });
     }
-    @PluginMethod public void ack(PluginCall call) {
-        Transfer transfer = transfers.get(call.getString("id", ""));
-        if (transfer != null && transfer.window.availablePermits() < 4) transfer.window.release();
-        call.resolve();
+    @PluginMethod public void read(PluginCall call) {
+        String id = call.getString("id", "");
+        Transfer transfer = transfers.get(id);
+        if (transfer == null) {
+            call.reject("Response is no longer available", "CANCELLED");
+            return;
+        }
+        try {
+            boolean accepted = transfer.buffer.read((bytes, count, code) -> {
+                if (bytes != null) {
+                    long receivedAt = transfer.receivedAt;
+                    long delay = SystemClock.elapsedRealtime() - receivedAt;
+                    if (receivedAt != 0 && delay >= 1000 && !transfer.reportedDelayedRead) {
+                        transfer.reportedDelayedRead = true;
+                        DiagnosticsLog.record(getContext(), "api", "custom.buffer-read-resumed", new JSObject()
+                            .put("requestId", transfer.requestId).put("elapsedMs", delay)
+                            .put("pendingBytes", transfer.buffer.pendingBytes() + count)
+                            .put("appVisible", TaskNotifications.appVisible));
+                    }
+                    call.resolve(new JSObject().put("data", Base64.encodeToString(bytes, 0, count, Base64.NO_WRAP)));
+                } else {
+                    transfers.remove(id, transfer);
+                    if (code == null) call.resolve(new JSObject().put("done", true));
+                    else call.reject(code, code);
+                }
+            });
+            if (!accepted) call.reject("Response read is already pending", "INVALID_REQUEST");
+        } catch (IOException error) {
+            DiagnosticsLog.warn(getContext(), "api", "custom.failed", new JSObject()
+                .put("requestId", transfer.requestId).put("stage", "buffer-read").put("code", "BUFFER_ERROR")
+                .put("exception", error.getClass().getName()).put("appVisible", TaskNotifications.appVisible));
+            transfers.remove(id, transfer);
+            transfer.cancel();
+            call.reject("BUFFER_ERROR", "BUFFER_ERROR");
+        }
     }
     @PluginMethod public void cancel(PluginCall call) {
-        Transfer transfer = transfers.get(call.getString("id", ""));
-        if (transfer != null) {
-            transfer.cancelled = true; transfer.window.release(4);
-            HttpURLConnection connection = transfer.connection;
-            if (connection != null) new Thread(connection::disconnect, "freeseek-api-cancel").start();
-        }
+        Transfer transfer = transfers.remove(call.getString("id", ""));
+        if (transfer != null) transfer.cancel();
         call.resolve();
     }
     @PluginMethod public void requestLocalNetwork(PluginCall call) {
@@ -156,10 +219,8 @@ public class CustomHttpPlugin extends Plugin {
         call.resolve(result);
     }
     @Override protected void handleOnDestroy() {
-        for (Transfer transfer : transfers.values()) {
-            transfer.cancelled = true; transfer.window.release(4);
-            if (transfer.connection != null) new Thread(transfer.connection::disconnect, "freeseek-api-close").start();
-        }
+        for (Transfer transfer : transfers.values()) transfer.cancel();
+        transfers.clear();
         io.shutdownNow();
     }
 }

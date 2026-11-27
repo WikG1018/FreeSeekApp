@@ -23,7 +23,7 @@
 
 Compare the installer hash against the release's `SHA256SUMS` file. In PowerShell, use `Get-FileHash -Algorithm SHA256 -LiteralPath 'your installer path'`.
 
-On first launch, read the notice and choose to set up chat or import your history. Installed apps can prepare downloads when an update is available. Open the version button in the sidebar to read the notes and confirm installation. **Settings → About FreeSeek → Check for updates** also checks manually. When the web app shows an update, finish your current work and refresh.
+On first launch, read the notice and choose to set up chat or import your history. Installed apps can prepare downloads when an update is available. Open the version button in the sidebar to read the notes and confirm installation. **Settings → About FreeSeek → Check for updates** also checks manually. When the web update is ready, finish any reply in progress and send or remove draft attachments before choosing **Reload to update**. Text drafts are kept. In browsers that support offline access, you can reopen the fully loaded app offline and read local chats.
 
 ## Connect a model
 
@@ -72,6 +72,8 @@ Create or import personas under **Settings → Personas & prompts** and apply th
 
 Automatic memory starts off. Turn it on under **Memory & Agents** (or **Memory** on Windows) to save long-term preferences. Relevant memories can be sent to the active model. Review or undo entries and view their source under **Recent memory**. To pause memory for a chat, open the chat assistant from the conversation title.
 
+For example, “From now on, use tables for my weekly reports” saves a preference on your device. When you express a similar preference across several messages in the same chat, FreeSeek can ask the model to organize it. **Automatic memory usage** counts those model requests. You can also see preferences saved directly in **Manage memory**.
+
 Agent is experimental on Android and the web. Turn on the option to choose a mode for new chats in **Memory & Agents**, then choose **Agent** when starting a conversation.
 
 | Mode | How it works |
@@ -83,6 +85,12 @@ Agent is experimental on Android and the web. Turn on the option to choose a mod
 Open the status control above the composer to inspect steps and tool use. Find outputs by turn in **Results** in the header, then preview, save, or share an original. Configure network, file, calculation, and project tools in Agent settings. Tool calling depends on the model. Browser restrictions affect web tools and background work. Windows can open Agent history and artifacts restored from backups. Use **Chat preferences → Background and notifications** on Android to enable completion notices. Background work depends on system policy and notification permissions.
 
 ## Backup, import, and restore
+
+For a single conversation, open its sidebar menu and choose **Back up this chat**. The ZIP contains that chat and its associated files. Restore it on a version of FreeSeek that supports single-chat backups. If the same conversation exists, you can choose which copy to keep.
+
+**Android on-device recovery.** After an upgrade, FreeSeek automatically copies existing chat text, branches and available original attachments into its private app storage. The copy is updated as you use the app. Open **Settings → Data management → On-device recovery copy** to see protected counts and storage use. If your chat list unexpectedly becomes empty, choose **Restore from the on-device copy**. Recovery adds missing chats and originals and keeps existing chat text.
+
+Deleting a chat removes its recovery copy. Originals shared with other chats are retained. If you skip recovery, you can still choose **Data management → Delete all chats** and confirm to erase the remaining copy. Clearing all app data or uninstalling also removes the on-device copy. Export a ZIP outside the app before reinstalling or changing devices.
 
 1. **Back up.** Open **Settings → Data management → Export all chats**. Save the ZIP and keep the original file. FreeSeek backups can preserve reply branches, pinned chats, available attachments and artifacts, usage, and personas. Partial backups identify skipped chats and missing originals.
 2. **Move from DeepSeek.** Export chats in the DeepSeek app's data management settings. Select that ZIP from **Import chat history** in FreeSeek. Reading imported history requires no model key.

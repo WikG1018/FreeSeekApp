@@ -73,10 +73,18 @@ public final class AgentGoalsPlugin extends Plugin {
             call.resolve(new JSObject().put("retained", false));
             return;
         }
-        activity.runOnUiThread(() -> call.resolve(new JSObject().put("retained", visible(activity)
-            && BackgroundReplyService.retain(activity.getApplicationContext(), call.getString("lease"),
-                call.getString("sessionId"), Boolean.TRUE.equals(call.getBoolean("agent")),
-                Boolean.TRUE.equals(call.getBoolean("chinese"))))));
+        activity.runOnUiThread(() -> {
+            Context context = activity.getApplicationContext();
+            boolean agent = Boolean.TRUE.equals(call.getBoolean("agent"));
+            boolean activityVisible = visible(activity);
+            if (!activityVisible) {
+                DiagnosticsLog.warn(context, "chat", "background.reply-retain-skipped",
+                    new JSObject().put("reason", "not-foreground").put("agent", agent));
+            }
+            call.resolve(new JSObject().put("liveProgressAvailable", LiveTaskProgress.supported())
+                .put("retained", activityVisible && BackgroundReplyService.retain(context, call.getString("lease"),
+                    call.getString("sessionId"), agent, Boolean.TRUE.equals(call.getBoolean("chinese")))));
+        });
     }
 
     @PluginMethod public void finishReply(PluginCall call) {
@@ -88,8 +96,11 @@ public final class AgentGoalsPlugin extends Plugin {
     }
 
     @PluginMethod public void replyProgress(PluginCall call) {
+        LiveTaskProgress.Phase phase = LiveTaskProgress.Phase.fromWire(call.getString("phase"));
+        LiveTaskProgress.State progress = phase == null || !LiveTaskProgress.supported() ? null
+            : LiveTaskProgress.State.of(phase, call.getInt("step", 0), call.getInt("total", 0));
         new Handler(Looper.getMainLooper()).post(() -> {
-            BackgroundReplyService.acknowledgeProgress(call.getString("lease"));
+            BackgroundReplyService.acknowledgeProgress(call.getString("lease"), progress);
             call.resolve();
         });
     }
@@ -108,7 +119,29 @@ public final class AgentGoalsPlugin extends Plugin {
     }
 
     @PluginMethod public void noticeStatus(PluginCall call) {
-        call.resolve(new JSObject().put("granted", TaskNotifications.resultsAllowed(getContext())));
+        Context context = getContext();
+        JSObject status = new JSObject().put("granted", TaskNotifications.resultsAllowed(context));
+        if (LiveTaskProgress.supported()) status
+            .put("liveProgressEnabled", LiveTaskProgress.enabled(context))
+            .put("liveProgressAllowed", LiveTaskProgress.permitted(context));
+        call.resolve(status);
+    }
+
+    @PluginMethod public void setLiveProgress(PluginCall call) {
+        Boolean enabled = call.getBoolean("enabled");
+        if (enabled == null || !LiveTaskProgress.supported()) {
+            call.reject("Live progress unavailable");
+            return;
+        }
+        Context context = getContext().getApplicationContext();
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (!LiveTaskProgress.saveEnabled(context, enabled)) {
+                call.reject("Could not save live progress setting");
+                return;
+            }
+            LiveTaskProgress.refreshNotifications();
+            noticeStatus(call);
+        });
     }
 
     /**

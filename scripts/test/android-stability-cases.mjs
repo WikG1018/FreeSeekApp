@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 export const runAndroidStabilityCases = async ({ run, behavior }) => {
   await run(
@@ -101,7 +103,7 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
     }
   )
   await run(
-    'chat image preview closes on a second tap or Android Back while the same reply finishes',
+    'chat image preview closes on tap or Android Back and the reply survives switching chats',
     async (page) => {
       const id = await page.evaluate(async () => {
         const a = window.__audit
@@ -123,7 +125,8 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
             a.fixtures.assistant('image-preview-assistant', '这里有张图片'),
           ],
         })
-        await a.seed([session], [{ id: file.id, blob }])
+        const other = a.fixtures.session({ id: 'different-chat', title: '另一段对话' })
+        await a.seed([session, other], [{ id: file.id, blob }])
         a.settings.setApiKey('preview-test-key')
         const original = window.fetch
         const encoder = new TextEncoder()
@@ -158,9 +161,9 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
           )
         }
         a.drafts.setDraftText(session.id, '继续聊')
-        a.store.sendMessage(session.id)
         return session.id
       })
+      await page.getByRole('button', { name: '发送', exact: true }).click()
       await page.getByText('第一段', { exact: true }).waitFor()
       const thumb = page.getByRole('button', { name: '查看图片 历史图片.png' })
       const preview = page.getByRole('dialog', { name: '历史图片.png', exact: true })
@@ -177,10 +180,22 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       await preview.waitFor()
       await page.evaluate(() => window.previewTestBack())
       await preview.waitFor({ state: 'hidden' })
+      const openDrawer = async () => {
+        const opener = page.getByRole('button', { name: '打开边栏', exact: true })
+        if (await opener.isVisible()) {
+          await opener.click()
+        }
+      }
+      await openDrawer()
+      const generating = page.locator(`[data-session-id="${id}"]`)
+      await generating.locator('button').first().getByText('回复中', { exact: true }).waitFor()
+      await page.getByRole('button', { name: '另一段对话', exact: true }).click()
+      await page.getByTestId('chat-header').getByText('另一段对话', { exact: true }).waitFor()
       const result = await page.evaluate(async (id) => {
         const a = window.__audit
         const active = a.store.useChatStore.getState()
-        const stillStreaming = active.activeId === id && Object.hasOwn(active.streaming, id)
+        const stillStreaming =
+          active.activeId === 'different-chat' && Object.hasOwn(active.streaming, id)
         window.finishPreviewReply()
         await a.waitIdle()
         const reply = a.store.useChatStore.getState().sessionCache[id].messages.at(-1)
@@ -197,6 +212,10 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         text: '第一段继续生成完成',
         requests: 1,
       })
+      await openDrawer()
+      assert.equal(await generating.getAttribute('data-session-activity'), null)
+      await generating.locator('button').first().click()
+      await page.getByText('第一段继续生成完成', { exact: true }).waitFor()
       assert.equal(page.context().pages().length, 1)
     },
     async (context) => {
@@ -227,6 +246,61 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
     }
   )
   await run(
+    'image preview becomes operable when the thumbnail dimensions are available',
+    async (page) => {
+      let deliver
+      const ready = new Promise((resolve) => {
+        deliver = resolve
+      })
+      await page.route('**/controlled-photo.png', async (route) => {
+        await ready
+        await route.fulfill({
+          contentType: 'image/png',
+          body: Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+            'base64'
+          ),
+        })
+      })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const url = URL.createObjectURL
+        URL.createObjectURL = (blob) =>
+          blob.type === 'image/png' ? '/controlled-photo.png' : url(blob)
+        const file = {
+          id: 'loading-photo',
+          name: '加载中的照片.png',
+          size: 3,
+          mimeType: 'image/png',
+          isImage: true,
+          serverId: null,
+        }
+        await a.seed(
+          [
+            a.fixtures.session({
+              messages: [a.fixtures.user('loading-image', '', { files: [file] })],
+            }),
+          ],
+          [{ id: file.id, blob: new Blob(['png'], { type: file.mimeType }) }]
+        )
+      })
+      const thumb = page.getByRole('button', { name: '查看图片 加载中的照片.png' })
+      try {
+        await thumb.waitFor()
+        assert.equal(await thumb.isEnabled(), false)
+      } finally {
+        deliver()
+      }
+      await thumb.click()
+      await page.getByRole('dialog', { name: '加载中的照片.png' }).waitFor()
+      await page.keyboard.press('Escape')
+      await page.getByRole('dialog', { name: '加载中的照片.png' }).waitFor({ state: 'hidden' })
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute('aria-label') === '查看图片 加载中的照片.png'
+      )
+    }
+  )
+  await run(
     'full-screen image viewer keeps the pinch focal point and separates panning from taps',
     async (page) => {
       await page.evaluate(async () => {
@@ -234,6 +308,13 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         const canvas = document.createElement('canvas')
         canvas.width = 260
         canvas.height = 520
+        const drawing = canvas.getContext('2d')
+        for (const [index, color] of ['#ffd691', '#fb9168', '#166876', '#62bbaa'].entries()) {
+          drawing.fillStyle = color
+          drawing.fillRect(0, index * 130, 260, 130)
+        }
+        drawing.fillStyle = '#faf2e1'
+        drawing.fillRect(108, 0, 44, 520)
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
         const file = {
           id: 'pinch-photo',
@@ -257,8 +338,36 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       const dialog = page.getByRole('dialog', { name: '竖版照片.png' })
       const stage = dialog.getByRole('button', { name: '关闭图片预览' })
       const img = dialog.getByRole('img', { name: '竖版照片.png' })
+      const evidence = process.env.FREESEEK_UX_EVIDENCE
+      const prefix = `${page.viewportSize().width}-image`
       await page.evaluate(() => {
         const snapshots = new WeakMap()
+        const events = []
+        for (const type of [
+          'pointerdown',
+          'pointermove',
+          'pointerup',
+          'pointercancel',
+          'lostpointercapture',
+          'click',
+        ]) {
+          document.addEventListener(
+            type,
+            (event) => {
+              if (event.target.closest('[role="dialog"]')) {
+                events.push([
+                  type,
+                  event.pointerId,
+                  event.pointerType,
+                  event.clientX,
+                  event.clientY,
+                ])
+              }
+            },
+            true
+          )
+        }
+        window.__imagePointerTrace = events
         const animate = Element.prototype.animate
         Element.prototype.animate = function (...args) {
           const animation = animate.apply(this, args)
@@ -271,11 +380,36 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       })
       const motion = (locator) =>
         locator.evaluate((element) => window.__imageMotion.get(element) ?? [])
-      const expectMotion = (count) =>
-        page.waitForFunction((prior) => {
-          const image = document.querySelector('[role="dialog"] img')
-          return (window.__imageMotion.get(image)?.length ?? 0) > prior
-        }, count)
+      const waitFor = async (label, predicate, value) => {
+        try {
+          await page.waitForFunction(predicate, value)
+        } catch (cause) {
+          const scene = await page.evaluate(() => {
+            const image = document.querySelector('[role="dialog"] img')
+            return {
+              pointerEvents: window.__imagePointerTrace,
+              transform: image ? getComputedStyle(image).transform : null,
+              rect: image?.getBoundingClientRect().toJSON(),
+              animations: image ? window.__imageMotion.get(image) : [],
+            }
+          })
+          throw new Error(`${label}: ${cause.message}\n${JSON.stringify(scene)}`, { cause })
+        }
+      }
+      const expectMotion = (label, count) =>
+        waitFor(
+          label,
+          (prior) => {
+            const image = document.querySelector('[role="dialog"] img')
+            return (window.__imageMotion.get(image)?.length ?? 0) > prior
+          },
+          count
+        )
+      const capture = async (name) => {
+        if (evidence) {
+          await page.screenshot({ path: resolve(evidence, `${prefix}-${name}.png`) })
+        }
+      }
       const settle = () =>
         img.evaluate(async (element) => {
           await Promise.all(element.getAnimations().map((animation) => animation.finished))
@@ -283,7 +417,7 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
         })
       await thumb.click()
       await img.waitFor()
-      await expectMotion(0)
+      await expectMotion('opening crop animation', 0)
       const opening = await motion(img)
       assert.ok(
         opening.some(
@@ -293,23 +427,32 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       await settle()
       const initial = await img.boundingBox()
       const area = await stage.boundingBox()
+      await capture('open')
       assert.equal(Math.round(area.width), page.viewportSize().width)
       assert.ok(Math.abs(initial.height / initial.width - 2) < 0.01)
       const x = initial.x + initial.width * 0.48
       const y = initial.y + initial.height * 0.51
+      // Leave space to pan horizontally even when the stage is wider than the fitted portrait.
+      const factor = Math.max(2, (area.width + 100) / initial.width)
+      const endSpan = factor * 40
       await send('touchStart', [contact(1, x - 40, y), contact(2, x + 40, y)])
-      await send('touchMove', [contact(1, x - 80, y), contact(2, x + 80, y)])
-      await page.waitForFunction(() => !!document.querySelector('[role="dialog"] [data-zoomed]'))
+      await send('touchMove', [contact(1, x - endSpan, y), contact(2, x + endSpan, y)])
+      await waitFor(
+        'two-contact pinch',
+        () => !!document.querySelector('[role="dialog"] [data-zoomed]')
+      )
       const zoomed = await img.boundingBox()
       assert.ok(
-        Math.abs(zoomed.width / initial.width - 2) < 0.03,
+        Math.abs(zoomed.width / initial.width - factor) < 0.03,
         JSON.stringify({ initial, zoomed })
       )
       assert.ok(Math.abs(x - (zoomed.x + zoomed.width * 0.48)) < 3)
       assert.ok(Math.abs(y - (zoomed.y + zoomed.height * 0.51)) < 3)
-      await send('touchEnd', [contact(2, x + 80, y)])
-      await send('touchMove', [contact(1, x - 52, y + 32)])
-      await page.waitForFunction(
+      await capture('pinched')
+      await send('touchEnd', [contact(2, x + endSpan, y)])
+      await send('touchMove', [contact(1, x - endSpan + 28, y + 32)])
+      await waitFor(
+        'one-contact pan after pinch',
         ({ left }) => {
           const img = document.querySelector('[role="dialog"] img')
           return img && Math.abs(img.getBoundingClientRect().left - left) < 3
@@ -318,12 +461,14 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       )
       await send('touchEnd', [])
       assert.ok(await dialog.isVisible())
+      const panned = await img.boundingBox()
+      await capture('panned')
 
       // An intentional tap after dragging closes, and returns toward the original square crop.
       const prior = (await motion(img)).length
       await send('touchStart', [contact(3, x, y)])
       await send('touchEnd', [])
-      await expectMotion(prior)
+      await expectMotion('intentional tap starts closing crop animation', prior)
       const closing = (await motion(img)).slice(prior)
       assert.ok(
         closing.some(
@@ -341,6 +486,27 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
       await page.keyboard.press('Escape')
       await dialog.waitFor({ state: 'hidden' })
       assert.equal(await page.context().pages().length, 1)
+      if (evidence) {
+        const pointerEvents = await page.evaluate(() => window.__imagePointerTrace)
+        await writeFile(
+          resolve(evidence, `${prefix}-trace.json`),
+          JSON.stringify(
+            {
+              area,
+              initial,
+              zoomed,
+              panned,
+              landscape,
+              focalPoint: { x, y },
+              opening,
+              closing,
+              pointerEvents,
+            },
+            null,
+            2
+          )
+        )
+      }
       await touch.detach()
     }
   )
@@ -526,25 +692,36 @@ export const runAndroidStabilityCases = async ({ run, behavior }) => {
     async (page) => {
       const result = await page.evaluate(async () => {
         const a = window.__audit
-        let read = false,
-          name
-        try {
-          await a.readJsonEntry({
-            path: 'session.json',
-            size: 129 * 1024 * 1024,
-            stream: {
-              async *[Symbol.asyncIterator]() {
-                read = true
-                yield new Uint8Array(1)
+        let read = false
+        const limits = [
+          ['metadata.json', 128, 'metadata'],
+          ['manifest.json', 128, 'metadata'],
+          ['chat_session_index.json', 128, 'metadata'],
+          ['freeseek/sessions/long.json', 256, 'session'],
+        ]
+        const keys = []
+        for (const [path, limit, kind] of limits) {
+          try {
+            await a.readJsonEntry({
+              path,
+              size: limit * 1024 * 1024 + 1,
+              stream: {
+                async *[Symbol.asyncIterator]() {
+                  read = true
+                  yield new Uint8Array(1)
+                },
               },
-            },
-          })
-        } catch (e) {
-          name = e.key
+            }, undefined, kind)
+          } catch (error) {
+            keys.push(error.key)
+          }
         }
-        return { read, name }
+        return { read, keys }
       })
-      assert.deepEqual(result, { read: false, name: 'backupJsonTooLarge' })
+      assert.deepEqual(result, {
+        read: false,
+        keys: ['backupJsonTooLarge', 'backupManifestJsonTooLarge', 'backupIndexJsonTooLarge', 'backupSessionJsonTooLarge'],
+      })
     }
   )
   await run(

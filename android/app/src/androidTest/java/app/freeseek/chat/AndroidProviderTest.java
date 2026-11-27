@@ -84,7 +84,11 @@ public class AndroidProviderTest {
         androidx.core.content.ContextCompat.registerReceiver(context, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
         File file = ShareFiles.create(context, "freeseek-diagnostics-test.zip");
         try {
-            try (OutputStream out = new FileOutputStream(file)) { out.write("SHARE_TEST_诊断".getBytes(StandardCharsets.UTF_8)); }
+            try (var out = new java.util.zip.ZipOutputStream(new FileOutputStream(file))) {
+                out.putNextEntry(new java.util.zip.ZipEntry("manifest.json"));
+                out.write("{\"diagnostic_format_version\":1}".getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
             Intent intent = ShareFiles.intent(context, file);
             assertEquals(Intent.ACTION_SEND, intent.getAction()); assertEquals("application/zip", intent.getType());
             assertNotNull(intent.getClipData()); assertTrue((intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0);

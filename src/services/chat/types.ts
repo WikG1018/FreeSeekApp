@@ -143,11 +143,16 @@ export type InheritedContext = {
   voiceRoles?: VoiceRole[]
 }
 
+/** Zero-based history round indexes. The end is excluded. */
+export type ContextRoundRange = { start: number; end: number }
+
 export type ContextSummary = {
   text: string
   /** The user continued with recent turns while keeping the complete local history. */
   recentOnly?: boolean
   coveredRounds: number
+  /** Original rounds inside the processed prefix that the summarizer declined. */
+  retainedRanges?: ContextRoundRange[]
   signature: string
   updatedAt: number
   /** Estimated tokens in the retained chat history immediately before and after this compression. */
@@ -170,7 +175,11 @@ export type CompressionCheckpoint = {
   outputTokens: number
   windowTokens: number
   targetRounds?: number
-  /** The service declined this prefix. Keep any earlier progress and do not retry the same input. */
+  /** Original rounds already reviewed in this pass. */
+  retainedRanges?: ContextRoundRange[]
+  /** Snapshot before a split round, so a later refusal can keep the entire round verbatim. */
+  completedText?: string
+  /** Legacy marker from versions that stopped at the first refusal. */
   refused?: true
 }
 

@@ -131,7 +131,7 @@ export class StreamIdleTimeoutError extends Error {
 
 /** Response headers arrived, but the transport could not read the body to completion. */
 export class StreamReadError extends Error {
-  constructor(readonly receivedBytes: number) {
+  constructor(readonly receivedBytes: number, override readonly cause?: unknown) {
     super('Response body stream disconnected')
     this.name = 'StreamReadError'
   }
@@ -140,7 +140,7 @@ export class StreamReadError extends Error {
 export async function* readServerSentEvents(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
-  idleTimeoutMs: number = streamIdle.timeoutMs,
+  idleTimeoutMs: number | null = streamIdle.timeoutMs,
   maxEventChars?: number
 ): AsyncGenerator<ServerSentEvent> {
   const reader = stream.getReader()
@@ -168,15 +168,17 @@ export async function* readServerSentEvents(
     for (;;) {
       clearIdle()
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        idleTimer = setTimeout(() => {
-          idleTimer = undefined
-          // 取消读取让 pending 的 read 尽快结束；随后抛超时
-          reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
-          reject(new StreamIdleTimeoutError())
-        }, idleTimeoutMs)
+        if (idleTimeoutMs !== null) {
+          idleTimer = setTimeout(() => {
+            idleTimer = undefined
+            // 取消读取让 pending 的 read 尽快结束；随后抛超时
+            reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
+            reject(new StreamIdleTimeoutError())
+          }, idleTimeoutMs)
+        }
         reader.read().then(
           ({ done, value }) => resolve({ done, value }),
-          () => reject(signal?.aborted ? abortReason(signal) : new StreamReadError(receivedBytes))
+          (cause: unknown) => reject(signal?.aborted ? abortReason(signal) : new StreamReadError(receivedBytes, cause))
         )
       })
       if (chunk.done) {

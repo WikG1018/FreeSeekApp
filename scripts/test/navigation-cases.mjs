@@ -380,6 +380,13 @@ export const runNavigationCases = async ({ run }) => {
       await page.getByRole('button', { name: '回到最新消息', exact: true }).click()
       await page.locator('[data-message-id="message-159"]').waitFor()
       assert.ok((await page.locator('[data-message-id]').count()) <= 40)
+      if (!mobile) {
+        await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+        await drawer.getByRole('button', { name: 'Cancel search', exact: true }).click()
+        assert.equal(await field.inputValue(), '')
+        await body.waitFor({ state: 'detached' })
+        assert.equal(await drawer.locator('[data-session-id]').count(), 3)
+      }
     }
   )
 
@@ -628,6 +635,97 @@ export const runNavigationCases = async ({ run }) => {
     }
   )
 
+  await run(
+    'opening a sidebar search result leaves the mobile keyboard closed when the drawer reopens',
+    async (page) => {
+      await page.setViewportSize({ width: 360, height: 720 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        await a.seed([
+          f.session({
+            id: 'search-return',
+            title: '验收笔记',
+            messages: [f.user('search-return-hit', '从岸边出发')],
+          }),
+        ])
+        a.store.selectSession('search-return')
+        const viewport = window.visualViewport
+        const height = viewport.height
+        const editingHeight = () => {
+          if (document.activeElement?.matches('textarea')) return 300
+          if (document.activeElement?.matches('input[type="search"]')) return 210
+          return height
+        }
+        Object.defineProperties(viewport, {
+          height: { configurable: true, get: editingHeight },
+          offsetTop: { configurable: true, get: () => (editingHeight() < height ? 20 : 0) },
+        })
+      })
+      const frame = page.locator('[data-fs-app-frame]')
+      const editor = page.getByTestId('chat-composer').locator('textarea')
+      await editor.focus()
+      await page.waitForFunction(() => document.querySelector('[data-fs-app-frame]').hasAttribute('data-ime-open'))
+      const opener = page.getByRole('button', { name: '打开边栏', exact: true })
+      // Some touch WebViews activate the button without moving focus away from the composer.
+      await opener.evaluate((button) => button.click())
+      const drawer = page.getByTestId('mobile-sider')
+      const field = drawer.getByRole('searchbox')
+      await field.fill('岸边')
+      await drawer.locator('[data-search-message-id="search-return-hit"]').click()
+      await drawer.waitFor({ state: 'hidden' })
+      await page.locator('[data-message-id="search-return-hit"]').waitFor()
+      assert.equal(await editor.evaluate((node) => document.activeElement === node), false)
+      await page.waitForFunction(() => !document.querySelector('[data-fs-app-frame]').hasAttribute('data-ime-open'))
+
+      const motion = await opener.evaluate(async (button) => {
+        const header = document.querySelector('[data-testid="sider-header"]')
+        button.click()
+        const positions = []
+        for (let frame = 0; frame < 12; frame++) {
+          await new Promise((resolve) => requestAnimationFrame(resolve))
+          positions.push(header.getBoundingClientRect().top)
+        }
+        return positions
+      })
+      assert.ok(Math.max(...motion) - Math.min(...motion) <= 1, JSON.stringify(motion))
+      assert.equal(await frame.getAttribute('data-ime-compact'), null)
+      assert.equal(await field.inputValue(), '岸边')
+      assert.equal(await drawer.locator('[data-search-message-id="search-return-hit"]').count(), 1)
+
+      const cancel = drawer.getByRole('button', { name: '取消搜索', exact: true })
+      await page.setViewportSize({ width: 320, height: 720 })
+      const controls = drawer.getByTestId('sider-quick-actions')
+      const [inputBox, cancelBox, newChatBox] = await Promise.all([
+        field.boundingBox(),
+        cancel.boundingBox(),
+        controls.locator('button[data-chat-mode-anchor]').boundingBox(),
+      ])
+      assert.ok(
+        inputBox && cancelBox && newChatBox &&
+          inputBox.x + inputBox.width <= cancelBox.x + 1 &&
+          cancelBox.x + cancelBox.width < newChatBox.x,
+        'search and its cancel control fit beside New Chat at 320px'
+      )
+      if (process.env.FREESEEK_SEARCH_PREVIEWS) {
+        await page.screenshot({ path: 'tmp/search-history-qa/sidebar-search-cancel-zh.png', animations: 'disabled' })
+      }
+      await field.focus()
+      await page.waitForFunction(() => document.querySelector('[data-fs-app-frame]').hasAttribute('data-ime-open'))
+      await cancel.click()
+      assert.equal(await field.inputValue(), '')
+      await cancel.waitFor({ state: 'detached' })
+      await page.waitForFunction(() => !document.querySelector('[data-fs-app-frame]').hasAttribute('data-ime-open'))
+      assert.equal(await drawer.locator('[data-search-message-id]').count(), 0)
+      await drawer.locator('[data-session-id="search-return"]').waitFor()
+
+      await field.fill('岸边')
+      await drawer.locator('[data-search-message-id="search-return-hit"]').waitFor()
+      await field.press('Escape')
+      assert.equal(await field.inputValue(), '')
+      assert.ok(await drawer.isVisible(), 'Escape cancels the search before closing the drawer')
+    }
+  )
   await run(
     'sidebar search gives the keyboard space and restores footer controls after dismissal',
     async (page) => {

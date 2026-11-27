@@ -4,6 +4,7 @@ import { useTranslate, type TranslationMessage } from '../../i18n/index.js'
 import { getVisibleMessages } from '../../services/chat/branches.js'
 import {
   applicableSummary,
+  compressedRoundCount,
   compressionEstimateParams,
   contextRounds,
   describeCompressionFailure,
@@ -150,7 +151,14 @@ function SummaryEditor({ session }: { session: Session }) {
       </p>
       {summary && !summary.recentOnly && (
         <section className={styles.label}>
-          <strong>{t('compressionCoverage', { count: summary.coveredRounds })}</strong>
+          <strong>
+            {summary.retainedRanges?.length
+              ? t('compressionCoverageWithOriginals', {
+                  count: compressedRoundCount(summary),
+                  retained: summary.coveredRounds - compressedRoundCount(summary),
+                })
+              : t('compressionCoverage', { count: summary.coveredRounds })}
+          </strong>
           {summary.historyEstimate && (
             <small>
               {t('compressionFinishedResult', compressionEstimateParams(summary.historyEstimate))}

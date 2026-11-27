@@ -238,6 +238,8 @@ export type MessageStreamEvent =
   | { type: 'content_block_delta'; index: number; delta: ContentBlockDelta }
   | { type: 'content_block_stop'; index: number }
   | { type: 'agent_tool_input' }
+  /** Reported usage without a stop reason. */
+  | { type: 'message_usage'; usage: MessageUsage }
   | {
       type: 'message_delta'
       /** title 仅在开启标题且生成成功时出现；stop_details 仅在 refusal 时出现 */

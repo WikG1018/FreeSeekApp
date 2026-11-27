@@ -45,6 +45,7 @@ import { logEvent } from '../services/diagnostics/log.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
   bindChatPersistence,
+  historyMissingMessage,
   initChat,
   removeSession,
   retryInitChat,
@@ -75,6 +76,12 @@ import styles from './App.module.css'
 import { hasChatConnection } from '../services/providers.js'
 import { bindEdgeFeedback } from './edgeFeedback.js'
 import { ChatSaveNotice } from './ChatSaveNotice.js'
+import {
+  HistoryVaultOutcome,
+  HistoryVaultRestore,
+  type HistoryVaultResult,
+} from '../components/session/HistoryVaultRecovery.js'
+import { historyVaultAvailable, useHistoryVault } from '../services/chat/historyVault.js'
 
 /** 字体大小原生插件（Android WebView textZoom） */
 const FontScale = registerPlugin<{ setFontScale(options: { scale: number }): Promise<void> }>(
@@ -130,7 +137,11 @@ export const App = () => {
   const initError = useChatStore((state) => state.initError)
   const historyUpgradeBlocked = useChatStore((state) => state.historyUpgradeBlocked)
   const historyMissing = useChatStore((state) => state.historyMissing)
+  const historyRecoveryReason = useChatStore((state) => state.historyRecoveryReason)
   const historyMayStartFresh = useChatStore((state) => state.historyMayStartFresh)
+  const [vaultResult, setVaultResult] = useState<HistoryVaultResult>()
+  const restoringVault = useHistoryVault((state) => state.phase === 'restoring')
+  const canUseVault = historyVaultAvailable()
   const saveError = useChatStore((state) => Object.keys(state.sessionSaveErrors).length > 0)
   const importingHistory = useChatStore((state) => state.importingHistory)
   const session = useChatStore((state) =>
@@ -388,19 +399,27 @@ export const App = () => {
                       ? t(
                           !ready
                             ? historyMissing
-                              ? 'historyPreviouslySaved'
+                              ? historyMissingMessage(historyRecoveryReason)
                               : historyUpgradeBlocked
                                 ? 'historyUpgradeBlocked'
-                                : 'sessionListLoadFailed'
+                                : 'historyStartupReadUnavailable'
                             : 'sessionLoadFailed'
                         )
                       : t('sessionLoading')}
                   </span>
+                  {!ready && canUseVault && (
+                    <HistoryVaultRestore
+                      disabled={importingHistory}
+                      visible={restoringVault || (initError && historyRecoveryReason === 'empty-after-known-history')}
+                      onResult={setVaultResult}
+                    />
+                  )}
                   {(!ready ? initError : sessionLoadError) ? (
                     <>
                       <Button
                         variant="outlined"
                         size="m"
+                        disabled={!ready && (importingHistory || restoringVault)}
                         onClick={() => {
                           if (!ready) {
                             void retryInitChat()
@@ -417,18 +436,28 @@ export const App = () => {
                           size="m"
                           onClick={() => void removeSession(activeId)}
                         >
-                          {t('sessionLoadDelete')}
+                          {t(canUseVault ? 'historyVaultDeleteUnreadable' : 'sessionLoadDelete')}
                         </Button>
                       ) : null}
                     </>
                   ) : null}
                   {!ready && initError && (
-                    <Button variant="outlined" size="m" onClick={() => openSettings('data')}>
+                    <Button
+                      variant="outlined"
+                      size="m"
+                      disabled={importingHistory || restoringVault}
+                      onClick={() => openSettings('data')}
+                    >
                       {t('historyOpenBackup')}
                     </Button>
                   )}
                   {!ready && historyMayStartFresh && (
-                    <Button variant="outlined" size="m" onClick={() => void initChat(true)}>
+                    <Button
+                      variant="outlined"
+                      size="m"
+                      disabled={importingHistory || restoringVault}
+                      onClick={() => void initChat(true)}
+                    >
                       {t('historyStartWithoutRestore')}
                     </Button>
                   )}
@@ -469,7 +498,8 @@ export const App = () => {
         />
       )}
       <ContextSummaryDialog />
-      <SettingsDialog />
+      <SettingsDialog onVaultResult={setVaultResult} />
+      {vaultResult && <HistoryVaultOutcome result={vaultResult} close={() => setVaultResult(undefined)} />}
       <MemoryDialogs />
       <ChatModeDialog />
       <AgentGoalDialog />

@@ -12,6 +12,7 @@ import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Debug;
+import android.os.PowerManager;
 import android.os.Process;
 import android.provider.MediaStore;
 import android.system.Os;
@@ -156,21 +157,41 @@ final class DiagnosticDevice {
             env.put("storageFreeBytes", files.getUsableSpace());
             env.put("storageTotalBytes", files.getTotalSpace());
         });
-        collect(collection, "network", () -> {
-            ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
-            if (connectivity == null) throw new IllegalStateException();
-            NetworkCapabilities network = connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
-            JSObject connection = new JSObject().put("connected", network != null);
-            if (network != null) {
-                connection.put("validated", network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
-                connection.put("metered", connectivity.isActiveNetworkMetered());
-                connection.put("wifi", network.hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
-                connection.put("cellular", network.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR));
-                connection.put("ethernet", network.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
-                connection.put("vpn", network.hasTransport(NetworkCapabilities.TRANSPORT_VPN));
+        collect(collection, "network", () -> env.put("network", network(context)));
+        collect(collection, "backgroundWork", () -> {
+            JSObject background = new JSObject()
+                .put("appVisible", TaskNotifications.appVisible)
+                .put("notificationsAllowed", TaskNotifications.permitted(context))
+                .put("resultNotificationsAllowed", TaskNotifications.resultsAllowed(context))
+                .put("liveProgressSupported", LiveTaskProgress.supported());
+            if (LiveTaskProgress.supported()) {
+                background.put("liveProgressEnabled", LiveTaskProgress.enabled(context));
+                background.put("liveProgressAllowed", LiveTaskProgress.permitted(context));
             }
-            env.put("network", connection);
+            ActivityManager manager = context.getSystemService(ActivityManager.class);
+            if (Build.VERSION.SDK_INT >= 28 && manager != null) {
+                background.put("backgroundRestricted", manager.isBackgroundRestricted());
+            }
+            PowerManager power = context.getSystemService(PowerManager.class);
+            if (power != null) background.put("batteryOptimizationExempt", power.isIgnoringBatteryOptimizations(context.getPackageName()));
+            env.put("backgroundWork", background);
         });
         return env;
+    }
+
+    static JSObject network(Context context) {
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        if (connectivity == null) throw new IllegalStateException();
+        NetworkCapabilities network = connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
+        JSObject connection = new JSObject().put("connected", network != null);
+        if (network != null) {
+            connection.put("validated", network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+            connection.put("metered", connectivity.isActiveNetworkMetered());
+            connection.put("wifi", network.hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
+            connection.put("cellular", network.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR));
+            connection.put("ethernet", network.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+            connection.put("vpn", network.hasTransport(NetworkCapabilities.TRANSPORT_VPN));
+        }
+        return connection;
     }
 }

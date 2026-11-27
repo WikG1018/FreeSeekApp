@@ -31,11 +31,13 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(FontScalePlugin.class);
         registerPlugin(AppearancePlugin.class);
         registerPlugin(StartupHandoffPlugin.class);
+        registerPlugin(StartupRoutePlugin.class);
         registerPlugin(MicPermissionPlugin.class);
         registerPlugin(DonatePlugin.class);
         registerPlugin(UpdatePlugin.class);
         registerPlugin(BackupPlugin.class);
         registerPlugin(HistoryFilesPlugin.class);
+        registerPlugin(HistoryVaultPlugin.class);
         registerPlugin(DiagnosticsPlugin.class);
         registerPlugin(CustomHttpPlugin.class);
         registerPlugin(PublicWebPlugin.class);
@@ -127,6 +129,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         TaskNotifications.appVisible = true;
+        LiveTaskProgress.refreshNotifications();
         DiagnosticsLog.record(this, "app", "activity.resumed", new JSObject());
         if (webViewHealth != null && !rendererLost && recovery == null) {
             webViewHealth.foreground(getBridge().getWebView(), firstForeground);
@@ -137,6 +140,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPause() {
         TaskNotifications.appVisible = false;
+        LiveTaskProgress.refreshNotifications();
         DiagnosticsLog.record(this, "app", "activity.paused", new JSObject());
         if (webViewHealth != null) webViewHealth.stop();
         super.onPause();

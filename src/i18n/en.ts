@@ -34,6 +34,7 @@ export const en = {
   providerRemoteError:
     'The model service returned an error. Check the configuration or try another model.',
   providerInterrupted: 'The response ended unexpectedly. Received content is retained.',
+  providerUnknownStopReason: 'The model returned an unrecognized finish reason. Received content is retained.',
   providerToolUnsupported: 'The model requested a client tool. Remove tool parameters and retry.',
   providerSearchToolRejected: 'This model endpoint cannot use the FreeSeek search tool.',
   providerFileUnsupported:
@@ -272,7 +273,7 @@ export const en = {
   providerErrorModel: 'Select a protocol and enter a valid model ID.',
   providerErrorParameters: 'Invalid parameters. Check JSON, output limit and temperature.',
   providerErrorOutputLimit: 'This model supports up to {limit} output tokens. Lower the limit or clear the field to use the default.',
-  providerTestOutputExhausted: 'The model responded and ran out of test output before writing an answer. Raise the output limit or turn off thinking and try again.',
+  providerTestOutputExhausted: 'The connection test reached the output limit before the model completed its answer. Raise the output limit or turn off thinking and try again.',
   providerMiMoSamplingHint: 'MiMo controls temperature and Top P while thinking is on. Custom values apply when thinking is off.',
   providerMiMoTemperatureRange: 'MiMo temperature must be between 0 and 1.5. Adjust the model setting and try again.',
   providerErrorStorage: 'Could not save the configuration. Check available storage and retry.',
@@ -281,7 +282,8 @@ export const en = {
     'Flash accepts images; V4 Pro is text-only. Costs are estimated separately.',
   usageUnpriced: 'Pricing unavailable',
   usagePartialCost:
-    'Cost excludes {count} unpriced requests. Tokens are counted; refer to the service bill for actual charges.',
+    'Model costs for {count} requests are still unknown. Refer to the provider bill for actual charges.',
+  usageMessagePartialCost: 'Model costs for {count} requests are still unknown',
   diagnosticsShare: 'Export and share diagnostics',
   diagnosticsSaveFile: 'Save diagnostics to a file',
   diagnosticsShareOpened: 'Share sheet opened',
@@ -312,6 +314,7 @@ export const en = {
   newChat: 'New chat',
   siderNewChat: 'New chat',
   siderSearchShort: 'Search',
+  siderSearchCancel: 'Cancel search',
   siderSortLabel: 'Sort chats',
   siderSortRecent: 'By time',
   siderSortType: 'By conversation type',
@@ -327,13 +330,60 @@ export const en = {
   historyPreviouslySaved:
     'Previously saved chats are unavailable. Retry or restore them from an existing backup.',
   historyOpenBackup: 'Open backup settings',
+  historyEmptyAfterKnownHistory:
+    'This device had saved chats before. No saved chats were found in local storage this time. Try again, or restore from an existing backup.',
+  historySelectionUncertain:
+    'The app could not confirm which copy contains your saved chats. Try again, or restore from an existing backup.',
+  historyStartupReadUnavailable:
+    'Local chats are temporarily unavailable. Try again, or restore from an existing backup.',
   historyStartWithoutRestore: 'Continue without restoring',
+  historyVaultTitle: 'On-device recovery copy',
+  historyVaultLocal: 'Keep a separate copy of chats and original attachments on this device.',
+  historyVaultChecking: 'Checking the on-device recovery copy…',
+  historyVaultProtectedSessions: '{count} of {total} chats protected',
+  historyVaultCurrentSessions: 'Chats in local storage: {count}',
+  historyVaultStoredSessions: 'Chats saved in the recovery copy: {count}',
+  historyVaultOriginals: 'Original attachments protected: {count}',
+  historyVaultSize: 'Recovery copy size: about {size}',
+  historyVaultMissingOriginals: 'Original attachments missing from the recovery copy: {count}',
+  historyVaultProtect: 'Check and update the recovery copy',
+  historyVaultRetryProtection: 'Retry updating the recovery copy',
+  historyVaultRetryCheck: 'Check the copy again',
+  historyVaultProtecting: 'Updating the on-device recovery copy…',
+  historyVaultProtectProgress: 'Updating the copy. Chats checked: {processed} of {total}.',
+  historyVaultSpace: 'Device storage is low. Free some space and try again.',
+  historyVaultUnreadable: 'Chats or the recovery copy are temporarily unreadable. Try again.',
+  historyVaultWrite: 'Could not save the changes. Try again.',
+  historyVaultChanged: 'Chats changed during this operation. Try again.',
+  historyVaultBusy: 'Another history operation is in progress. Try again when it finishes.',
+  historyVaultUnavailable: 'Could not complete this operation. Try again.',
+  historyVaultCanRestore: 'Chats available in the on-device recovery copy: {count}',
+  historyVaultRestore: 'Restore from the on-device copy',
+  historyVaultMerge: 'Restore missing chats and original attachments. Existing chat text is kept.',
+  historyVaultRestoring: 'Restoring from the on-device copy…',
+  historyVaultRestoreProgress: 'Restoring. Items checked: {processed} of {total}.',
+  historyVaultRestoreFailed: 'Could not restore from the on-device copy.',
+  historyVaultRestored: 'Restored from the on-device copy',
+  historyVaultRestoredPartial: 'Available content restored',
+  historyVaultRestoredSessions: 'Chats restored: {count}',
+  historyVaultRestoredOriginals: 'Original attachments restored: {count}',
+  historyVaultKept: 'Existing chats kept',
+  historyVaultKeptSessions: 'Existing chats kept: {count}',
+  historyVaultRestoreMissing: 'Original attachments missing from the copy: {count}',
+  historyVaultDeleteSession: 'This chat, its on-device recovery copy, and attachments used only by this chat will be deleted.',
+  historyVaultDeleteAll: 'All chats, their on-device recovery copies, original attachments and unsent drafts will be deleted.',
+  historyVaultDeleteUnreadable: 'Delete this chat and its recovery copy',
   sessionLoadFailed: 'Unable to load this chat. Please try again.',
   sessionLoadDelete: 'Delete this unreadable chat',
   sessionSaveFailed: 'Chats or attachments haven’t been saved',
   sessionSaveNoSpace: 'Device storage is full. Free up some space and try saving again.',
   sessionSaveConnection: 'Local storage is temporarily unavailable. Retry or save a backup.',
   sessionSaveHelp: 'Retry saving to this device or save a backup before leaving.',
+  sessionSaveConflict: 'This chat was changed or deleted in another window. When the reply finishes, you can save this window’s version as a new chat.',
+  sessionKeepBoth: 'Save as new chat',
+  sessionConflictSaved: 'This window’s version was saved as a new chat.',
+  sessionConflictPartial: 'Saved as a new chat. {count} original files are missing on this device. Attach them again if needed.',
+  conflictingChatCopy: '{title} (window copy)',
   sessionSaveRetry: 'Retry save',
   sessionSaveRetrying: 'Saving…',
   sessionSaveWaiting: 'The system is still saving. You can save a backup now.',
@@ -354,6 +404,8 @@ export const en = {
   delete: 'Delete',
   sessionItemMenuRenameOption: 'Rename',
   sessionItemMenuContinueOption: 'Continue from here',
+  sessionItemMenuBackupOption: 'Back up this chat',
+  sessionBackupUnavailable: 'Could not read this conversation. Refresh and try again.',
   inheritContextChip: 'New chat inherits context from "{title}" ({rounds} rounds)',
   inheritContextRemove: 'Remove inherited context',
   inheritedChatTitle: 'Continued chat',
@@ -499,6 +551,8 @@ export const en = {
   updateNotes: 'What is new',
   updateNotesTitle: 'What is new in v{version}',
   updateNoNotes: '(No release notes for this version)',
+  updateHistoryLoading: 'Loading notes for skipped versions…',
+  updateHistoryUnavailable: 'Some earlier release notes are temporarily unavailable.',
   updateDownloadNow: 'Download update',
   updateInstallNow: 'Install update',
   updateWebReady: 'Ready to reload',
@@ -689,7 +743,7 @@ export const en = {
   usageSave: 'Save pricing',
   usageSaved: 'Saved',
   usagePricingHint:
-    'These rates estimate costs for the selected model. Peak hours are estimated on regular weekdays. Document parsing and speech are billed separately. Refer to the provider bill for actual charges.',
+    'Current model rates apply to estimates for past and new requests. Published Chinese holidays for 2026 and 2027 use off-peak rates. Document parsing and speech are billed separately. Refer to the provider bill for actual charges.',
   more: 'More',
   close: 'Close',
   sessionHistoryTimelineLabelToday: 'Today',
@@ -803,7 +857,9 @@ export const en = {
   providerSpeechGuideListen: 'Preview both voices and save once you hear them. Then select “Character voices” in Chat preferences.',
   providerSpeechGuideOpenKeys: 'Create a pay-as-you-go API key',
   providerSpeechGuideOpenDocs: 'Speech model docs',
-  providerSpeechGuideMatchKey: 'Pay-as-you-go API and Token Plan each fill in their own endpoint.',
+  providerSpeechGuidePlanTerms: 'Token Plan terms',
+  providerSpeechGuideMatchKey: 'Use the pay-as-you-go API for narration and other non-coding uses. Token Plan is limited to coding tools.',
+  providerSpeechKeyForAddress: 'Enter a key for this service address.',
   providerSpeechSection: 'Character-voice read-aloud',
   providerSpeechSource: 'Connection method',
   providerSpeechFollow: 'Use existing MiMo',
@@ -890,8 +946,6 @@ export const en = {
   roleVoiceControlWaiting: 'Waiting',
   roleVoiceControlPreparing: 'Loading',
   roleVoiceLiveDescription: 'Automatically read new replies in this conversation.',
-  roleVoicePause: 'Pause reading',
-  roleVoiceResume: 'Resume reading',
   roleVoiceSkipLine: 'Skip line',
   roleVoiceRetryLine: 'Retry line',
   roleVoiceSampleCreate: 'Generate a voice sample',
@@ -923,6 +977,7 @@ export const en = {
   confirm: 'Confirm',
   streamIdleTimeout: 'No data received for a long time; check your network and retry',
   streamConnectionLost: 'The connection dropped while receiving the reply. Please retry.',
+  providerResponseBufferFailed: 'The app could not hold the reply in the background. Check available storage and try again.',
   apiImageUnsupported:
     'An image in this conversation was rejected (usually from an older or imported message): remove it from that message to continue',
   apiDocumentImagesUnsupported:
@@ -941,6 +996,7 @@ export const en = {
     'Future replies use this summary and recent messages. You can add any details you want the model to remember.',
   compressionChargeHint: 'Further compression uses additional tokens with this model.',
   compressionCoverage: 'Covers the first {count} turns',
+  compressionCoverageWithOriginals: '{count} turns summarized, {retained} kept verbatim',
   compressionPromptTitle: 'This conversation is nearing its limit',
   noticeTitle: 'Before you start',
   noticeAccept: 'I have read this. Continue',
@@ -993,7 +1049,7 @@ export const en = {
   compressionRefusalKeepHint:
     'Retry with completed summaries, the remaining original messages, and your current attachments.',
   compressionRefusalTooLong:
-    'The conversation still exceeds the model limit with its history included. Shorten the current message or reduce its attachments and try again.',
+    'The request still exceeds the model limit with chat history included. Shorten this message, reduce its attachments, or start a new chat. Your original chat is saved.',
   compressionRestoreHistory: 'Restore full context',
   compressionRestoreHistoryHint:
     'This chat is using only recent turns. Restoring its full history uses the original messages again. Long chats may need compression again.',
@@ -1038,6 +1094,7 @@ export const en = {
   compressionEstimatedResult:
     'Chat history is about {before} tokens. Estimated after compression: {after} tokens.',
   compressionFinishedResult: 'Chat history compressed from about {before} to {after} tokens.',
+  compressionFinishedWithOriginals: 'Chat history compressed from about {before} to {after} tokens. {retained} turns keep their original text.',
   compressionHelp:
     'Use the current model to summarize older turns. Future replies use the summary and recent messages. This uses additional tokens. Your original messages and files stay on this device.',
   compressionSummary: 'Summary used in future replies',
@@ -1073,6 +1130,10 @@ export const en = {
   settingsBackgroundDenied: 'Not allowed',
   settingsBackgroundOpenError:
     'Could not open notifications. You can change them in system settings.',
+  settingsLiveProgress: 'Show live progress in the status bar',
+  settingsLiveProgressHelp: 'See long replies and Agent tasks continue when you switch apps.',
+  settingsLiveProgressPermission: 'Live progress is blocked by the system. Open notification settings above.',
+  settingsLiveProgressSaveError: 'Could not save live progress settings. Try again.',
   sessionPinned: 'Pinned',
   sessionShowMore: 'Show more chats',
   sessionPin: 'Pin chat',
@@ -1088,6 +1149,9 @@ export const en = {
   historyImportConflictsTitle: 'Choose which versions to keep',
   historyImportConflictsBody: '{added} new · {count} duplicates. Local versions are selected by default.',
   historyImportPartialTitle: 'Some chats could not be restored',
+  historyImportArchivePartialTitle: 'Partial backup',
+  historyImportArchiveMissingSessions: 'Chats missing from this backup: {count}.',
+  historyImportArchiveMissingFiles: 'Original attachments missing from this backup: {count}.',
   historyImportAvailable: 'Chats available to import · {count}',
   historyImportWillSkip: 'Chats with unreadable message order will be skipped ({count}).',
   historyImportAvailableAction: 'Import available chats',
@@ -1107,8 +1171,15 @@ export const en = {
   historyImportFailed:
     'File import failed. The file format may be invalid, or the ZIP file may use an older chat export format. Please export your chat history from DeepSeek again and retry the import.',
   historyExportFailed: 'Export failed: {message}',
+  historyExportSaved: 'Backup saved',
+  backupProtectionNoSpace: 'There is not enough space for the local recovery copy. Your existing chats are safe. Free some space and retry.',
+  backupProtectionFailed: 'The local recovery copy could not complete this change. Your existing chats are safe. Retry or check the copy in Data management.',
+  historyExportDownloadStarted: 'Backup download started',
+  historyExportTooLarge: 'This backup exceeds the size or file count limit.',
+  historyExportReadFailed: 'Could not read an original file. Go back and export again.',
+  historyExportWriteFailed: 'Could not finish writing the backup. Check free space or choose another location and try again.',
   historyExportSkipped:
-    'Skipped {count} conversation(s) that could not be backed up. The other conversations were exported.',
+    'Skipped {count} conversation(s) that could not be backed up. The backup contains the other conversations.',
   historyExportMissingOriginals:
     'Could not read {count} original attachment(s). The backup retains their names and details.',
   exportAllLabel: 'Export all chats',
@@ -1146,6 +1217,8 @@ export const en = {
   diagnosticsFallback: 'Full diagnostics are unavailable. Preparing basic diagnostics.',
   diagnosticsPrivacy:
     'Includes device model, system and WebView versions, operation results and errors. Logs stay on this device for up to 7 days and omit API keys, chats, search terms, original attachments and recordings.',
+  replyRuntimeUnavailable:
+    'The web engine is missing a feature needed to send messages. Update Android System WebView or your browser and try again. Your message is saved.',
   replyNoReadableAttachment:
     'This message has no readable attachment. Replace it or add text and retry. The original is preserved.',
   contextAttachmentsSkipped:
@@ -1185,6 +1258,12 @@ export const en = {
   uploadImageDecodeTimeout: 'Image processing timed out. Retry or resize the image.',
   backupJsonTooLarge:
     'A conversation or index is too large to read. Export it in smaller parts and try again. Existing chats are preserved.',
+  backupSessionJsonTooLarge:
+    'A conversation in the backup exceeds the reading limit. Back up a smaller portion of the conversation and try again.',
+  backupIndexJsonTooLarge:
+    'The conversation index exceeds the reading limit. Create smaller backups and try again.',
+  backupManifestJsonTooLarge:
+    'The backup manifest exceeds the reading limit. Create smaller backups and try again.',
   backupStorageFull:
     'There is not enough storage to import this backup. Free up some space and try again. Existing chats are preserved.',
   backupOtherTabBusy:
@@ -1234,6 +1313,9 @@ export const en = {
   insufficientBalance: 'Insufficient balance',
   rateLimited: 'Too many requests. Please try again later.',
   ttsPlay: 'Read aloud',
+  ttsPause: 'Pause reading',
+  ttsResume: 'Resume reading',
+  ttsRecordingActive: 'Finish recording before reading aloud.',
   ttsStop: 'Stop reading',
   ttsUnavailable: 'This answer cannot be read aloud right now',
   ttsFailed: 'Failed to read aloud. Please try again later.',

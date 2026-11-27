@@ -1,4 +1,5 @@
 import { useDeferredValue, useMemo, useRef, useState } from 'react'
+import { API_ORIGIN } from '../../services/api/client.js'
 import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import { modelInputLabel } from '../../i18n/modelInputs.js'
@@ -9,12 +10,14 @@ import {
   readAssistantBackup,
   refreshAssistantLibrary,
   removeAgent,
+  revokeMemory,
   saveAgent,
   setAutomaticMemory,
   useAssistantLibrary,
   usesAutomaticMemory,
   type AgentMemory,
   type AgentProfile,
+  type MemoryGrant,
   type MemoryNote,
 } from '../../services/assistants/library.js'
 import { migrateAutomaticSuggestions } from '../../services/assistants/automatic.js'
@@ -154,6 +157,72 @@ export const AssistantSettingsPage = ({ open }: { open: (page: SettingsPageId) =
   )
 }
 
+const LegacyMemoryGrants = ({ grants }: { grants: MemoryGrant[] }) => {
+  const t = useTranslate()
+  const profiles = useProviders((state) => state.profiles)
+  const sessions = useChatStore((state) => state.sessions)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<TranslationKey>()
+  const connections = new Set([
+    'deepseek:' + API_ORIGIN,
+    ...profiles.map(({ id, revision }) => id + ':' + revision),
+  ])
+  const titles = new Map(sessions.map(({ id, title }) => [id, title || t('untitledChat')]))
+  const active = grants.filter(({ connection }) => connections.has(connection))
+  if (!active.length) {
+    return null
+  }
+  const revoke = async ({ connection, sessionId }: MemoryGrant) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await revokeMemory(connection, { sessionId })
+      showToast({ key: 'assistantMemoryAccessRevoked' })
+    } catch (failure) {
+      setError(assistantErrorKey(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <SettingsDisclosure settingRow title={t('assistantMemoryGrants')}>
+      <ul className={styles.memoryGrants} role="list">
+        {active.map((grant) => {
+          const chatTitle = grant.sessionId && titles.get(grant.sessionId)
+          const scope =
+            grant.sessionId === undefined
+              ? t('assistantMemoryGrantConnection')
+              : chatTitle
+                ? t('assistantMemoryGrantChat', { title: chatTitle })
+                : t('assistantAllowConversation')
+          return (
+            <li key={JSON.stringify([grant.connection, grant.sessionId])}>
+              <div>
+                <strong>{grant.name}</strong>
+                <small>{scope}</small>
+              </div>
+              <Button
+                size="m"
+                variant="outlined"
+                disabled={busy}
+                aria-label={t('assistantRevokeNamedGrant', { name: grant.name, scope })}
+                onClick={() => void revoke(grant)}
+              >
+                {t('assistantRevokeGrant')}
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+      {error && (
+        <p className={styles.settingError} role="alert">
+          {t(error)}
+        </p>
+      )}
+    </SettingsDisclosure>
+  )
+}
+
 export const MemoryDetailsPage = () => {
   const t = useTranslate()
   const { data, ready } = useAssistantLibrary()
@@ -169,6 +238,9 @@ export const MemoryDetailsPage = () => {
           description={t('assistantMemoryRelatedHelp')}
         />
         <Row label={t('assistantMemoryPaused')} description={t('assistantMemoryPauseHelp')} />
+        {data.enabled && !usesAutomaticMemory(data) && data.grants.length > 0 && (
+          <LegacyMemoryGrants grants={data.grants} />
+        )}
       </Section>
       <Section>
         <Row
@@ -179,6 +251,7 @@ export const MemoryDetailsPage = () => {
             output: data.maintenance.output,
           })}
         />
+        <p className={styles.settingNote}>{t('assistantMaintenanceHelp')}</p>
       </Section>
     </>
   )

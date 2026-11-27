@@ -3,6 +3,11 @@ declare const styles: {
   readonly top: string
   readonly appName: string
   readonly quickActions: string
+  readonly searchBox: string
+  readonly searchField: string
+  readonly searchIcon: string
+  readonly searchInput: string
+  readonly searchCancel: string
   readonly historyToolbar: string
   readonly sortButton: string
   readonly sortChevron: string

@@ -4,6 +4,7 @@ import { fetchProviderResponse, providerEndpoint, readApiJson } from './provider
 import { readServerSentEvents, StreamIdleTimeoutError, StreamReadError } from './sse.js'
 import type { ProviderProfile } from '../providers.js'
 import type { MiMoPresetVoice } from '../speech/roleMarkers.js'
+import { beginDiagnosticOperation, diagnosticError } from '../diagnostics/log.js'
 
 /**
  * 语音接口：
@@ -24,23 +25,27 @@ export const transcribe = async (
   audio: Blob,
   signal?: AbortSignal
 ): Promise<string> => {
-  const form = new FormData()
-  form.append('file', audio, 'recording.wav')
-  const body = await postMultipart(`${TOOLS_BASE_URL}/asr`, {
-    operation: 'asr',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-    signal,
-  })
-  if (
-    typeof body !== 'object' ||
-    body === null ||
-    !('text' in body) ||
-    typeof body.text !== 'string'
-  ) {
-    throw new ApiError('protocol', { key: 'voiceInputInvalidResponse' })
+  const finish = beginDiagnosticOperation('speech', 'transcription', { audioBytes: audio.size })
+  let stage = 'request'
+  try {
+    const form = new FormData()
+    form.append('file', audio, 'recording.wav')
+    const body = await postMultipart(`${TOOLS_BASE_URL}/asr`, {
+      operation: 'asr',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal,
+    })
+    stage = 'response'
+    if (typeof body !== 'object' || body === null || !('text' in body) || typeof body.text !== 'string') {
+      throw new ApiError('protocol', { key: 'voiceInputInvalidResponse' })
+    }
+    finish('completed', { characters: body.text.length })
+    return body.text
+  } catch (error) {
+    finish(signal?.aborted ? 'cancelled' : 'failed', { stage, ...diagnosticError(error) })
+    throw error
   }
-  return body.text
 }
 
 /** 语音合成：返回裸 PCM 字节流；服务端默认过滤代码块、表格、引用标记与长公式 */
@@ -221,31 +226,52 @@ export const synthesizeMiMo = async ({
       }
   const connection = { ...profile, protocol: 'openai' as const }
   const url = providerEndpoint(connection, 'chat', body.model)
-  const { response, dispose } = await fetchProviderResponse(connection, url, body, signal)
+  const finish = beginDiagnosticOperation('speech', 'mimo.synthesis', {
+    characters: text.length, voiceMode: sample ? 'sample' : useDesign ? 'described' : 'preset',
+  })
+  const { response, dispose } = await fetchProviderResponse(connection, url, body, signal).catch((error: unknown) => {
+    finish(signal.aborted ? 'cancelled' : 'failed', { stage: 'request', ...diagnosticError(error) })
+    throw error
+  })
   const audio = readMiMoAudio(response, signal)
+  let audioBytes = 0
+  let cancelled = false
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = await audio.next()
+        if (cancelled) {
+          return
+        }
         if (!next.done) {
+          audioBytes += next.value.byteLength
           controller.enqueue(next.value)
           return
         }
         dispose()
+        finish('completed', { audioBytes })
         controller.close()
       } catch (error) {
+        if (cancelled) {
+          return
+        }
         dispose()
-        controller.error(
+        const failure =
           error instanceof StreamIdleTimeoutError
             ? new ApiError('network', { key: 'ttsServiceTimeout' })
             : error instanceof StreamReadError
               ? new ApiError('interrupted', { key: 'ttsInterrupted' })
               : error
-        )
+        finish(signal.aborted ? 'cancelled' : 'failed', {
+          stage: 'audio-stream', audioBytes, ...diagnosticError(failure),
+        })
+        controller.error(failure)
       }
     },
     cancel() {
+      cancelled = true
       dispose()
+      finish('cancelled', { stage: 'audio-stream', audioBytes })
       void audio.return(undefined).catch(() => {})
     },
   })

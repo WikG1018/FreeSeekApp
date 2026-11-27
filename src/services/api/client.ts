@@ -6,6 +6,7 @@ import { diagnosticError, logEvent, registerLogSecret } from '../diagnostics/log
 export { ApiError } from './errorTypes.js'
 export type { ApiErrorKind } from './errorTypes.js'
 import { readMessageEvent } from './parseEvent.js'
+import { createProviderUsageReader } from './providerUsage.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
 import {
@@ -165,6 +166,7 @@ export const request = async (
       {
         requestId,
         route,
+        upstreamRequestId: serverId,
         ...(serverId && /^[\da-f-]{36}$/i.test(serverId) ? { serverId } : {}),
         ...diagnosticError(error),
       },
@@ -353,7 +355,8 @@ async function* streamMessageRound(
     throw await readErrorResponse(response, 'protocol', '')
   }
   try {
-    let toolRequested = false
+    const readUsage = createProviderUsageReader('anthropic', true)
+    let pendingToolUse: Extract<MessageStreamEvent, { type: 'message_delta' }> | undefined
     for await (const { event: eventName, data } of readServerSentEvents(
       response.body,
       signal,
@@ -384,18 +387,30 @@ async function* streamMessageRound(
       if (collector && payload && typeof payload === 'object') {
         collector.read(payload as Record<string, unknown>)
       }
-      const event = readMessageEvent(payload)
+      const event = readMessageEvent(payload, readUsage)
       if (!event) {
         continue
       }
       if (event.type === 'message_delta') {
-        toolRequested = event.delta.stop_reason === 'tool_use'
-      } else if (event.type === 'message_stop' && toolRequested && (collector || answerOnly)) {
-        const turn = collector?.finish()
-        if (!turn) {
-          throw new ApiError('protocol', { key: 'providerToolUnsupported' })
+        pendingToolUse = event.delta.stop_reason === 'tool_use' ? event : undefined
+        if (pendingToolUse) {
+          // Commit the tool round once after any final usage-only frames.
+          if (event.usage) {
+            yield { type: 'message_usage', usage: event.usage }
+          }
+          continue
         }
-        return turn
+      } else if (event.type === 'message_usage' && pendingToolUse) {
+        pendingToolUse = { ...pendingToolUse, usage: event.usage }
+      } else if (event.type === 'message_stop' && pendingToolUse) {
+        yield pendingToolUse
+        if (collector || answerOnly) {
+          const turn = collector?.finish()
+          if (!turn) {
+            throw new ApiError('protocol', { key: 'providerToolUnsupported' })
+          }
+          return turn
+        }
       }
       yield event
       if (event.type === 'message_stop') {

@@ -6,25 +6,35 @@ import {
   replaceHistory,
   useChatStore,
   loadBackupFile,
-  flushChatUpdates,
   unsavedChatSnapshot,
   snapshotAgentHistory,
 } from './store.js'
 import type { Session } from './types.js'
-import { restoreNativeSettings, type NativeBackupSettings } from './history/nativeArchive.js'
+import {
+  planNativeArchive,
+  restoreNativeSettings,
+  type NativeBackupSettings,
+} from './history/nativeArchive.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
 import type { ImportProgress } from './history/readJson.js'
+import type { ArchivePartial } from './history/importArchive.js'
 import { BackupError } from './history/errors.js'
 import { discardImportedWorkspaces } from '../tasks/workspaces.js'
+import { checkDiskOriginal } from './historyFiles.js'
+import { canSaveHistoryArchive, saveBackup, saveHistoryArchive } from '../saveBackup.js'
 
 export { BackupError } from './history/errors.js'
-export type HistoryImportPreview = db.HistoryImportPreview & { skipped: number }
+export type HistoryImportPreview = db.HistoryImportPreview & {
+  skipped: number
+  archivePartial?: ArchivePartial
+}
 
 export type HistoryImportResult = {
   added: number
   replaced: number
   kept: number
   skipped: number
+  archivePartial?: ArchivePartial
   firstImportedId?: string
 }
 
@@ -40,7 +50,7 @@ const enqueueBackup = <T>(
     const finish = beginDiagnosticOperation('backup', operation, details)
     try {
       const result = await run()
-      finish('completed')
+      finish(operation === 'export' && result === undefined ? 'cancelled' : 'completed')
       return result
     } catch (error) {
       const failure =
@@ -60,86 +70,130 @@ const enqueueBackup = <T>(
   return task
 }
 
-/** 导出 FreeSeek 会话备份。跳过记录时，生成明确标记的部分备份。 */
-export const exportHistory = (): Promise<{
-  name: string
-  blob: Blob
-  skipped: number
-  missingOriginals: number
-}> =>
-  enqueueBackup('export', async () => {
-    // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
-    flushChatUpdates()
-    const { ready, sessions, sessionCache } = useChatStore.getState()
-    if (!ready) {
-      throw new BackupError('sessionListLoadFailed')
+const planHistory = async <Original extends { size: number; type: string }>(
+  loadFile: (id: string) => Promise<Original | undefined>,
+  sessionId?: string
+) => {
+  const pending = new Map(unsavedChatSnapshot().sessions.map((session) => [session.id, session]))
+  const { ready, sessions: summaries, sessionCache, streaming } = useChatStore.getState()
+  if (!ready) {
+    throw new BackupError('sessionListLoadFailed')
+  }
+  for (const id of Object.keys(streaming)) {
+    if (Object.hasOwn(sessionCache, id)) {
+      pending.set(id, sessionCache[id])
     }
-    // 索引里有、正文读不到的会话（数据库被系统清空后内存列表还留着旧条目）跳过而不是整次失败：
-    // 备份剩下的会话远比「一条读不到就什么都导不出」有用。
-    let skipped = 0
-    const missing = new Set<string>()
-    const skipSession = (error: unknown) => {
-      skipped += 1
-      logEvent('backup', 'export.session-skipped', diagnosticError(error), 'warn')
-    }
-    const loadOriginal = async (id: string) => {
-      if (missing.has(id)) {
-        return undefined
-      }
-      try {
-        const blob = await loadBackupFile(id)
-        if (blob) {
-          return blob
-        }
-      } catch (error) {
-        logEvent('backup', 'export.original-unavailable', diagnosticError(error), 'warn')
-      }
-      missing.add(id)
+  }
+  const sessions = sessionId ? summaries.filter(({ id }) => id === sessionId) : summaries
+  if (sessionId && sessions.length === 0) {
+    throw new BackupError('sessionBackupUnavailable')
+  }
+  // 索引里有、正文读不到的会话（数据库被系统清空后内存列表还留着旧条目）跳过而不是整次失败：
+  // 备份剩下的会话远比「一条读不到就什么都导不出」有用。
+  let skipped = 0
+  const missing = new Set<string>()
+  const skipSession = (error: unknown) => {
+    skipped += 1
+    logEvent('backup', 'export.session-skipped', diagnosticError(error), 'warn')
+  }
+  const loadOriginal = async (id: string) => {
+    if (missing.has(id)) {
       return undefined
     }
-    async function* readSessions(): AsyncGenerator<Session> {
-      for (const summary of sessions) {
-        const cached = Object.hasOwn(sessionCache, summary.id) ? sessionCache[summary.id] : null
-        try {
-          const session = cached ?? (await db.loadSession(summary.id))
-          if (!session) {
-            skipped += 1
-            continue
-          }
-          // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
-          yield await snapshotAgentHistory({ ...session, ...summary })
-        } catch (error) {
-          skipSession(error)
+    try {
+      const original = await loadFile(id)
+      if (original) {
+        return original
+      }
+    } catch (error) {
+      logEvent('backup', 'export.original-unavailable', diagnosticError(error), 'warn')
+    }
+    missing.add(id)
+    return undefined
+  }
+  async function* readSessions(): AsyncGenerator<Session> {
+    for (const { id } of sessions) {
+      try {
+        // An idle tab may still show an older revision saved by another window.
+        const session = pending.get(id) ?? (await db.loadSession(id))
+        if (!session) {
+          skipped += 1
+          continue
         }
+        yield await snapshotAgentHistory(session)
+      } catch (error) {
+        skipSession(error)
       }
     }
-    const { exportArchive } = await import('./history/exportArchive.js')
-    const now = new Date()
-    const blob = await exportArchive(
-      readSessions(),
-      loadOriginal,
-      () => skipped || missing.size
+  }
+  const now = new Date()
+  const entries = await planNativeArchive(
+    readSessions(),
+    loadOriginal,
+    () =>
+      skipped || missing.size
         ? {
             kind: 'unreadable',
             skippedSessions: skipped,
             ...(missing.size > 0 && { missingOriginals: missing.size }),
           }
         : undefined,
-      skipSession
-    )
-    if (skipped && skipped === sessions.length) {
-      // 一条都没读到：与其给用户一个空备份，不如明确报错。
-      throw new BackupError('sessionListLoadFailed')
-    }
-    logEvent('backup', 'export.archive', {
-      sessionCount: sessions.length - skipped,
-      skipped,
-      missingOriginals: missing.size,
-      bytes: blob.size,
-    })
-    const name = ['freeseek', skipped || missing.size ? 'partial-backup' : 'backup', formatDate(now)].join('-')
-    return { name: name + '.zip', blob, skipped, missingOriginals: missing.size }
+    skipSession,
+    sessionId !== undefined
+  )
+  if (skipped && skipped === sessions.length) {
+    // 一条都没读到：与其给用户一个空备份，不如明确报错。
+    throw new BackupError(sessionId ? 'sessionBackupUnavailable' : 'sessionListLoadFailed')
+  }
+  logEvent('backup', 'export.archive', {
+    sessionCount: sessions.length - skipped,
+    skipped,
+    missingOriginals: missing.size,
+    sourceBytes: entries.reduce((bytes, { source }) => bytes + source.size, 0),
   })
+  const name = [
+    'freeseek',
+    ...(sessionId ? ['conversation'] : []),
+    skipped || missing.size ? 'partial-backup' : 'backup',
+    formatDate(now),
+  ].join('-')
+  return { name: name + '.zip', entries, skipped, missingOriginals: missing.size }
+}
+
+const packHistory = async (sessionId?: string) => {
+  const { entries, ...report } = await planHistory(loadBackupFile, sessionId)
+  const { writeArchive } = await import('./history/zipWriter.js')
+  const blob = await writeArchive(entries.map(({ name, source }) => ({ name, blob: source })))
+  return { ...report, blob }
+}
+
+/** 导出 FreeSeek 会话备份。跳过记录时，生成明确标记的部分备份。 */
+export const exportHistory = () => enqueueBackup('export', packHistory)
+
+export const saveHistoryBackup = (sessionId?: string) =>
+  enqueueBackup(
+    'export',
+    async () => {
+      if (!canSaveHistoryArchive()) {
+        const { blob, ...report } = await packHistory(sessionId)
+        return (await saveBackup(report.name, blob))
+          ? { ...report, destination: 'download' as const }
+          : undefined
+      }
+      const { entries, ...report } = await planHistory(async (id) => {
+        const disk = await db.loadDiskOriginalRef(id)
+        if (disk) {
+          await checkDiskOriginal(disk)
+          return disk
+        }
+        return loadBackupFile(id)
+      }, sessionId)
+      return (await saveHistoryArchive(report.name, entries))
+        ? { ...report, destination: 'document' as const }
+        : undefined
+    },
+    { scope: sessionId ? 'conversation' : 'history' }
+  )
 
 export const exportRecoveryHistory = () =>
   enqueueBackup('export-recovery', async () => {
@@ -193,6 +247,7 @@ export const importHistory = (
       await checkArchiveFormat(file)
       let settings: NativeBackupSettings | undefined
       let skipped = 0
+      let archivePartial: ArchivePartial | undefined
       const result = await mergeHistory(
         async (reservedFileIds) => {
           const remapped = new Map<string, string>()
@@ -210,10 +265,11 @@ export const importHistory = (
           const parsed = await importArchive(file, mapFileId, onProgress)
           settings = parsed.settings
           skipped = parsed.skipped
+          archivePartial = parsed.archivePartial
         },
         async (preview) => {
-          if (choose && (preview.conflicts.length || skipped)) {
-            return choose({ ...preview, skipped })
+          if (choose && (preview.conflicts.length || skipped || archivePartial)) {
+            return choose({ ...preview, skipped, ...(archivePartial && { archivePartial }) })
           }
           if (skipped) {
             throw new BackupError('backupInvalidBranches')
@@ -230,8 +286,9 @@ export const importHistory = (
         const used = new Set(
           result.imported.flatMap(({ id }) => settings?.workspacesBySession?.get(id) ?? [])
         )
-        await discardImportedWorkspaces(settings.importedWorkspaces.filter((id) => !used.has(id)))
-          .catch(db.reportStorageError('discard unselected imported projects'))
+        await discardImportedWorkspaces(
+          settings.importedWorkspaces.filter((id) => !used.has(id))
+        ).catch(db.reportStorageError('discard unselected imported projects'))
       }
       if (result.previousSessionCount === 0 && result.added > 0) {
         restoreNativeSettings(settings)
@@ -245,6 +302,7 @@ export const importHistory = (
         replaced,
         kept,
         skipped,
+        ...(archivePartial && { archivePartial }),
         bytes: file.size,
       })
       return {
@@ -252,6 +310,7 @@ export const importHistory = (
         replaced,
         kept,
         skipped,
+        ...(archivePartial && { archivePartial }),
         firstImportedId: result.imported.sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id,
       }
     },

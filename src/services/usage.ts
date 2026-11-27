@@ -51,7 +51,7 @@ export const DEFAULT_PRICING: FlashPricing = {
   searchPer1k: 5,
 }
 
-/** https://api-docs.deepseek.com/zh-cn/quick_start/pricing/，2026-11-22 核对。 */
+/** https://api-docs.deepseek.com/zh-cn/quick_start/pricing/，2026-11-26 核对。 */
 export const PRO_PRICING: FlashPricing = {
   offPeakHit: 0.15,
   offPeakMiss: 4.5,
@@ -92,7 +92,7 @@ const messagePricing = (
   if (model === 'deepseek-v4-pro') {
     return state.modelPrices[proPriceKey] ?? PRO_PRICING
   }
-  return !model || flashAliases.includes(model) ? state.pricing : undefined
+  return model && flashAliases.includes(model) ? state.pricing : undefined
 }
 
 export const hasKnownPricing = (message: PricedModel, model?: string) =>
@@ -181,7 +181,31 @@ export const setPricing = (pricing: FlashPricing): void => {
   usePricing.setState({ pricing })
 }
 
-/** 北京时间是否处于高峰时段（工作日 9-12、14-18 点）；法定节假日未计入，估算略有偏差 */
+// Inclusive MMDD ranges from the State Council's published holiday schedules.
+const beijingHolidays: Record<number, [start: number, end: number][]> = {
+  // https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm
+  2026: [
+    [101, 103],
+    [215, 223],
+    [404, 406],
+    [501, 505],
+    [619, 621],
+    [925, 927],
+    [1001, 1007],
+  ],
+  // https://www.gov.cn/zhengce/content/202611/content_7085101.htm
+  2027: [
+    [101, 103],
+    [205, 213],
+    [403, 405],
+    [501, 505],
+    [609, 609],
+    [915, 915],
+    [1001, 1007],
+  ],
+}
+
+/** 按北京时间估算周一至周五的高峰时段，已公布的节假日按全天空闲计价。 */
 const isPeakBeijing = (timestamp: number): boolean => {
   const beijing = new Date(timestamp + 8 * 3600_000)
   const day = beijing.getUTCDay()
@@ -189,7 +213,13 @@ const isPeakBeijing = (timestamp: number): boolean => {
     return false
   }
   const hour = beijing.getUTCHours()
-  return (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18)
+  if (!((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))) {
+    return false
+  }
+  const monthDay = (beijing.getUTCMonth() + 1) * 100 + beijing.getUTCDate()
+  return !beijingHolidays[beijing.getUTCFullYear()]?.some(
+    ([start, end]) => monthDay >= start && monthDay <= end
+  )
 }
 
 export type UsageTotals = {
@@ -249,6 +279,10 @@ export type UsageStats = {
   sessions: SessionUsage[]
 }
 
+export const hasUsageEstimate = (
+  usage: Pick<UsageTotals, 'requests' | 'unpricedRequests' | 'costCny'>
+) => usage.requests > usage.unpricedRequests || usage.costCny > 0
+
 /** 单条回复的用量明细（输入拆分缓存命中/未命中） */
 export type MessageUsageDetail = {
   input: number
@@ -296,12 +330,20 @@ export const computeMessageUsage = (
 
 type UsageEntry = { createdAt: number; usage: MessageUsage; model?: string }
 
+const estimateEntry = (message: PricedModel, entry: UsageEntry, pricing: PricingState) => {
+  const rate = messagePricing(message, pricing, entry.model)
+  const detail = computeMessageUsage(entry.usage, entry.createdAt, rate ?? UNPRICED)
+  // An older record can include both billable searches and model usage with no token price.
+  const priced = Boolean(rate || (detail.tokens === 0 && entry.usage.standalone_search_requests))
+  return { detail, priced }
+}
+
 const entryCache = (message: PricedModel, { usage, model }: UsageEntry) =>
   recordedCache(
     usage,
     message.connection
       ? message.connection.providerId === 'deepseek'
-      : pricedModels.includes(model ?? 'deepseek-flash')
+      : model !== undefined && pricedModels.includes(model)
   )
 
 export const replyCacheCounts = (message: AssistantMessage) =>
@@ -339,6 +381,16 @@ const visitUsageEntries = (
   }
 }
 
+/** Estimate all recorded requests from this chat, including other branches and compression. */
+export const summarizeSessionUsage = (session: Session, pricing = usePricing.getState()) => {
+  const total = emptyTotals()
+  visitUsageEntries(session, (message, entry) => {
+    const { detail, priced } = estimateEntry(message, entry, pricing)
+    addUsage(total, detail, priced, entryCache(message, entry))
+  })
+  return total
+}
+
 /** 遍历本地会话聚合用量；按消息时间所在时段计价 */
 export const collectUsage = async (signal?: AbortSignal): Promise<UsageStats> => {
   const pricing = usePricing.getState()
@@ -348,11 +400,9 @@ export const collectUsage = async (signal?: AbortSignal): Promise<UsageStats> =>
   await visitStoredSessions((session) => {
     const sessionTotals = emptyTotals()
     visitUsageEntries(session, (message, entry) => {
-      const effectivePricing = messagePricing(message, pricing, entry.model)
-      const priced = Boolean(entry.usage.standalone_search_requests || effectivePricing)
       const key = dayKey(entry.createdAt),
         day = days.get(key) ?? emptyTotals()
-      const detail = computeMessageUsage(entry.usage, entry.createdAt, effectivePricing ?? UNPRICED)
+      const { detail, priced } = estimateEntry(message, entry, pricing)
       const cache = entryCache(message, entry)
       addUsage(day, detail, priced, cache)
       days.set(key, day)
@@ -411,13 +461,8 @@ export const collectModelUsage = async (signal?: AbortSignal): Promise<ModelUsag
         }
         const date = dayKey(entry.createdAt)
         const day = group.days.get(date) ?? emptyTotals()
-        const rate = recorded ? messagePricing(message, pricing, recorded) : undefined
-        addUsage(
-          day,
-          computeMessageUsage(entry.usage, entry.createdAt, rate ?? UNPRICED),
-          Boolean(rate || entry.usage.standalone_search_requests),
-          entryCache(message, entry)
-        )
+        const { detail, priced } = estimateEntry(message, entry, pricing)
+        addUsage(day, detail, priced, entryCache(message, entry))
         group.days.set(date, day)
       }),
     signal
@@ -461,11 +506,13 @@ export const recentDays = (stats: UsageStats, count: number): DayUsage[] => {
 
 export const todayKey = (): string => dayKey(Date.now())
 
+type ReplyUsage = MessageUsageDetail & Pick<UsageTotals, 'requests' | 'unpricedRequests'>
+
 /** 单条回复汇总历次续写，分别按各次请求的时段计费。 */
 export const computeReplyUsage = (
   message: AssistantMessage,
   pricing: FlashPricing = usePricing.getState().pricing
-): MessageUsageDetail => {
+): ReplyUsage => {
   const total: MessageUsageDetail = {
     input: 0,
     cacheRead: 0,
@@ -475,15 +522,17 @@ export const computeReplyUsage = (
     tokens: 0,
     costCny: 0,
   }
-  for (const entry of usageEntries(message)) {
-    const detail = computeMessageUsage(
-      entry.usage,
-      entry.createdAt,
-      messagePricing(message, { ...usePricing.getState(), pricing }, entry.model) ?? UNPRICED
-    )
+  const state = { ...usePricing.getState(), pricing }
+  const entries = usageEntries(message)
+  let unpricedRequests = 0
+  for (const entry of entries) {
+    const { detail, priced } = estimateEntry(message, entry, state)
+    if (!priced) {
+      unpricedRequests += 1
+    }
     for (const key of Object.keys(total) as (keyof MessageUsageDetail)[]) {
       total[key] += detail[key]
     }
   }
-  return total
+  return { ...total, requests: entries.length, unpricedRequests }
 }

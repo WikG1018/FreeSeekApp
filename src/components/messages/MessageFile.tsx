@@ -76,6 +76,7 @@ export const MessageFile = ({
 }) => {
   const t = useTranslate()
   const url = useFileUrl(file.id)
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null)
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
   const [document, setDocument] = useState<SessionArtifact>()
   const upload = useUploadState(file)
@@ -96,6 +97,7 @@ export const MessageFile = ({
         <img
           src={url}
           alt={file.name}
+          onLoad={() => setLoadedUrl(url)}
           onError={() => {
             logEvent(
               'ui',
@@ -177,6 +179,7 @@ export const MessageFile = ({
         className={clsx(styles.image, styles.imageThumb, styles.previewTrigger)}
         aria-label={t('messageImageOpen', { name: file.name })}
         aria-haspopup="dialog"
+        disabled={loadedUrl !== url}
         title={file.name}
         onClick={(event) => showImageViewer(url, file.name, event.currentTarget)}
       >

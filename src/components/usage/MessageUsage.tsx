@@ -4,7 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import {
   computeReplyUsage,
   formatCacheHitRate,
-  hasKnownPricing,
+  hasUsageEstimate,
   replyCacheCounts,
   usePricing,
 } from '../../services/usage.js'
@@ -20,7 +20,7 @@ const compactNumber = (value: number) =>
   value >= 10000 ? `${(value / 1000).toFixed(1)}k` : formatNumber(value)
 
 const formatCost = (value: number) =>
-  value === 0 ? '—' : value >= 0.01 ? `¥${value.toFixed(3)}` : `¥${value.toFixed(4)}`
+  value === 0 ? '¥0.00' : value >= 0.01 ? `¥${value.toFixed(3)}` : `¥${value.toFixed(4)}`
 
 /**
  * 单条回复的 token 用量与费用：与引用、操作按钮同处一行。
@@ -32,15 +32,19 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
   const [expanded, setExpanded] = useState(false)
   const showUsage = useSettings((state) => state.showUsage)
   const locale = useSettings((state) => state.locale)
-  if (!showUsage || !message.usage) {
+  if (!showUsage || (!message.usage && !message.usageHistory?.length)) {
     return null
   }
   const detail = computeReplyUsage(message, pricing.pricing)
   const input = detail.input + detail.cacheRead + detail.cacheWrite
   const total = input + detail.output
   const rate = formatCacheHitRate(replyCacheCounts(message), locale)
-  const priced = hasKnownPricing(message)
+  const priced = hasUsageEstimate(detail)
   const cost = priced ? formatCost(detail.costCny) : t('usageUnpriced')
+  const partial =
+    priced && detail.unpricedRequests > 0
+      ? t('usageMessagePartialCost', { count: detail.unpricedRequests })
+      : null
   const full = t('usageMessageInline', {
     input: formatNumber(input),
     output: formatNumber(detail.output),
@@ -52,7 +56,7 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
         type="button"
         className={clsx(styles.summary, expanded && styles.summaryOpen)}
         aria-expanded={expanded}
-        title={full + ' · ' + t('usageCacheHitRate') + ' ' + rate}
+        title={[full, t('usageCacheHitRate') + ' ' + rate, partial].filter(Boolean).join(' · ')}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className={styles.summaryText}>
@@ -91,10 +95,11 @@ export const MessageUsage = ({ message }: { message: AssistantMessage }) => {
             </div>
           </div>
           <div className={styles.meta}>
-            {message.model ?? 'deepseek-flash'}
+            {message.responseModel ?? message.model ?? t('usageModelUnknown')}
             {detail.searches > 0 ? ` · ${t('usageWebSearches')} ${detail.searches}` : ''}
             {' · '}
             {new Date(message.createdAt).toLocaleString()}
+            {partial && <div>{partial}</div>}
           </div>
         </div>
       ) : null}

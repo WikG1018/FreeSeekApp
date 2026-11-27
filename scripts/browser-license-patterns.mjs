@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const roots = [
   '@jitl/quickjs-wasmfile-release-sync',
@@ -16,6 +17,39 @@ const roots = [
   'three',
   'diff',
 ]
+
+// These exact releases omitted the shared MIT text from their npm files.
+const micromarkLicense = fileURLToPath(new URL('./licenses/micromark-2.0.0.txt', import.meta.url))
+const micromarkPackages = new Set([
+  'micromark-factory-destination',
+  'micromark-factory-label',
+  'micromark-factory-title',
+  'micromark-factory-whitespace',
+  'micromark-util-chunked',
+  'micromark-util-classify-character',
+  'micromark-util-combine-extensions',
+  'micromark-util-decode-numeric-character-reference',
+  'micromark-util-html-tag-name',
+  'micromark-util-normalize-identifier',
+  'micromark-util-resolve-all',
+  'micromark-util-subtokenize',
+])
+
+const packageId = ({ name, version }) => name.replace(/[^a-z0-9-]/gi, '-') + '-' + version
+
+const findLicense = (folder) => {
+  const files = readdirSync(folder)
+  return (
+    files.find((file) => /^(?:LICENSE|COPYING)(?:\.(?:txt|md|markdown))?$/i.test(file)) ??
+    files.find(
+      (file) =>
+        /^README\.(?:md|markdown)$/i.test(file) &&
+        /^## License\s*[\s\S]*?Permission is hereby granted/m.test(
+          readFileSync(path.join(folder, file), 'utf8')
+        )
+    )
+  )
+}
 
 const packageManifest = (require, name) => {
   try {
@@ -43,22 +77,13 @@ export const browserLicensePatterns = () => {
   const visit = (require, name) => {
     const manifest = packageManifest(require, name)
     const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
-    const id = pkg.name.replace(/[^a-z0-9-]/gi, '-') + '-' + pkg.version
+    const id = packageId(pkg)
     if (seen.has(id)) {
       return
     }
     seen.add(id)
     const folder = path.dirname(manifest)
-    const files = readdirSync(folder)
-    const license =
-      files.find((file) => /^(?:LICENSE|COPYING)(?:\.(?:txt|md|markdown))?$/i.test(file)) ??
-      files.find(
-        (file) =>
-          /^README\.(?:md|markdown)$/i.test(file) &&
-          /^## License\s*[\s\S]*?Permission is hereby granted/m.test(
-            readFileSync(path.join(folder, file), 'utf8')
-          )
-      )
+    const license = findLicense(folder)
     if (!license) {
       throw new Error('Missing browser license for ' + pkg.name)
     }
@@ -78,4 +103,41 @@ export const browserLicensePatterns = () => {
     visit(require, name)
   }
   return patterns
+}
+
+// A package can enter the build through a dependency or a transpiler helper.
+// Read only the modules that contributed to emitted chunks.
+export const bundledBrowserLicenses = (chunks, root) => {
+  const folders = new Set()
+  const collect = (module) => {
+    const resource = module.nameForCondition?.replaceAll('\\', '/') ?? ''
+    const dependency = '/node_modules/'
+    const index = resource.lastIndexOf(dependency)
+    if (index >= 0) {
+      const end = index + dependency.length
+      const name = /^((?:@[^/]+\/)?[^/]+)\//.exec(resource.slice(end))?.[1]
+      if (name) folders.add(path.resolve(root, resource.slice(0, end) + name))
+    }
+    for (const child of module.modules ?? []) collect(child)
+    for (const child of module.children ?? []) collect(child)
+  }
+  for (const chunk of chunks) for (const module of chunk.modules ?? []) collect(module)
+
+  const assets = new Map()
+  for (const folder of folders) {
+    const manifest = path.join(folder, 'package.json')
+    if (!existsSync(manifest)) continue
+    const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+    if (!pkg.name || !pkg.version) continue
+    const prefix = 'static/third-party/' + packageId(pkg) + '/'
+    const license = findLicense(folder)
+    if (!license && pkg.version === '2.0.0' && micromarkPackages.has(pkg.name)) {
+      assets.set(prefix + 'LICENSE', readFileSync(micromarkLicense))
+    }
+    for (const file of [license, 'NOTICE', 'NOTICE.txt'].filter(Boolean)) {
+      const source = path.join(folder, file)
+      if (existsSync(source)) assets.set(prefix + file, readFileSync(source))
+    }
+  }
+  return assets
 }

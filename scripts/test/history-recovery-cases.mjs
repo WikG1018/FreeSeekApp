@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { unzipSync } from 'fflate'
+import { unzipSync, zipSync } from 'fflate'
 
 const changeHistory = (page, ops) =>
   page.evaluate((ops) => new Promise((resolve, reject) => {
@@ -23,7 +23,694 @@ const changeHistory = (page, ops) =>
     }
   }), ops)
 
+const vaultFixture = (context, checkpoint = false, withRecoveredChat = false) =>
+  context.addInitScript(({ checkpoint, withRecoveredChat }) => {
+    if (checkpoint) localStorage.setItem('freeseek:history-had-conversations', '1')
+    window.CapacitorCustomPlatform = { name: 'android' }
+    window.__vaultStatusReads = 0
+    window.__vaultSavedIds = new Set()
+    window.__vaultNoSpace = false
+    let recoveredChat
+    const status = () => {
+      const sessionCount = withRecoveredChat ? 1 : checkpoint ? 3 : window.__vaultSavedIds.size
+      return {
+        generation: sessionCount ? 4 : 0,
+        sessionCount,
+        originalCount: checkpoint && !withRecoveredChat ? 5 : 0,
+        missingOriginalCount: checkpoint ? 1 : 0,
+        bytes: sessionCount ? 1300 : 0,
+      }
+    }
+    window.Capacitor = {
+      PluginHeaders: [
+        {
+          name: 'HistoryVault',
+          methods: [
+            'status', 'listSessions', 'listOriginals', 'readSession',
+            'begin', 'putSession', 'append', 'finishEntry', 'commit', 'cancel',
+          ].map((name) => ({ name, rtype: 'promise' })),
+        },
+        { name: 'Diagnostics', methods: ['checkHistory', 'retainClientEvents'].map((name) => ({ name, rtype: 'promise' })) },
+      ],
+      nativePromise: async (plugin, method, args) => {
+        if (plugin === 'HistoryVault' && method === 'status') {
+          window.__vaultStatusReads++
+          return status()
+        }
+        if (plugin === 'HistoryVault' && method === 'begin') {
+          if (window.__vaultNoSpace) throw Object.assign(new Error('synthetic low space'), { code: 'NO_SPACE' })
+          return { id: 'fixture-batch' }
+        }
+        if (plugin === 'HistoryVault' && method === 'putSession') window.__vaultSavedIds.add(args.sessionId)
+        if (plugin === 'HistoryVault' && method === 'commit') return status()
+        if (plugin === 'HistoryVault' && ['listSessions', 'readSession'].includes(method)) {
+          if (!checkpoint) return { items: [] }
+          if (!withRecoveredChat) throw new Error('synthetic vault read failure')
+          if (!recoveredChat) {
+            const f = window.__audit.fixtures
+            const chat = f.session({
+              id: 'vault-ui-restored',
+              title: '从本机副本找回的会话',
+              messages: [f.user('user', '从本机副本找回的正文', {
+                files: [{
+                  id: 'vault-ui-missing-original', name: '样本.txt', size: 14,
+                  mimeType: 'text/plain', isImage: false,
+                }],
+              })],
+            })
+            const bytes = new TextEncoder().encode(JSON.stringify(chat))
+            const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+            const sha256 = Array.from(hash, (byte) => byte.toString(16).padStart(2, '0')).join('')
+            recoveredChat = { id: chat.id, bytes, sha256 }
+          }
+          const { id, bytes, sha256 } = recoveredChat
+          if (method === 'listSessions') {
+            return { items: [{ id, size: bytes.length, revision: 'fixture', sha256 }] }
+          }
+          const chunk = bytes.subarray(args.offset, args.offset + args.limit)
+          const nextOffset = args.offset + chunk.length
+          return { data: btoa(String.fromCharCode(...chunk)), nextOffset, eof: nextOffset === bytes.length }
+        }
+        if (plugin === 'HistoryVault' && method === 'listOriginals') return { items: [] }
+        if (plugin === 'Diagnostics' && method === 'checkHistory') return { present: checkpoint }
+        return {}
+      },
+    }
+  }, { checkpoint, withRecoveredChat })
+
 export const runHistoryRecoveryCases = async (run) => {
+  await run('on-device recovery status keeps unknown counts separate and gives each action once', async (page) => {
+    await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+    await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+    await page.getByRole('heading', { name: '本机恢复副本', exact: true }).waitFor()
+    await page.waitForFunction(() => window.__audit.historyVault.useHistoryVault.getState().phase !== 'checking')
+    const display = (state) => page.evaluate(
+      (state) => window.__audit.historyVault.useHistoryVault.setState(state), state
+    )
+    await display({
+      phase: 'idle', generation: 4, totalSessions: null, protectedSessions: 3,
+      protectedOriginals: 5, missingOriginals: 1,
+      protectedBytes: 16 * 1024 * 1024,
+    })
+    await page.getByText('副本已保存 3 个会话', { exact: true }).waitFor()
+    await page.getByText('已保护 5 份附件原件', { exact: true }).waitFor()
+    await page.getByText('副本还缺少 1 份附件原件。', { exact: true }).waitFor()
+    await page.getByText('恢复副本约 16 MB', { exact: true }).waitFor()
+    assert.equal(await page.getByText(/本机聊天存储有 0 个会话/).count(), 0)
+    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 0)
+
+    await display({ totalSessions: 8 })
+    await page.getByText('已保护 3/8 个会话', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: '从本机恢复副本找回', exact: true }).count(), 1)
+    await page.getByText('找回缺失的会话和附件原件，保留本机已有的正文。', { exact: true }).waitFor()
+    if (process.env.FREESEEK_VAULT_UI_PROOF) {
+      await page.getByRole('dialog').screenshot({
+        path: process.env.FREESEEK_VAULT_UI_PROOF + '/history-vault-data-' + page.viewportSize().width + '-zh.png',
+        animations: 'disabled',
+      })
+    }
+    await display({ phase: 'protecting', processed: 4, total: 8 })
+    await page.getByText('正在补全副本，已处理 4/8 个会话。', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 0)
+
+    await display({ phase: 'error', issue: 'space' })
+    await page.getByRole('alert').getByText('设备空间不足。释放空间后重试。', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '重试补全副本', exact: true }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: '重新检查副本', exact: true }).count(), 0)
+    await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+    await page.getByRole('heading', { name: 'On-device recovery copy', exact: true }).waitFor()
+    await page.getByText('3 of 8 chats protected', { exact: true }).waitFor()
+    await page.getByText('Device storage is low. Free some space and try again.', { exact: true }).waitFor()
+    await display({ totalSessions: null, issue: 'unreadable' })
+    const checks = await page.evaluate(() => window.__vaultStatusReads)
+    await page.getByRole('button', { name: 'Check the copy again', exact: true }).click()
+    await page.waitForFunction((checks) => window.__vaultStatusReads > checks, checks)
+  }, (context) => vaultFixture(context))
+
+  await run('on-device recovery protection can retry low storage without losing the original chats', async (page) => {
+    await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+    await page.evaluate(async () => {
+      const a = window.__audit
+      await a.seed([
+        a.fixtures.session({ id: 'vault-protect-a', title: '第一条', messages: [a.fixtures.user('u', '仍在本机')] }),
+        a.fixtures.session({ id: 'vault-protect-b', title: '第二条' }),
+      ])
+      a.settingsDialog.openSettings('data')
+    })
+    const protect = page.getByRole('button', { name: '检查并补全副本', exact: true })
+    await protect.waitFor()
+    await page.evaluate(() => { window.__vaultNoSpace = true })
+    await protect.click()
+    await page.getByText('设备空间不足。释放空间后重试。', { exact: true }).waitFor()
+    assert.equal(
+      await page.evaluate(async () => (await window.__audit.db.loadSession('vault-protect-a')).messages[0].content),
+      '仍在本机'
+    )
+    await page.evaluate(() => { window.__vaultNoSpace = false })
+    await page.getByRole('button', { name: '重试补全副本', exact: true }).click()
+    await protect.waitFor()
+    await page.getByText('已保护 2/2 个会话', { exact: true }).waitFor()
+    assert.equal(await page.getByText('设备空间不足。释放空间后重试。', { exact: true }).count(), 0)
+  }, (context) => vaultFixture(context))
+
+  await run('startup recovery offers the Android copy alongside retry and ZIP', async (page) => {
+    await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+    const main = page.getByRole('main')
+    const restore = main.getByRole('button', { name: '从本机恢复副本找回', exact: true })
+    await restore.waitFor()
+    await main.getByText('本机恢复副本中有 3 个会话可找回。', { exact: true }).waitFor()
+    const retry = main.getByRole('button', { name: '重试', exact: true })
+    const zip = main.getByRole('button', { name: '打开备份设置', exact: true })
+    assert.equal(await retry.isEnabled(), true)
+    assert.equal(await zip.isEnabled(), true)
+    assert.equal(await page.getByRole('button', { name: '重试', exact: true }).count(), 1)
+    if (process.env.FREESEEK_VAULT_UI_PROOF) {
+      await page.screenshot({
+        path: process.env.FREESEEK_VAULT_UI_PROOF + '/history-vault-restore-' + page.viewportSize().width + '-zh.png',
+        animations: 'disabled',
+      })
+    }
+    await page.evaluate(() => window.__audit.historyVault.useHistoryVault.setState({
+      phase: 'restoring', processed: 1, total: 3,
+    }))
+    await main.getByText('正在找回，已处理 1/3 项。', { exact: true }).waitFor()
+    assert.equal(await restore.isEnabled(), false)
+    assert.equal(await retry.isEnabled(), false)
+    assert.equal(await zip.isEnabled(), false)
+    await page.evaluate(() => window.__audit.historyVault.useHistoryVault.setState({ phase: 'idle' }))
+    await restore.click()
+    await main.getByRole('alert').getByText(/从本机副本找回失败/).waitFor()
+    assert.equal(await restore.isEnabled(), true)
+    assert.equal(await retry.isEnabled(), true)
+    assert.equal(await zip.isEnabled(), true)
+    assert.equal(await page.getByRole('dialog', { name: '已从本机副本恢复' }).count(), 0)
+    await zip.click()
+    await page.getByRole('button', { name: /导入历史对话/ }).waitFor()
+    assert.equal(await page.getByRole('dialog').getByRole('button', {
+      name: '从本机恢复副本找回', exact: true,
+    }).count(), 0)
+  }, (context) => vaultFixture(context, true), false)
+
+  await run('on-device recovery reports a partial restore after the recovery page closes', async (page) => {
+    await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+    await page.getByRole('main').getByRole('button', { name: '从本机恢复副本找回', exact: true }).click()
+    const outcome = page.getByRole('dialog', { name: '已恢复本机副本中的可用内容', exact: true })
+    await outcome.getByText('找回 1 个会话。', { exact: true }).waitFor()
+    await outcome.getByText('副本缺少 1 份附件原件。', { exact: true }).waitFor()
+    assert.equal(await outcome.getByText(/^找回 d+ 份附件原件。$/).count(), 0)
+    await outcome.getByRole('button', { name: '关闭', exact: true }).click()
+    const session = await page.evaluate(() => window.__audit.db.loadSession('vault-ui-restored'))
+    assert.equal(session.messages[0].content, '从本机副本找回的正文')
+    assert.equal(session.messages[0].files[0].name, '样本.txt')
+    await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+    await page.getByRole('button', { name: '删除所有对话', exact: true }).click()
+    const confirm = page.getByRole('dialog', { name: /所有对话都将被清空/ })
+    await confirm.getByText(/聊天记录及本机恢复副本将一并清空/).waitFor()
+    await confirm.getByRole('button', { name: '取消', exact: true }).click()
+    await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+    await page.getByRole('heading', { name: '数据管理', exact: true }).waitFor({ state: 'hidden' })
+    const mobile = await page.evaluate(() => !window.matchMedia('(min-width: 768px)').matches)
+    if (mobile) await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+    const row = page.locator('[data-session-id="vault-ui-restored"]:visible')
+    await row.hover()
+    await row.getByRole('button', { name: '更多', exact: true }).click()
+    await page.getByRole('menuitem', { name: '删除', exact: true }).click()
+    const deleteChat = page.getByRole('dialog', { name: '永久删除对话', exact: true })
+    await deleteChat.getByText(/此对话及其本机恢复副本将一并删除/).waitFor()
+    await deleteChat.getByRole('button', { name: '取消', exact: true }).click()
+    assert.equal(await page.evaluate(() => window.__audit.store.useChatStore.getState().sessions.length), 1)
+  }, (context) => vaultFixture(context, true, true), false)
+
+  await run('data management on the web retains ZIP without the on-device recovery controls', async (page) => {
+    await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+    await page.getByRole('button', { name: /导入历史对话/ }).waitFor()
+    assert.equal(await page.getByRole('heading', { name: '本机恢复副本' }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: '从本机恢复副本找回' }).count(), 0)
+  })
+
+  await run(
+    'Android large history saves disk originals without creating a WebView archive and retries a failed destination',
+    async (page) => {
+      const originalBytes = 4 * 512 * 1024 * 1024
+      const legacyBytes = 600 * 1024
+      await page.evaluate(async ({ originalBytes, legacyBytes }) => {
+        const a = window.__audit
+        const files = Array.from({ length: 4 }, (_, index) => ({
+          id: 'archive-large-' + index, name: '原件' + index + '.bin', serverId: null,
+          size: originalBytes / 4, mimeType: 'application/octet-stream', isImage: false,
+        }))
+        const legacy = {
+          id: 'archive-legacy', name: '旧版原件.bin', serverId: null,
+          size: legacyBytes, mimeType: 'application/octet-stream', isImage: false,
+        }
+        const chat = a.fixtures.session({
+          id: 'large-history-native-export', title: '两吉字节验收', pinned: true,
+          messages: [a.fixtures.user('archive-q', '检查原件。', { files: [...files, legacy] })],
+        })
+        await a.seed([chat], [{ id: legacy.id, blob: new Blob([new Uint8Array(legacyBytes)]) }])
+        a.settingsDialog.openSettings('data')
+      }, { originalBytes, legacyBytes })
+      await changeHistory(page, Array.from({ length: 4 }, (_, index) => [
+        'files', 'put', {
+          id: 'archive-large-' + index,
+          disk: { key: 'original-test-key-' + index, size: originalBytes / 4, type: 'application/octet-stream' },
+        },
+      ]))
+      const exportButton = page.getByRole('button', { name: '导出所有历史对话', exact: true })
+      const success = page.getByRole('status').filter({ hasText: '备份已保存' })
+      await exportButton.click()
+      await page.waitForFunction(() => window.__historySave.tries === 1)
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(
+        (button) => button.textContent === '导出所有历史对话' && !button.disabled
+      ))
+      assert.equal(await page.evaluate(() => window.__historySave.writes.length), 0)
+      assert.equal(await success.count(), 0)
+
+      await exportButton.click()
+      await page.getByText(/无法写完备份/).waitFor()
+      let result = await page.evaluate(() => window.__historySave)
+      assert.deepEqual(result.cancelled, ['broken'])
+      assert.deepEqual(result.finished, [])
+      assert.equal(await exportButton.isEnabled(), true)
+      assert.equal(await success.count(), 0)
+      const logs = await page.evaluate(async () =>
+        (await window.__audit.diagnostics.readDiagnosticLogs()).events.filter(({ scope }) => scope === 'backup')
+      )
+      assert.ok(logs.some(({ event }) => event === 'export.cancelled'))
+      const failure = logs.find(({ event }) => event === 'file.save.failed')
+      assert.equal(failure?.details.stage, 'write')
+      assert.equal(failure?.details.faultCode, 'HISTORY_ARCHIVE_WRITE')
+      assert.doesNotMatch(JSON.stringify(logs), /private-fixture-destination/)
+
+      await exportButton.click()
+      await success.waitFor()
+      result = await page.evaluate(() => window.__historySave)
+      assert.deepEqual(result.finished, ['retry'])
+      const entries = result.entries.filter(({ id }) => id === 'retry')
+      const blobs = entries.filter(({ key }) => !key)
+      const disk = entries.filter(({ key }) => key)
+      assert.deepEqual(entries.map(({ name }) => name), [
+        'manifest.json', 'freeseek/sessions/large-history-native-export.json',
+        'freeseek/files/archive-large-0.bin', 'freeseek/files/archive-large-1.bin',
+        'freeseek/files/archive-large-2.bin', 'freeseek/files/archive-large-3.bin',
+        'freeseek/files/archive-legacy.bin',
+      ])
+      assert.deepEqual(disk.map(({ size }) => size), Array(4).fill(originalBytes / 4))
+      const writes = result.writes.filter(({ id }) => id === 'retry')
+      assert.ok(writes.every(({ size }) => size <= 256 * 1024))
+      assert.equal(writes.reduce((bytes, chunk) => bytes + chunk.size, 0), blobs.reduce((bytes, entry) => bytes + entry.size, 0))
+      assert.equal(result.creates.at(-1).archiveEntries, 7)
+      assert.equal(result.creates.at(-1).size, originalBytes + writes.reduce((bytes, chunk) => bytes + chunk.size, 0))
+      assert.equal(result.unexpectedFetches, 0, 'disk files never travel through response.blob()')
+      assert.equal(await page.evaluate(async () =>
+        (await window.__audit.db.loadSession('large-history-native-export')).messages[0].files.length
+      ), 5)
+    },
+    (context) => context.addInitScript(() => {
+      const methods = (names) => names.map((name) => ({ name, rtype: 'promise' }))
+      const proof = {
+        tries: 0, creates: [], entries: [], writes: [], cancelled: [], finished: [], unexpectedFetches: 0,
+      }
+      window.__historySave = proof
+      const fetchOriginal = window.fetch
+      window.fetch = (...args) => {
+        if (String(args[0]).includes('native-history-backing.bin')) {
+          proof.unexpectedFetches++
+          return Promise.reject(new DOMException('The DOM File could not be read', 'NotReadableError'))
+        }
+        return fetchOriginal(...args)
+      }
+      window.CapacitorCustomPlatform = { name: 'android' }
+      window.Capacitor = {
+        PluginHeaders: [
+          { name: 'HistoryFiles', methods: methods(['locate']) },
+          { name: 'Backup', methods: methods(['create', 'beginArchiveEntry', 'write', 'finish', 'cancel']) },
+        ],
+        async nativePromise(plugin, method, options) {
+          if (plugin === 'HistoryFiles' && method === 'locate') {
+            return { path: '/data/user/0/fixture/native-history-backing.bin' }
+          }
+          if (plugin !== 'Backup') return {}
+          if (method === 'create') {
+            proof.creates.push(options)
+            switch (++proof.tries) {
+              case 1: return { cancelled: true }
+              case 2: return { id: 'broken' }
+              default: return { id: 'retry' }
+            }
+          }
+          if (method === 'beginArchiveEntry') {
+            if (options.id === 'broken' && options.key) {
+              throw Object.assign(new Error('private-fixture-destination'), { code: 'HISTORY_ARCHIVE_WRITE' })
+            }
+            proof.entries.push(options)
+          } else if (method === 'write') {
+            proof.writes.push({ id: options.id, size: atob(options.data).length })
+          } else if (method === 'finish') {
+            proof.finished.push(options.id)
+          } else if (method === 'cancel') {
+            proof.cancelled.push(options.id)
+          }
+          return {}
+        },
+      }
+    })
+  )
+
+  await run('the conversation menu saves the latest committed branch, originals and its project only', async (page) => {
+    const ids = { selected: 'menu-backup-selected', unrelated: 'menu-backup-unrelated' }
+    const projects = await page.evaluate(async (ids) => {
+      const a = window.__audit
+      const project = await a.workspaces.createWorkspace('所选工程', [{ path: 'src/main.txt', text: 'selected project' }])
+      const otherProject = await a.workspaces.createWorkspace('无关工程', [{ path: 'other.txt', text: 'unrelated project' }])
+      const file = (id) => ({
+        id, name: id + '.txt', serverId: null, mimeType: 'text/plain', size: 8, isImage: false,
+      })
+      const files = [file('selected-original'), file('missing-original')]
+      const artifact = file('selected-artifact')
+      const unrelated = file('unrelated-original')
+      const selected = a.fixtures.session({
+        id: ids.selected, title: '较旧的标题', mode: 'agent', workspaceId: project.id,
+        rootMessageId: 'q',
+        voiceRoles: [{
+          id: 'voice-a', name: '合成角色', description: '沉稳', nature: '', aliases: [],
+          importance: 'lead', source: 'user', createdAt: 1, voiceSample: { id: 'selected-voice', size: 48 },
+        }],
+        messages: [
+          a.fixtures.user('q', '所选问题', { files, parentId: null, selectedChildId: 'a1' }),
+          a.fixtures.assistant('a1', '旧窗口里的答复', { parentId: 'q' }),
+          a.fixtures.assistant('a2', '另一条历史分支', {
+            parentId: 'q', task: { plan: [], steps: [], artifacts: [artifact], workspaceId: project.id },
+          }),
+        ],
+      })
+      const other = a.fixtures.session({
+        id: ids.unrelated, title: '无关对话', mode: 'agent', workspaceId: otherProject.id,
+        messages: [a.fixtures.user('other-q', '无关内容保留', { files: [unrelated] })],
+      })
+      const persona = a.personas.addPersona('全局合成人设', '只用于检查全局配置')
+      a.personas.setDefaultPersona(persona)
+      a.settings.setApiKey('fixture-key-not-for-archive')
+      await a.seed([selected, other], [
+        { id: files[0].id, blob: new Blob(['original'], { type: 'text/plain' }) },
+        { id: artifact.id, blob: new Blob(['artifact'], { type: 'text/plain' }) },
+        { id: 'selected-voice', blob: new Blob([new Uint8Array(48).fill(17)], { type: 'audio/wav' }) },
+        { id: unrelated.id, blob: new Blob(['separate'], { type: 'text/plain' }) },
+      ])
+      return { selected: project.id, unrelated: otherProject.id }
+    }, ids)
+    const stale = await page.context().newPage()
+    try {
+      await stale.goto(page.url())
+      await stale.waitForFunction((id) => window.__audit?.store.useChatStore.getState().sessions.some((s) => s.id === id), ids.selected)
+      await stale.evaluate((id) => window.__audit.store.selectSession(id), ids.selected)
+      await stale.waitForFunction((id) => !!window.__audit?.store.useChatStore.getState().sessionCache[id], ids.selected)
+      const staleTitle = () => stale.evaluate((id) => window.__audit.store.useChatStore.getState().sessionCache[id].title, ids.selected)
+      assert.equal(await staleTitle(), '较旧的标题')
+      await page.evaluate(async (id) => {
+        const a = window.__audit
+        const local = await a.db.loadSession(id)
+        await a.db.saveSession({
+          ...local, title: '已提交的新标题', updatedAt: Date.now() + 60_000,
+          messages: local.messages.map((m) => m.id === 'a1'
+            ? { ...m, blocks: [{ type: 'text', text: '已提交的新版答复' }] }
+            : m),
+        })
+      }, ids.selected)
+      assert.equal(await staleTitle(), '较旧的标题', 'the exporting window still has the stale record in its cache')
+      const opener = stale.getByRole('button', { name: '打开边栏', exact: true })
+      if (await opener.isVisible()) await opener.click()
+      await stale.locator('[data-session-id="' + ids.selected + '"]:visible').getByRole('button', { name: '更多', exact: true }).click()
+      if (process.env.FREESEEK_BACKUP_PREVIEWS) {
+        await stale.getByRole('menuitem', { name: '备份此对话', exact: true }).waitFor()
+        await stale.screenshot({ path: process.env.FREESEEK_BACKUP_PREVIEWS + '/single-chat-menu-zh.png' })
+      }
+      const [file] = await Promise.all([
+        stale.waitForEvent('download'),
+        stale.getByRole('menuitem', { name: '备份此对话', exact: true }).click(),
+      ])
+      await stale.getByRole('status').filter({ hasText: '已开始下载备份' }).filter({ hasText: '有 1 个附件原件未能读取' }).waitFor()
+      if (process.env.FREESEEK_BACKUP_PREVIEWS) {
+        await stale.screenshot({ path: process.env.FREESEEK_BACKUP_PREVIEWS + '/single-chat-partial-zh.png' })
+      }
+      assert.match(file.suggestedFilename(), /^freeseek-conversation-partial-backup-/)
+      const bytes = await readFile(await file.path())
+      const entries = unzipSync(bytes)
+      const json = (path) => JSON.parse(Buffer.from(entries[path]).toString('utf8'))
+      const manifest = json('manifest.json')
+      assert.equal(manifest.freeseek_backup_version, 9)
+      assert.deepEqual(manifest.sessions, [ids.selected])
+      assert.deepEqual(manifest.workspaces, [projects.selected])
+      assert.deepEqual(manifest.partial, { kind: 'unreadable', skippedSessions: 0, missingOriginals: 1 })
+      assert.deepEqual(manifest.files.map(({ id }) => id), ['selected-original', 'selected-artifact', 'selected-voice'])
+      assert.deepEqual(Object.keys(entries).sort(), [
+        'manifest.json', 'freeseek/sessions/' + ids.selected + '.json',
+        'freeseek/workspaces/' + projects.selected + '.json',
+        'freeseek/files/selected-original.bin', 'freeseek/files/selected-artifact.bin', 'freeseek/files/selected-voice.bin',
+      ].sort())
+      for (const key of ['personas', 'defaultPersonaId', 'pricing', 'modelPrices']) assert.equal(Object.hasOwn(manifest, key), false)
+      assert.equal(Buffer.from(entries['freeseek/files/selected-original.bin']).toString(), 'original')
+      assert.equal(Buffer.from(entries['freeseek/files/selected-artifact.bin']).toString(), 'artifact')
+      assert.deepEqual(Buffer.from(entries['freeseek/files/selected-voice.bin']), Buffer.alloc(48, 17))
+      const saved = json('freeseek/sessions/' + ids.selected + '.json')
+      assert.equal(saved.title, '已提交的新标题')
+      assert.equal(saved.messages.find(({ id }) => id === 'a1').blocks[0].text, '已提交的新版答复')
+      assert.equal(saved.messages.find(({ id }) => id === 'a2').blocks[0].text, '另一条历史分支')
+      assert.equal(saved.messages.find(({ id }) => id === 'q').selectedChildId, 'a1')
+      assert.equal(await staleTitle(), '较旧的标题')
+
+      const before = await page.evaluate(async (ids) => {
+        const a = window.__audit
+        const local = await a.db.loadSession(ids.selected)
+        await a.db.saveSession({ ...local, title: '导入时的本机版本', updatedAt: local.updatedAt + 500 })
+        return {
+          unrelated: await a.db.loadSession(ids.unrelated),
+          persona: a.personas.usePersonas.getState().defaultId,
+        }
+      }, ids)
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
+      const importFile = (buffer = bytes) => page.locator('input[type="file"][accept*="application/zip"]').setInputFiles({
+        name: file.suggestedFilename(), mimeType: 'application/zip', buffer,
+      })
+      const review = page.getByRole('dialog', { name: '选择保留哪一份', exact: true })
+      const done = page.getByRole('dialog', { name: '导入完成', exact: true })
+      for (const missingId of [undefined, 'selected-artifact', 'selected-voice']) {
+        const damaged = {
+          ...entries,
+          'manifest.json': Buffer.from(JSON.stringify({
+            ...manifest, files: manifest.files.filter(({ id }) => id !== missingId),
+            partial: missingId ? manifest.partial : undefined,
+          })),
+        }
+        if (missingId) delete damaged['freeseek/files/' + missingId + '.bin']
+        await importFile(Buffer.from(zipSync(damaged)))
+        await page.getByRole('button', { name: '开始导入', exact: true }).click()
+        const failure = page.getByRole('dialog', { name: '导入失败', exact: true })
+        await failure.getByRole('alert').getByText('文件内容不完整，无法导入', { exact: true }).waitFor()
+        await failure.getByRole('button', { name: '关闭', exact: true }).last().click()
+        assert.equal(await review.count(), 0)
+        const preserved = await page.evaluate(async ({ id, missingId }) => {
+          const a = window.__audit
+          return { title: (await a.db.loadSession(id)).title, original: Boolean(await a.db.loadFile(missingId)) }
+        }, { id: ids.selected, missingId: missingId ?? 'selected-original' })
+        assert.deepEqual(preserved, { title: '导入时的本机版本', original: true })
+      }
+      for (const replace of [false, true]) {
+        await importFile()
+        await page.getByRole('button', { name: '开始导入', exact: true }).click()
+        await review.getByText('此备份缺少 1 份附件原件。', { exact: true }).waitFor()
+        if (!replace && process.env.FREESEEK_BACKUP_PREVIEWS) {
+          await page.screenshot({ path: process.env.FREESEEK_BACKUP_PREVIEWS + '/single-chat-import-zh.png' })
+        }
+        assert.equal(await review.getByRole('radio', { name: /保留本机/ }).isChecked(), true)
+        if (replace) await review.getByRole('radio', { name: /使用备份/ }).check()
+        await review.getByRole('button', { name: '合并导入', exact: true }).click()
+        await done.getByText('此备份缺少 1 份附件原件。', { exact: true }).waitFor()
+        await done.getByRole('button', { name: /^(稍后|完成)$/ }).click()
+        const result = await page.evaluate(async ({ ids, projects }) => {
+          const a = window.__audit
+          const selected = await a.db.loadSession(ids.selected)
+          const original = selected.messages.find(({ id }) => id === 'q').files[0]
+          const artifact = selected.messages.find(({ id }) => id === 'a2').task.artifacts[0]
+          return {
+            selected,
+            original: await (await a.db.loadFile(original.id)).text(),
+            artifact: await (await a.db.loadFile(artifact.id)).text(),
+            voice: Array.from(new Uint8Array(await (await a.db.loadFile(selected.voiceRoles[0].voiceSample.id)).arrayBuffer())),
+            linkedProject: (await a.workspaces.readWorkspace(selected.workspaceId)).files,
+            unrelatedProject: (await a.workspaces.readWorkspace(projects.unrelated)).files,
+            unrelated: await a.db.loadSession(ids.unrelated),
+            persona: a.personas.usePersonas.getState().defaultId,
+            key: a.settings.useSettings.getState().apiKey === 'fixture-key-not-for-archive',
+          }
+        }, { ids, projects })
+        assert.equal(result.selected.title, replace ? '已提交的新标题' : '导入时的本机版本')
+        assert.equal(result.original, 'original')
+        assert.equal(result.artifact, 'artifact')
+        assert.deepEqual(result.voice, Array(48).fill(17))
+        assert.equal(result.linkedProject[0].text, 'selected project')
+        assert.equal(result.unrelatedProject[0].text, 'unrelated project')
+        assert.deepEqual(result.unrelated, before.unrelated)
+        assert.equal(result.persona, before.persona)
+        assert.equal(result.key, true)
+      }
+      const restoredToEmpty = await page.evaluate(async ({ encoded, id }) => {
+        const a = window.__audit
+        await a.backup.clearHistory()
+        const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))
+        const result = await a.backup.importHistory(new File([bytes], 'one-chat.zip', { type: 'application/zip' }))
+        return {
+          added: result.added,
+          ids: (await a.db.loadAllSessions()).map((session) => session.id),
+          persona: a.personas.usePersonas.getState().defaultId,
+          title: (await a.db.loadSession(id)).title,
+        }
+      }, { encoded: bytes.toString('base64'), id: ids.selected })
+      assert.deepEqual(restoredToEmpty, { added: 1, ids: [ids.selected], persona: before.persona, title: '已提交的新标题' })
+    } finally {
+      await stale.close()
+    }
+  })
+
+  await run('the English conversation menu reports a native save only after a picker retry succeeds', async (page) => {
+    await page.evaluate(async () => {
+      const a = window.__audit
+      a.settings.setLocale('en-US')
+      await a.seed([
+        a.fixtures.session({ id: 'one-english-chat', title: 'One chat', messages: [a.fixtures.user('q', 'Save only this chat')] }),
+      ])
+    })
+    const opener = page.getByRole('button', { name: 'Open sidebar', exact: true })
+    if (await opener.isVisible()) await opener.click()
+    const more = page.locator('[data-session-id="one-english-chat"]:visible').getByRole('button', { name: 'More', exact: true })
+    const action = page.getByRole('menuitem', { name: 'Back up this chat', exact: true })
+    const success = page.getByRole('status').filter({ hasText: 'Backup saved' })
+    await more.click()
+    await action.click()
+    await page.waitForFunction(() => window.__singleNativeSave.creates === 1)
+    await page.getByText('Preparing backup…', { exact: true }).waitFor({ state: 'hidden' })
+    assert.equal(await success.count(), 0)
+    await more.click()
+    await action.click()
+    await success.waitFor()
+    if (process.env.FREESEEK_BACKUP_PREVIEWS) {
+      await page.screenshot({ path: process.env.FREESEEK_BACKUP_PREVIEWS + '/single-chat-native-en.png' })
+    }
+    const proof = await page.evaluate(() => window.__singleNativeSave)
+    assert.equal(proof.creates, 2)
+    assert.equal(proof.finish, 1)
+    assert.deepEqual(proof.entries, ['manifest.json', 'freeseek/sessions/one-english-chat.json'])
+    assert.equal(await page.getByText('Backup download started', { exact: true }).count(), 0)
+  }, (context) => context.addInitScript(() => {
+    const proof = window.__singleNativeSave = { creates: 0, finish: 0, entries: [] }
+    window.CapacitorCustomPlatform = { name: 'android' }
+    window.Capacitor = {
+      PluginHeaders: [{
+        name: 'Backup', methods: ['create', 'beginArchiveEntry', 'write', 'finish', 'cancel'].map((name) => ({ name, rtype: 'promise' })),
+      }],
+      async nativePromise(plugin, method, options) {
+        if (plugin !== 'Backup') return {}
+        if (method === 'create') return ++proof.creates === 1 ? { cancelled: true } : { id: 'replay-save' }
+        if (method === 'beginArchiveEntry') proof.entries.push(options.name)
+        if (method === 'finish') proof.finish++
+        return {}
+      },
+    }
+  }))
+
+
+  await run('a history backup saves an in-progress local reply without stopping the live stream', async (page) => {
+    const id = 'backup-live-stream'
+    await page.evaluate(async (id) => {
+      const a = window.__audit
+      a.settings.setApiKey('fixture-stream-during-backup')
+      a.settings.setSearch(false)
+      await a.seed([a.fixtures.session({ id, title: '流式备份', rootMessageId: null })])
+      window.fetch = async () => {
+        const encoder = new TextEncoder()
+        const usage = { input_tokens: 8, output_tokens: 4 }
+        return new Response(new ReadableStream({
+          start(controller) {
+            const emit = (event) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'))
+            emit({ type: 'message_start', message: { usage } })
+            emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+            emit({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '正在生成的正文。' } })
+            window.finishBackupProof = () => {
+              emit({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '回复正常完成。' } })
+              emit({ type: 'content_block_stop', index: 0 })
+              emit({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage })
+              emit({ type: 'message_stop' })
+              controller.close()
+            }
+          },
+        }), { headers: { 'content-type': 'text/event-stream' } })
+      }
+      a.drafts.setDraftText(id, '请测试正在生成时备份')
+      a.store.sendMessage(id)
+    }, id)
+    await page.locator('.ds-assistant-message-main-content').getByText('正在生成的正文。', { exact: true }).waitFor()
+    const result = await page.evaluate(async (id) => {
+      const a = window.__audit
+      const shownInDatabase = (await a.db.loadSession(id)).messages.at(-1).blocks
+      const { blob } = await a.backup.exportHistory()
+      const stillStreaming = Boolean(a.store.useChatStore.getState().streaming[id])
+      window.finishBackupProof()
+      await a.waitIdle()
+      const final = (await a.db.loadSession(id)).messages.at(-1)
+      return { bytes: Array.from(new Uint8Array(await blob.arrayBuffer())), shownInDatabase, stillStreaming, final }
+    }, id)
+    const entries = unzipSync(Buffer.from(result.bytes))
+    const saved = JSON.parse(Buffer.from(entries['freeseek/sessions/' + id + '.json']).toString('utf8'))
+    assert.doesNotMatch(JSON.stringify(result.shownInDatabase), /正在生成的正文。/)
+    assert.equal(saved.messages.at(-1).status, 'stopped')
+    assert.equal(saved.messages.at(-1).blocks.at(-1).text, '正在生成的正文。')
+    assert.equal(result.stillStreaming, true)
+    assert.equal(result.final.status, 'done')
+    assert.equal(result.final.blocks[0].text, '正在生成的正文。回复正常完成。')
+  })
+
+
+  await run('a stale second window cannot erase a saved turn or resurrect a deleted conversation', async (page) => {
+    const id = 'concurrent-history'
+    await page.evaluate(async (id) => {
+      const a = window.__audit
+      const file = { id: 'window-only-file', serverId: 'file-api-already-ready', name: 'test.txt', size: 1, isImage: false, mimeType: 'text/plain' }
+      await a.seed([a.fixtures.session({id, title: '两个窗口', messages: [
+        a.fixtures.user('shared-first', '旧问题', { files: [file] }),
+        a.fixtures.assistant('shared-answer', '旧回复'),
+      ]})], [{ id: file.id, blob: new Blob(['X']) }])
+    }, id)
+    const second = await page.context().newPage()
+    await second.goto(page.url())
+    await second.waitForFunction((id) => window.__audit?.store.useChatStore.getState().sessions.some(s => s.id === id), id)
+    await second.evaluate((id) => window.__audit.store.selectSession(id), id)
+    await second.waitForFunction((id) => !!window.__audit.store.useChatStore.getState().sessionCache[id], id)
+    await page.evaluate(async (id) => {
+      const a = window.__audit
+      a.settings.setApiKey('synthetic-concurrent-history')
+      a.settings.setSearch(false)
+      window.fetch = async () => a.response('先写入的完整答复。')
+      a.drafts.setDraftText(id, '这个窗口新增一轮')
+      a.store.sendMessage(id)
+      await a.waitIdle()
+    }, id)
+    assert.equal(await page.evaluate(async (id) => (await window.__audit.db.loadSession(id)).messages.length, id), 4)
+    await second.evaluate(async (id) => window.__audit.store.setSessionPinned(id, true), id)
+    const saved = await page.evaluate(async (id) => (await window.__audit.db.loadSession(id)).messages, id)
+    assert.equal(saved.length, 4, 'pinning a stale copy must preserve the latest saved reply')
+    await page.evaluate(async (id) => window.__audit.store.removeSession(id), id)
+    await second.evaluate(async (id) => window.__audit.store.setSessionPinned(id, false), id)
+    assert.equal(await page.evaluate(async (id) => !!(await window.__audit.db.loadSession(id)), id), false)
+    await second.getByRole('button', { name: '另存为新对话' }).click()
+    await second.getByText(/本机缺少 1 个原件/).waitFor()
+    await second.waitForFunction((id) => {
+      const state = window.__audit.store.useChatStore.getState()
+      return state.activeId && state.activeId !== id && Object.keys(state.sessionSaveErrors).length === 0
+    }, id)
+    const copies = await page.evaluate(async () => (await window.__audit.db.loadAllSessions()).map(x => x.title))
+    assert.deepEqual(copies, ['两个窗口（本窗口副本）'])
+  })
   await run(
     'history visibility honors the legacy Android presence marker without a count',
     async (page) => {
@@ -158,6 +845,7 @@ export const runHistoryRecoveryCases = async (run) => {
     'history visibility restores from the startup recovery screen and watches the restored list',
     async (page) => {
       await page.setViewportSize({ width: 1366, height: 860 })
+      await page.getByRole('main').getByText(/本次读取本机存储时未找到任何会话/).waitFor()
       const encoded = await page.evaluate(async () => {
         const a = window.__audit
         const session = a.fixtures.session({
@@ -182,7 +870,7 @@ export const runHistoryRecoveryCases = async (run) => {
       ])
       await page.evaluate(() => window.dispatchEvent(new Event('freeseek:history-terminated')))
       const sidebar = page.getByTestId('sider-list')
-      await sidebar.getByText(/暂时读取不到之前的聊天记录/).waitFor({ timeout: 3000 })
+      await sidebar.getByText(/本次读取本机存储时未找到任何会话/).waitFor({ timeout: 3000 })
       await sidebar.getByText('从恢复入口导入', { exact: true }).waitFor()
     },
     (context) => context.addInitScript(() => {
@@ -208,7 +896,7 @@ export const runHistoryRecoveryCases = async (run) => {
       ])
       await page.evaluate(() => window.dispatchEvent(new Event('freeseek:history-terminated')))
       const sidebar = page.getByTestId('sider-list')
-      await sidebar.getByText(/暂时读取不到之前的聊天记录/).waitFor()
+      await sidebar.getByText(/本次读取本机存储时未找到任何会话/).waitFor()
       await sidebar.getByText('最后读到的列表', { exact: true }).waitFor()
       assert.equal(await sidebar.getByText('还没有对话', { exact: true }).count(), 0)
       await page.evaluate(async () => {
@@ -219,7 +907,7 @@ export const runHistoryRecoveryCases = async (run) => {
       })
       await sidebar.getByRole('button', { name: '重试', exact: true }).click()
       await sidebar.getByText('再次可读的列表', { exact: true }).waitFor()
-      assert.equal(await sidebar.getByText(/暂时读取不到之前的聊天记录/).count(), 0)
+      assert.equal(await sidebar.getByText(/本次读取本机存储时未找到任何会话/).count(), 0)
     }
   )
 
@@ -457,6 +1145,8 @@ export const runHistoryRecoveryCases = async (run) => {
       })
       assert.equal(state.alternateSessionCount, 1)
       assert.equal(state.incident.alternateCount, 1)
+      assert.equal(state.incident.historyReason, 'selection-uncertain')
+      await page.getByRole('main').getByText(/暂时无法确认哪一份是已保存的聊天记录/).waitFor()
       assert.equal(await page.getByText('还没有对话', { exact: true }).count(), 0)
     }
   )
@@ -560,11 +1250,21 @@ export const runHistoryRecoveryCases = async (run) => {
   await run(
     'history recovery makes unexpected empty storage visible and honors an explicit clear',
     async (page) => {
-      await page
-        .getByText(/暂时读取不到之前的聊天记录/)
-        .first()
-        .waitFor()
+      const main = page.getByRole('main')
+      await main.getByText(/本次读取本机存储时未找到任何会话/).waitFor()
+      const incident = await page.evaluate(async () => {
+        const { events } = await window.__audit.diagnostics.readDiagnosticLogs()
+        return events.find(({ event }) => event === 'history.unexpected-empty')?.details
+      })
+      assert.equal(incident.historyReason, 'empty-after-known-history')
+      assert.equal(incident.activeCount, 0)
+      assert.equal(incident.alternateCount, 0)
+      assert.equal(incident.indexCount, 0)
       await page.getByRole('button', { name: '打开备份设置', exact: true }).waitFor()
+      await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+      await main.getByText(/No saved chats were found in local storage this time/).waitFor()
+      await main.getByRole('button', { name: 'Open backup settings', exact: true }).waitFor()
+      await page.evaluate(() => window.__audit.settings.setLocale('zh-CN'))
       await page.evaluate(async () => {
         const a = window.__audit
         await a.backup.exportHistory().then(
@@ -585,7 +1285,7 @@ export const runHistoryRecoveryCases = async (run) => {
       })
       await page.reload()
       await page.getByTestId('chat-composer').waitFor()
-      assert.equal(await page.getByText(/暂时读取不到之前的聊天记录/).count(), 0)
+      assert.equal(await page.getByText(/本次读取本机存储时未找到任何会话/).count(), 0)
     },
     (context) =>
       context.addInitScript(() => {
@@ -692,6 +1392,8 @@ export const runHistoryRecoveryCases = async (run) => {
         page.getByRole('button', { name: '导出所有历史对话', exact: true }).click(),
       ])
       const name = saved.suggestedFilename()
+      await page.getByRole('status').filter({ hasText: '已开始下载备份' }).waitFor()
+      assert.equal(await page.getByText('备份已保存', { exact: true }).count(), 0)
       assert.match(name, /^freeseek-partial-backup-/)
       const bytes = await readFile(await saved.path())
       const entries = unzipSync(bytes)
@@ -790,6 +1492,48 @@ export const runHistoryRecoveryCases = async (run) => {
   )
 
   await run(
+    'a verified deletion supersedes older history evidence but never a new or undated chat',
+    async (page) => {
+      const outcomes = await page.evaluate(async () => {
+        const { db, historyCheckpoint } = window.__audit
+        const probe = async (localCount, localTime, nativeCount, nativeTime) => {
+          localStorage.setItem('freeseek:history-had-conversations', localCount ? '1' : '0')
+          localStorage.removeItem('freeseek:history-count')
+          localStorage.removeItem('freeseek:history-verified')
+          if (localTime) {
+            localStorage.setItem('freeseek:history-verified', JSON.stringify({
+              sessionCount: localCount, verifiedAt: localTime,
+            }))
+          }
+          historyCheckpoint.historyCheckpointReader.read = async () => ({
+            present: nativeCount > 0, sessionCount: nativeCount, verifiedAt: nativeTime,
+          })
+          try {
+            await db.loadSessionSummaries({ previousSelection: true })
+            return 'empty-home'
+          } catch (error) {
+            return error.reason
+          }
+        }
+        return [
+          await probe(2, 100, 0, 200),
+          await probe(0, 200, 2, 100),
+          await probe(2, 300, 0, 200),
+          await probe(1, undefined, 0, 200),
+          await probe(2, 200, 0, 200),
+        ]
+      })
+      assert.deepEqual(outcomes, [
+        'empty-home', 'empty-home', 'empty-after-known-history',
+        'empty-after-known-history', 'empty-after-known-history',
+      ])
+    },
+    (context) => context.addInitScript(() => {
+      window.CapacitorCustomPlatform = { name: 'android' }
+    })
+  )
+
+  await run(
     'a thousand-millisecond native checkpoint timeout is unknown, not a reason to block startup',
     async (page) => {
       const result = await page.evaluate(async () => {
@@ -818,9 +1562,9 @@ export const runHistoryRecoveryCases = async (run) => {
       assert.ok(result.elapsed < 3000, `startup waited ${result.elapsed}ms on the native bridge`)
       const logged = await page.evaluate(async () => {
         const logs = await window.__audit.diagnostics.readDiagnosticLogs()
-        return logs.events.some((event) => event.event === 'history.checkpoint-read-timed-out')
+        return logs.events.find(({ event }) => event === 'history.checkpoint-read-timed-out')?.details
       })
-      assert.equal(logged, true, 'the timeout is recorded so the diagnosis can see it')
+      assert.equal(logged.historyReason, 'checkpoint-timeout')
     },
     (context) =>
       context.addInitScript(() => {

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { showToast } from '../../components/base/toastState.js'
+import { historyVaultAvailable } from './historyVaultNative.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import { translate, type TranslationParams } from '../../i18n/index.js'
@@ -51,7 +52,10 @@ import { createLatestReminder } from './latestReminder.js'
 import {
   applicableSummary,
   approvedPrefixBeforeRefusal,
+  compressedRoundCount,
   compressionEstimateParams,
+  compressionRefusals,
+  compressionWork,
   contextWasRejected,
   contextLength,
   contextReplyReserve,
@@ -68,7 +72,7 @@ import {
   planCompression,
   planRecoveryCompression,
   recentChatContext,
-  refusedCompressionBoundary,
+  uncompressedRounds,
   type ContextRound,
   type SummaryPlan,
 } from './contextCompression.js'
@@ -84,6 +88,7 @@ import {
 import { memoryForRequest, searchUsesPrivateMemory } from '../assistants/memory.js'
 import { rememberAutomaticText, scheduleMemoryMaintenance } from '../assistants/automatic.js'
 import { createTaskTools, taskInstructions, type TaskProgress } from '../tasks/tools.js'
+import { liveReplyActivity } from './activity.js'
 import { agentToolMask, defaultAgentTools } from '../tasks/policy.js'
 import { isWindowsDesktop } from '../api/windowsTransport.js'
 import { selectedSkill, useAgentExtensions } from '../tasks/extensions.js'
@@ -192,6 +197,9 @@ const readActiveSession = (): string | null => {
 }
 
 const writeActiveSession = (id: string | null) => {
+  void db.saveActiveChat(id).catch((error) =>
+    logEvent('storage', 'active-session.checkpoint-write-failed', diagnosticError(error), 'warn')
+  )
   try {
     if (id) {
       localStorage.setItem(ACTIVE_SESSION_KEY, id)
@@ -217,13 +225,14 @@ const serverTools = (search: boolean): NonNullable<CreateMessageRequest['tools']
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
 const titleRequests = new Set<AbortController>()
 
-type ChatSaveFailure = 'space' | 'connection' | 'write'
+type ChatSaveFailure = 'space' | 'connection' | 'write' | 'conflict'
 
 type ChatState = {
   ready: boolean
   initError: boolean
   historyUpgradeBlocked: boolean
   historyMissing: boolean
+  historyRecoveryReason?: db.HistoryRecoveryReason
   historyMayStartFresh: boolean
   /** 历史导入或全部删除期间锁定交互，提交成功前仍展示原有记录。 */
   importingHistory: boolean
@@ -356,6 +365,7 @@ const updateSession = (id: string, update: (session: Session) => Session) =>
     if (session === previous) {
       return state
     }
+    db.continueSessionEdit(previous, session)
     return {
       sessionCache: { ...state.sessionCache, [id]: session },
       sessions: sameSummary(previous, session)
@@ -379,6 +389,9 @@ const updateReply = (sessionId: string, reply: AssistantMessage) =>
   }))
 
 const saveFailure = (error: unknown): ChatSaveFailure => {
+  if (error instanceof db.ChangedSessionError) {
+    return 'conflict'
+  }
   const details = diagnosticError(error)
   if (
     details.name === 'QuotaExceededError' ||
@@ -409,7 +422,7 @@ const persist = async (sessionId: string): Promise<boolean> => {
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
     return db
-      .saveSession(session, files)
+      .saveEditedSession(session, files)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
           return false
@@ -498,6 +511,55 @@ export const unsavedChatSnapshot = () => {
   }
   return { sessions, originals }
 }
+
+/** Save a divergent window under a new id, only on explicit request. */
+export const keepConflictingChats = () => db.withHistoryReplacement(async (): Promise<number | false> => {
+  if (get().importingHistory) {
+    return false
+  }
+  flushChatUpdates()
+  let missing = 0
+  for (const [id, reason] of Object.entries(get().sessionSaveErrors)) {
+    if (reason !== 'conflict') {
+      continue
+    }
+    const session = getSession(id)
+    if (!session || getStreamController(id) || deletingSessions.has(id)) {
+      return false
+    }
+    const copy = {
+      ...session,
+      id: createId(),
+      title: translate('conflictingChatCopy', { title: session.title || translate('untitledChat') }),
+    }
+    const missingOriginals = await db.saveConflictCopy(copy, pendingFiles.get(id))
+    missing += missingOriginals
+    const current = getSession(id) === session
+    if (current) {
+      pendingFiles.delete(id)
+      unsavedSessions.delete(id)
+    }
+    set((state) => {
+      return {
+        sessions: sortSessions([toSessionSummary(copy), ...state.sessions]),
+        activeId: current && state.activeId === id ? copy.id : state.activeId,
+        sessionCache: {
+          ...(current ? Object.fromEntries(Object.entries(state.sessionCache).filter(([key]) => key !== id)) : state.sessionCache),
+          [copy.id]: copy,
+        },
+        sessionSaveErrors: current
+          ? Object.fromEntries(Object.entries(state.sessionSaveErrors).filter(([key]) => key !== id))
+          : state.sessionSaveErrors,
+      }
+    })
+    logEvent('storage', 'history.conflicting-copy-saved', { sessionId: copy.id, missingOriginals })
+    if (!current) {
+      return false
+    }
+  }
+  await resyncSessions()
+  return missing
+})
 
 /** 保存失败时，导出仍可从内存取回尚未落盘的原件。 */
 export const loadBackupFile = async (id: string): Promise<Blob | undefined> => {
@@ -711,6 +773,20 @@ const settleInterrupted = (session: Session): Session => {
 
 let historyRefresh: Promise<void> | undefined
 
+const historyReadFailure = (error: unknown): db.HistoryRecoveryReason =>
+  error instanceof db.HistoryMissingError
+    ? error.reason
+    : error instanceof DOMException && error.name === 'TimeoutError'
+      ? 'read-timeout'
+      : 'unreadable'
+
+export const historyMissingMessage = (reason?: db.HistoryRecoveryReason) =>
+  reason === 'empty-after-known-history'
+    ? 'historyEmptyAfterKnownHistory'
+    : reason === 'selection-uncertain'
+      ? 'historySelectionUncertain'
+      : 'historyPreviouslySaved'
+
 /** Only replace the visible list after a successful, current read. */
 const resyncSessions = () => {
   if (!get().ready || get().importingHistory) {
@@ -742,19 +818,24 @@ const resyncSessions = () => {
         sessions: sortSessions([...merged.values()]),
         activeId: activeId && merged.has(activeId) ? activeId : null,
         historyMissing: unavailable > 0,
+        historyRecoveryReason: unavailable ? 'unreadable' : undefined,
       })
       logEvent('storage', 'sessions.resynced', {
         sessionCount: summaries.length,
         unavailableCount: unavailable,
       })
     } catch (error) {
+      const historyReason = historyReadFailure(error)
       if (current()) {
-        set({ historyMissing: before.sessions.length > 0 || error instanceof db.HistoryMissingError })
+        set({
+          historyMissing: before.sessions.length > 0 || error instanceof db.HistoryMissingError,
+          historyRecoveryReason: historyReason,
+        })
       }
       logEvent(
         'storage',
         'history.resync-retained',
-        { previousCount: before.sessions.length, ...diagnosticError(error) },
+        { previousCount: before.sessions.length, historyReason, ...diagnosticError(error) },
         'warn'
       )
     }
@@ -775,29 +856,51 @@ export const initChat = (allowEmpty = false): Promise<void> => {
     initError: false,
     historyUpgradeBlocked: false,
     historyMissing: false,
+    historyRecoveryReason: undefined,
     historyMayStartFresh: false,
   })
   initTask = (async () => {
     try {
-      const savedId = readActiveSession()
+      const legacyId = readActiveSession()
       const summaries = await db.loadSessionSummaries({
-        previousSelection: Boolean(savedId),
+        previousSelection: Boolean(legacyId),
         allowEmpty,
+      })
+      if (historyVaultAvailable() && !allowEmpty && summaries.length === 0) {
+        const vault = await import('./historyVault.js')
+        await vault.refreshHistoryVault()
+        if ((vault.useHistoryVault.getState().protectedSessions ?? 0) > 0) {
+          const { emptyAfterLoss } = await db.vaultCommitProof()
+          throw new db.HistoryMissingError(emptyAfterLoss ? 'empty-after-known-history' : 'selection-uncertain', emptyAfterLoss)
+        }
+      }
+      const route = await db.loadStartupRoute().catch((error: unknown) => {
+        logEvent('storage', 'active-session.checkpoint-read-failed', diagnosticError(error), 'warn')
+        return undefined
       })
       void db.recoverStaging().catch(db.reportStorageError('clean interrupted import'))
       logEvent('storage', 'sessions.loaded', { sessionCount: summaries.length })
       if (epoch === historyEpoch) {
         // 仅在选择恢复上次对话时读取保存的会话 ID。
-        const { startupPage } = useSettings.getState()
-        const saved = startupPage === 'last-chat' ? savedId : null
+        const startupPage = route?.startupPage ?? useSettings.getState().startupPage
+        if (route?.startupPage && startupPage !== useSettings.getState().startupPage) {
+          useSettings.setState({ startupPage })
+        }
+        const durableId = route?.activeChat
+        const saved = startupPage === 'last-chat' ? (durableId === undefined ? legacyId : durableId) : null
         const restore = saved && summaries.some((session) => session.id === saved) ? saved : null
         logEvent('app', 'startup.chat-route', {
           startupPage,
+          startupPreferenceSource: route?.startupPage ? route.pageSource : 'legacy',
+          lastSelectionSource: durableId === undefined ? 'legacy' : route?.chatSource,
           restored: Boolean(restore),
           missing: Boolean(saved && !restore),
         })
         lastActiveId = restore
         set({ ready: true, sessions: sortSessions(summaries), activeId: restore })
+        if (historyVaultAvailable()) {
+          void import('./historyVault.js').then(vault => vault.protectAllHistory(false))
+        }
         void requestPersistentStorage()
         const missingModes = summaries.filter(({ mode }) => mode === undefined).map(({ id }) => id)
         if (missingModes.length) {
@@ -821,13 +924,14 @@ export const initChat = (allowEmpty = false): Promise<void> => {
       }
     } catch (error) {
       if (epoch === historyEpoch) {
+        const historyReason = historyReadFailure(error)
         logEvent(
           'storage',
           'history.startup-read-failed',
           {
             allowEmpty,
-            checkpointPresent:
-              error instanceof db.HistoryMissingError && error.previousHistoryKnown,
+            historyReason,
+            canStartFresh: error instanceof db.HistoryMissingError && error.canStartFresh,
             ...diagnosticError(error),
           },
           'error'
@@ -836,6 +940,7 @@ export const initChat = (allowEmpty = false): Promise<void> => {
           initError: true,
           historyUpgradeBlocked: error instanceof db.HistoryUpgradeBlockedError,
           historyMissing: error instanceof db.HistoryMissingError && error.previousHistoryKnown,
+          historyRecoveryReason: historyReason,
           historyMayStartFresh: error instanceof db.HistoryMissingError && error.canStartFresh,
         })
         db.reportStorageError('read local sessions')(error)
@@ -866,7 +971,10 @@ export const retryInitChat = async () => {
     }
   } catch (error) {
     // 自愈失败不阻断重试：至少让用户拿到最新一次的真实错误，而不是原地打转。
-    logEvent('storage', 'history.retry-repair-failed', diagnosticError(error), 'warn')
+    logEvent('storage', 'history.retry-repair-failed', {
+      historyReason: historyReadFailure(error),
+      ...diagnosticError(error),
+    }, 'warn')
   }
   initTask = undefined
   await initChat()
@@ -885,6 +993,7 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
   const started = performance.now()
   set((state) => ({ sessionLoadErrors: { ...state.sessionLoadErrors, [id]: false } }))
   const load = { promise: Promise.resolve() }
+  const originalSummary = get().sessions.find((item) => item.id === id)
   sessionLoads.set(id, load)
   load.promise = (async () => {
     try {
@@ -903,19 +1012,23 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
       }
       const settled = settleInterrupted(normalizeSession(stored))
       // 读取期间可能已在列表重命名，保留最新元数据，不能让旧读取覆盖它。
-      const session = sameSummary(settled, summary)
-        ? settled
-        : { ...settled, ...summary, title: summary.title || settled.title }
+      const session = summary !== originalSummary && !sameSummary(settled, summary)
+        ? { ...settled, ...summary, title: summary.title || settled.title }
+        : settled
+      db.continueSessionEdit(stored, session)
       touchSession(id)
-      set((state) => ({ sessionCache: { ...state.sessionCache, [id]: session } }))
+      set((state) => ({
+        sessionCache: { ...state.sessionCache, [id]: session },
+        ...(!sameSummary(session, summary) && {
+          sessions: sortSessions(state.sessions.map((item) => item.id === id ? toSessionSummary(session) : item)),
+        }),
+      }))
       logEvent('storage', 'session.loaded', {
         sessionId: id,
         messageCount: session.messages.length,
         elapsedMs: Math.round(performance.now() - started),
       })
-      if (session !== stored) {
-        persist(id)
-      }
+      // Opening a window is read-only. The next actual edit persists normalization and recovery.
       trimSessionCache()
       void reattachGoalIfNeeded(id)
     } catch (error) {
@@ -1039,6 +1152,7 @@ export const replaceHistory = (
         initError: false,
         historyUpgradeBlocked: false,
         historyMissing: false,
+        historyRecoveryReason: undefined,
         historyMayStartFresh: false,
         sessions: sortSessions(summaries),
         sessionCache: {},
@@ -1053,6 +1167,9 @@ export const replaceHistory = (
     } finally {
       set({ importingHistory: false })
       retrySaveSessions()
+      if (historyVaultAvailable()) {
+        void import('./historyVault.js').then(vault => vault.protectAllHistory(false))
+      }
       const { activeId, ready } = get()
       // 替换失败时恢复被取消的详情读取，原有记录继续可用。
       if (activeId !== null) {
@@ -1066,7 +1183,8 @@ export const replaceHistory = (
 export const mergeHistory = (
   write: (reservedFileIds: ReadonlySet<string>) => Promise<void>,
   choose: (preview: db.HistoryImportPreview) => Promise<ReadonlySet<string> | null>,
-  rollback: () => Promise<void>
+  rollback: () => Promise<void>,
+  repairs?: ReadonlyMap<string, string | null>
 ) =>
   db.withHistoryReplacement(async () => {
     await initTask
@@ -1093,7 +1211,7 @@ export const mergeHistory = (
       let result: Awaited<ReturnType<typeof db.commitHistoryMerge>>
       try {
         await write(reserved)
-        const preview = await db.previewHistoryMerge()
+        const preview = await db.previewHistoryMerge(repairs !== undefined)
         const useBackup = await choose(preview)
         if (!useBackup) {
           await discard()
@@ -1107,7 +1225,7 @@ export const mergeHistory = (
             throw new BackupError('backupConversationBusy')
           }
         }
-        result = await db.commitHistoryMerge(preview, useBackup)
+        result = await db.commitHistoryMerge(preview, useBackup, repairs)
       } catch (error) {
         await discard()
         throw error
@@ -1124,6 +1242,7 @@ export const mergeHistory = (
           initError: false,
           historyUpgradeBlocked: false,
           historyMissing: false,
+          historyRecoveryReason: undefined,
           historyMayStartFresh: false,
           sessions: sortSessions(result.summaries),
           sessionCache: retained(state.sessionCache),
@@ -1159,6 +1278,9 @@ export const mergeHistory = (
     } finally {
       set({ importingHistory: false })
       void retrySaveSessions()
+      if (historyVaultAvailable() && !repairs) {
+        void import('./historyVault.js').then(vault => vault.protectAllHistory(false))
+      }
       const { activeId, ready } = get()
       if (activeId !== null) {
         void ensureSessionLoaded(activeId)
@@ -1329,8 +1451,7 @@ export const setSessionPinned = async (id: string, pinned: boolean): Promise<boo
   }
   updateSession(id, (session) => ({ ...session, pinned }))
   logEvent('chat', 'session.pin-changed', { sessionId: id, pinned })
-  persist(id)
-  return true
+  return persist(id)
 }
 
 /** Save only the edited role. A reply can discover new characters while the editor is open. */
@@ -1596,7 +1717,8 @@ const canCaptureMemory = (sessionId: string, questionId: string) => {
 
 const captureMemory = (sessionId: string, question: UserMessage, round: number) => {
   const allowed = () => Boolean(canCaptureMemory(sessionId, question.id))
-  if (!useAssistantLibrary.getState().data.automatic || !allowed()) {
+  const library = useAssistantLibrary.getState()
+  if (library.ready && !library.data.automatic) {
     return
   }
   void rememberAutomaticText(
@@ -2719,7 +2841,7 @@ const keepApprovedCompression = async (
   await saveContext(id, summary, signal, checkpoint)
   logEvent('chat', 'compression.partial.applied', {
     sessionId: id,
-    coveredRounds: summary.coveredRounds,
+    coveredRounds: compressedRoundCount(summary),
     pendingRounds: rounds.length - summary.coveredRounds,
     targetRounds: checkpoint.targetRounds,
     historyTokensBefore: summary.historyEstimate?.before,
@@ -2792,9 +2914,11 @@ const compressRounds = async (
       historyTokensAfter: historyEstimate.after,
     })
     if (get().activeId === id) {
+      const retainedRounds = summary.coveredRounds - compressedRoundCount(summary) -
+        (prior ? prior.coveredRounds - compressedRoundCount(prior) : 0)
       showToast({
-        key: 'compressionFinishedResult',
-        params: compressionEstimateParams(historyEstimate),
+        key: retainedRounds > 0 ? 'compressionFinishedWithOriginals' : 'compressionFinishedResult',
+        params: { ...compressionEstimateParams(historyEstimate), retained: retainedRounds },
       })
     }
     return summary
@@ -2834,13 +2958,16 @@ export const compressionPreflight = (id: string) => {
     const rounds = contextRounds(getVisibleMessages(session), session.inherited)
     const prior = applicableSummary(session.contextSummary, rounds)
     const plan = planCompression(rounds, prior, connection)
-    const refused =
-      refusedCompressionBoundary(connection, rounds, prior, session.compressionCheckpoint) !==
-      undefined
-    const pendingRounds = Math.max(0, plan.end - plan.start)
+    const skipped = compressionRefusals(connection, rounds, prior, session.compressionCheckpoint)
+    const { pending: pendingRounds } = compressionWork(plan, rounds, skipped)
     const before = plan.historyEstimate?.before ?? 0
     const after = plan.historyEstimate?.after ?? 0
-    return { available: !refused && pendingRounds > 0, pendingRounds, saves: after < before, refused }
+    return {
+      available: pendingRounds > 0,
+      pendingRounds,
+      saves: skipped.length ? pendingRounds > 0 : after < before,
+      refused: skipped.length > 0 && pendingRounds === 0,
+    }
   } catch {
     // 还在渲染层调用：拿不到连接（没配 Key 等）时只禁用按钮，别让面板崩掉。
     return { available: false, pendingRounds: 0, saves: false, refused: false }
@@ -2985,7 +3112,10 @@ const withSummaryText = (request: Request, summary?: ContextSummary): Request =>
     return request
   }
   // Keep the summary at user priority. The active persona remains the only system prompt.
-  const note = '[Earlier conversation summary]\n' + summary.text + '\n[End of earlier summary]\n\n'
+  const header = summary.retainedRanges?.length
+    ? '[Summary of omitted earlier turns. Original turns from that period are included below.]'
+    : '[Earlier conversation summary]'
+  const note = header + '\n' + summary.text + '\n[End of earlier summary]\n\n'
   const withNote = (q: UserMessage) => ({ ...q, content: note + q.content })
   const first = request.history[0]
   return first?.role === 'user'
@@ -3071,15 +3201,13 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
 const prepareFiles = async (
   sessionId: string,
   request: Request,
+  context: ContextRound[],
   signal: AbortSignal,
   omitted: Map<string, FileAttachment>,
   apiKey: string
 ) => {
   signal.throwIfAborted()
   const epoch = historyEpoch
-  // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
-  // 否则快照里仍是旧 id，补传会直接复用它。
-  request = refreshRequest(sessionId, request)
   const serverIds = new Map<string, string>()
   // 停止生成立即生效；上传本身不取消（输入框与其他消息可能共用同一任务），完成后照常写回 serverId
   let onAbort: () => void = () => {}
@@ -3113,10 +3241,6 @@ const prepareFiles = async (
     }
 
     const pending = new Map<string, FileAttachment>()
-    const context = [
-      ...getContextRounds(request.inherited?.messages ?? []),
-      ...getContextRounds(request.history),
-    ]
     for (const [user] of context.toReversed()) {
       for (const file of user.files) {
         if (
@@ -3431,6 +3555,9 @@ const streamReply = async (
   const scopedOriginal = taskMode ? scopeRequest(original) : original
   const rounds = contextRounds(scopedOriginal.history, scopedOriginal.inherited)
   let summary = applicableSummary(getSession(sessionId)?.contextSummary, rounds)
+  const automaticCompression = mode === 'ask'
+  const keepHistoryOnRetry = mode === 'send' && rejection?.compressionRefused === 1
+  let usesRetainedHistory = keepHistoryOnRetry || Boolean(summary?.retainedRanges?.length)
   let compressionAttempted = false
   let checkPressure = true
   let recentKeep = 4
@@ -3457,6 +3584,9 @@ const streamReply = async (
     cancelAnimationFrame(frame)
     frame = 0
     updateReply(sessionId, reply)
+    if (reply.status === 'pending' || reply.status === 'streaming') {
+      retention?.showProgress(liveReplyActivity(reply))
+    }
   }
   streamFlushes.set(sessionId, flush)
   let checkpointAt = performance.now()
@@ -3482,6 +3612,8 @@ const streamReply = async (
   const searchUrls = new Set<string>()
   let searchAttempts = 0
   const requestStartedAt = Date.now()
+  let lastRequestId: string | undefined
+  let receivedMessageStop = false
   let connection: Connection | undefined
   let inlineAttempted = false
   let documentTexts: ReadonlyMap<string, string> | undefined
@@ -3490,8 +3622,11 @@ const streamReply = async (
 
   try {
     for (let attempt = 0; ; attempt += 1) {
-      /** 附件补齐前出错属于上传失败，请求还没有发出 */
-      let preparing = false
+      lastRequestId = undefined
+      receivedMessageStop = false
+      let phase: 'save' | 'connection' | 'context' | 'attachments' | 'request' =
+        attempt === 0 && beforeRequest ? 'save' : 'connection'
+      let requestAttachmentCount = 0
       let receivedContent = false
       let preparedContext: Request | undefined
       let documentCount: number | undefined
@@ -3501,13 +3636,15 @@ const streamReply = async (
           await beforeRequest
           controller.signal.throwIfAborted()
         }
+        phase = 'connection'
         connection ??= resolveConnection(initial.connection, initial.model)
+        phase = 'context'
         const officialWebTools =
           connection.kind === 'deepseek' && supportsOfficialChatExtensions(connection.model)
         const serverExtensions = !taskMode && officialWebTools
         if (checkPressure) {
           checkPressure = false
-          if (mode === 'send' && rejection?.compressionRefused === 1) {
+          if (keepHistoryOnRetry) {
             summary = await keepApprovedCompression(
               sessionId,
               connection,
@@ -3518,7 +3655,7 @@ const streamReply = async (
           }
           const recovering = mode === 'recover'
           const pressure =
-            recovering || mode === 'recent'
+            recovering || mode === 'recent' || mode === 'send'
               ? undefined
               : planCompression(rounds, summary, connection, {
                   ...original,
@@ -3526,10 +3663,16 @@ const streamReply = async (
                 })
           const plan = recovering
             ? planRecoveryCompression(rounds, summary, connection, rejection)
-            : pressure?.near && !pressure.currentTooLarge && mode !== 'send'
+            : pressure?.near && !pressure.currentTooLarge
               ? planRecoveryCompression(rounds, summary, connection)
               : pressure
-          const canReduce = plan && plan.end > plan.start
+          const skipped = compressionRefusals(
+            connection, rounds, summary, getSession(sessionId)?.compressionCheckpoint
+          )
+          if (mode !== 'recent' && skipped.length) {
+            usesRetainedHistory = true
+          }
+          const canReduce = plan && compressionWork(plan, rounds, skipped).pending > 0
           if (mode === 'recent') {
             summary = recentChatContext(rounds, summary, recentKeep)
             if (!summary) {
@@ -3551,6 +3694,12 @@ const streamReply = async (
             }
           }
           if ((mode === 'compress' || recovering) && !canReduce) {
+            if (recovering && usesRetainedHistory) {
+              throw new ApiError('protocol', { key: 'compressionRefusalTooLong', params: rejection })
+            }
+            if (usesRetainedHistory) {
+              throw new ApiError('protocol', { key: 'compressionFailedRefused' })
+            }
             if (recovering && summary) {
               throw new ApiError('protocol', { key: 'compressionStillTooLong', params: rejection })
             }
@@ -3571,13 +3720,16 @@ const streamReply = async (
               ) {
                 throw new ApiError('protocol', {
                   key: 'compressionSuggested',
-                  params: plan.historyEstimate && compressionEstimateParams(plan.historyEstimate),
+                  params: !skipped.length && plan.historyEstimate
+                    ? compressionEstimateParams(plan.historyEstimate)
+                    : undefined,
                 })
               }
             }
           }
           if (plan && canReduce && (recovering || mode === 'compress' || autoCompress)) {
             compressionAttempted = true
+            retention?.showProgress({ phase: 'compressing' })
             try {
               summary = await compressRounds(
                 sessionId,
@@ -3587,14 +3739,37 @@ const streamReply = async (
                 plan,
                 controller.signal
               )
+              usesRetainedHistory = Boolean(summary.retainedRanges?.length)
             } catch (error) {
               controller.signal.throwIfAborted()
               const failure = describeCompressionFailure(error)
-              throw new ApiError('protocol', {
-                ...failure,
-                params: recovering
-                  ? { ...rejection, ...failure.params, recoverContext: 1 }
-                  : failure.params,
+              const refused =
+                failure.key === 'compressionFailedRefused' ||
+                (failure.key === 'compressionFailedNoSavings' &&
+                  compressionRefusals(
+                    connection, rounds, summary, getSession(sessionId)?.compressionCheckpoint
+                  ).length > 0)
+              if (!automaticCompression || !refused) {
+                throw new ApiError('protocol', {
+                  ...failure,
+                  params: recovering
+                    ? { ...rejection, ...failure.params, recoverContext: 1 }
+                    : failure.params,
+                })
+              }
+              usesRetainedHistory = true
+              const retained = applicableSummary(getSession(sessionId)?.contextSummary, rounds)
+              // The same request already failed on the server. Retry only if we saved a smaller context.
+              if (recovering && retained === summary) {
+                throw new ApiError('protocol', {
+                  key: 'compressionRefusalTooLong',
+                  params: rejection,
+                })
+              }
+              summary = retained
+              logEvent('chat', 'compression.refusal.continued', {
+                sessionId,
+                coveredRounds: summary?.coveredRounds ?? 0,
               })
             }
           }
@@ -3602,36 +3777,37 @@ const streamReply = async (
             request = {
               ...original,
               inherited: undefined,
-              history: rounds
-                .slice(summary.coveredRounds)
-                .flatMap(([user, assistant]) => [user, assistant]),
+              history: uncompressedRounds(rounds, summary).flatMap(([user, assistant]) => [user, assistant]),
             }
           }
         }
-        // File preparation and the answer request only start after the summary stream completes.
-        const scopedRequest = scopeRequest(request)
-        if (
-          connection.kind === 'deepseek' &&
-          connection.model === 'deepseek-v4-pro' &&
-          [
-            scopedRequest.question,
-            ...getContextRounds(scopedRequest.history).map(([q]) => q),
-            ...getContextRounds(scopedRequest.inherited?.messages ?? []).map(([q]) => q),
-          ].some((q) => q.files.some((file) => file.isImage))
-        ) {
-          throw new ApiError('protocol', { key: 'providerProNoImages' })
+        // 先刷新快照，再判断实际发送的内容是否有附件。失效 file_id 重传时也要读到新状态。
+        let rawPrepared = refreshRequest(sessionId, scopeRequest(request))
+        requestAttachmentCount = rawPrepared.question.files.length
+        if (connection.kind === 'deepseek') {
+          const context = contextRounds(rawPrepared.history, rawPrepared.inherited)
+          const files = [
+            ...rawPrepared.question.files,
+            ...context.flatMap(([question]) => question.files),
+          ]
+          requestAttachmentCount = files.length
+          if (connection.model === 'deepseek-v4-pro' && files.some((file) => file.isImage)) {
+            throw new ApiError('protocol', { key: 'providerProNoImages' })
+          }
+          if (files.length > 0) {
+            phase = 'attachments'
+            retention?.showProgress({ phase: 'attachments' })
+            rawPrepared = await prepareFiles(
+              sessionId,
+              rawPrepared,
+              context,
+              controller.signal,
+              omitted,
+              connection.apiKey
+            )
+            phase = 'context'
+          }
         }
-        preparing = connection.kind === 'deepseek'
-        const rawPrepared =
-          connection.kind === 'deepseek'
-            ? await prepareFiles(
-                sessionId,
-                scopedRequest,
-                controller.signal,
-                omitted,
-                connection.apiKey
-              )
-            : refreshRequest(sessionId, scopedRequest)
         const onlyLocalFiles =
           taskMode &&
           !rawPrepared.question.content.trim() &&
@@ -3657,7 +3833,8 @@ const streamReply = async (
           summary
         )
         preparedContext = prepared
-        preparing = false
+        phase = 'request'
+        retention?.showProgress({ phase: 'waiting' })
         const baseSystem =
           (initial.systemPrompt ??
             replySystemPrompt(request.persona?.prompt, connection.kind === 'deepseek')) +
@@ -3901,6 +4078,7 @@ const streamReply = async (
           )
         }
         const requestId = createId()
+        lastRequestId = requestId
         logEvent('chat', 'request.prepared', {
           sessionId,
           replyId: initial.id,
@@ -3908,12 +4086,16 @@ const streamReply = async (
           protocol: connection.kind === 'custom' ? connection.profile.protocol : 'deepseek',
           officialModel: connection.kind === 'deepseek' ? connection.model : undefined,
           reasoningLevel: initial.reasoning?.level,
+          requestedOutputTokens: connection.kind === 'custom'
+            ? providerOutputBudget(connection.profile, connection.model)
+            : undefined,
+          outputBudgetSource: connection.kind === 'custom' ? 'model-settings' : 'service-default',
           offersIndependentSearch: Boolean(search),
           attempt,
           messagesCount: messages.length,
           bodyBytes: new Blob([JSON.stringify(messages)]).size,
           omittedFiles: omitted.size,
-          compressedRounds: summary?.coveredRounds ?? 0,
+          compressedRounds: summary ? compressedRoundCount(summary) : 0,
           currentFiles: prepared.question.files.length,
           historyFiles: contextRounds(prepared.history, prepared.inherited).reduce(
             (total, [question]) => total + question.files.length,
@@ -3969,27 +4151,29 @@ const streamReply = async (
                       )
                 let text = ''
                 let usage: MessageUsage | undefined
-                for await (const event of events) {
-                  if (event.type === 'content_block_start' && event.content_block.type === 'text') {
-                    text = (text + event.content_block.text).slice(0, 10_000)
-                  } else if (
-                    event.type === 'content_block_delta' &&
-                    event.delta.type === 'text_delta'
-                  ) {
-                    text = (text + event.delta.text).slice(0, 10_000)
-                  } else if (event.type === 'message_start') {
-                    usage = event.message.usage
-                  } else if (event.type === 'message_delta' && event.usage) {
-                    usage = { ...usage, ...event.usage } as MessageUsage
+                try {
+                  for await (const event of events) {
+                    if (event.type === 'content_block_start' && event.content_block.type === 'text') {
+                      text = (text + event.content_block.text).slice(0, 10_000)
+                    } else if (
+                      event.type === 'content_block_delta' && event.delta.type === 'text_delta'
+                    ) {
+                      text = (text + event.delta.text).slice(0, 10_000)
+                    } else if (event.type === 'message_start') {
+                      usage = event.message.usage
+                    } else if ((event.type === 'message_delta' || event.type === 'message_usage') && event.usage) {
+                      usage = { ...usage, ...event.usage } as MessageUsage
+                    }
+                  }
+                  return text.trim()
+                } finally {
+                  if (usage) {
+                    usageBase = sumMessageUsage(usageBase, usage)
+                    usageHistory.push({ createdAt: Date.now(), usage, model: connection.model })
+                    reply = { ...reply, usage: usageBase, usageHistory: [...usageHistory] }
+                    flush()
                   }
                 }
-                if (usage) {
-                  usageBase = sumMessageUsage(usageBase, usage)
-                  usageHistory.push({ createdAt: Date.now(), usage, model: connection.model })
-                  reply = { ...reply, usage: usageBase, usageHistory: [...usageHistory] }
-                  flush()
-                }
-                return text.trim()
               },
               search,
               signal: controller.signal,
@@ -4313,6 +4497,9 @@ const streamReply = async (
         let usageStartedAt = Date.now()
         let roundUsage: (typeof usageHistory)[number] | undefined
         for await (const event of events) {
+          if (event.type === 'message_stop') {
+            receivedMessageStop = true
+          }
           if (event.type === 'content_block_delta' || event.type === 'agent_tool_input') {
             retention?.progress()
           }
@@ -4339,7 +4526,7 @@ const streamReply = async (
           const usage =
             event.type === 'message_start'
               ? event.message.usage
-              : event.type === 'message_delta'
+              : event.type === 'message_delta' || event.type === 'message_usage'
                 ? event.usage
                 : undefined
           if (usage) {
@@ -4406,16 +4593,20 @@ const streamReply = async (
         }
         break
       } catch (error) {
+        const diagnostic = diagnosticError(error)
         logEvent(
           'chat',
           'reply.attempt.failed',
           {
             sessionId,
             replyId: initial.id,
+            requestId: lastRequestId,
             attempt,
-            preparing,
+            phase,
+            requestAttachmentCount,
+            preparing: phase === 'attachments',
             cancelled: controller.signal.aborted,
-            ...diagnosticError(error),
+            ...diagnostic,
           },
           controller.signal.aborted ? 'info' : 'error'
         )
@@ -4423,7 +4614,15 @@ const streamReply = async (
           reply = settleReply(reply, 'stopped', Date.now())
           break
         }
-        if (preparing) {
+        if (diagnostic.reason === 'runtime-capability') {
+          reply = settleReply(reply, 'error', Date.now(), {
+            kind: 'protocol',
+            message: '',
+            localMessage: { key: 'replyRuntimeUnavailable' },
+          })
+          break
+        }
+        if (phase === 'attachments') {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: 'upload',
             message: '',
@@ -4521,19 +4720,13 @@ const streamReply = async (
             break
           }
           const documentLimit = local.key !== 'replyContextTooLong'
+          const hasOriginalHistory =
+            rounds.length > (summary?.coveredRounds ?? 0) || Boolean(summary?.retainedRanges?.length)
           const currentDocs = new Set(
             preparedContext?.question.files.flatMap(({ isImage, serverId }) =>
               !isImage && serverId && !documentTexts?.has(serverId) ? [serverId] : []
             )
           ).size
-          if (!receivedContent && mode === 'send' && rejection?.compressionRefused === 1) {
-            reply = settleReply(reply, 'error', Date.now(), {
-              kind: 'protocol',
-              message: '',
-              localMessage: { key: 'compressionRefusalTooLong', params },
-            })
-            break
-          }
           rejection = params
           if (
             mode === 'recent' &&
@@ -4549,8 +4742,7 @@ const streamReply = async (
           }
           if (
             !receivedContent &&
-            (!rounds.length ||
-              (summary?.coveredRounds ?? 0) >= rounds.length ||
+            (!hasOriginalHistory ||
               (documentLimit && documentCount !== undefined && currentDocs >= documentCount) ||
               (local.key === 'replyDocumentCountLimit' &&
                 currentDocs > Number(params.documentLimit)))
@@ -4579,6 +4771,14 @@ const streamReply = async (
             checkPressure = true
             mode = 'recover'
             continue
+          }
+          if (!receivedContent && usesRetainedHistory) {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'compressionRefusalTooLong', params },
+            })
+            break
           }
           local.params = params
         }
@@ -4704,8 +4904,13 @@ const streamReply = async (
     logEvent('chat', 'reply.settled', {
       sessionId,
       replyId: initial.id,
+      requestId: lastRequestId,
+      receivedMessageStop,
+      answerChars: reply.blocks.reduce((n, block) => n + (block.type === 'text' && !block.isTemplate ? block.text.length : 0), 0),
+      reasoningChars: reply.blocks.reduce((n, block) => n + (block.type === 'thinking' ? block.thinking.length : 0), 0),
       status: reply.status,
       stopReason: reply.stopReason,
+      agentRunStatus: reply.task?.run?.status,
       agentStopReason: reply.task?.run?.reason,
       agentBudgetMinutes: reply.task?.run?.budgetMinutes,
       agentSegmentRequests: reply.task?.run?.segmentRequests,
@@ -4729,15 +4934,16 @@ const streamReply = async (
     updateSession(sessionId, (session) =>
       withReplyRoles(session, reply, useSettings.getState().roleVoice)
     )
-    set((state) => ({
-      streaming: Object.fromEntries(
-        Object.entries(state.streaming).filter(([id]) => id !== sessionId)
-      ),
-    }))
     const written = backgroundCheckpoint
       ? backgroundCheckpoint.then(() => persist(sessionId))
       : persist(sessionId)
     void written.then((saved) => {
+      // A reload, export or next turn observing idle must see the final stored answer or its save error.
+      set((state) => ({
+        streaming: Object.fromEntries(
+          Object.entries(state.streaming).filter(([id, stream]) => id !== sessionId || stream !== controller)
+        ),
+      }))
       const finalRun = reply.task?.run
       const stoppedByUser = finalRun?.reason === 'user' || (reply.status === 'stopped' && !finalRun)
       retention?.finish(

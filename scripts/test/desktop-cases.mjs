@@ -204,6 +204,87 @@ export async function runDesktopCases(run) {
   })
 
   await run(
+    'update notes combine skipped public versions and keep the update available offline',
+    async (page) => {
+      await page.setViewportSize({ width: 340, height: 640 })
+      const makeRelease = (version, body, fields = {}) => ({
+        tag_name: 'v' + version,
+        body,
+        draft: false,
+        prerelease: false,
+        ...fields,
+      })
+      const requests = []
+      let historyOffline = false
+      await page.route('https://api.github.com/repos/WikG1018/FreeSeekApp/releases?*', (route) => {
+        const pageNumber = new URL(route.request().url()).searchParams.get('page')
+        requests.push(pageNumber)
+        if (historyOffline) return route.abort()
+        const json = pageNumber === '1'
+          ? [
+              makeRelease('3.1.9', '- 九版说明\n- 打赏说明'),
+              makeRelease('3.1.13', '未提供的更新'),
+              makeRelease('3.1.12', '目标版本说明'),
+              makeRelease('3.1.10', '十版说明'),
+              makeRelease('3.1.8', '已安装的旧版'),
+              makeRelease('3.1.11', '草稿说明', { draft: true }),
+              makeRelease('3.1.11-rc.1', '测试版说明', { prerelease: true }),
+              ...Array.from({ length: 23 }, (_, index) => makeRelease(`2.0.${index}`, '旧版说明')),
+            ]
+          : [makeRelease('3.1.11', '十一版说明'), makeRelease('3.1.10', '重复十版说明')]
+        return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json })
+      })
+      await page.route('**/web-version.json', (route) => route.fulfill({
+        json: {
+          version: '3.1.12',
+          notes: '目标版本说明',
+          files: ['static/js/main.0123abcd.js'],
+        },
+      }))
+      await page.route('**/main.0123abcd.js', (route) => route.fulfill({ body: '/* test asset */' }))
+      await page.evaluate(async () => {
+        document.querySelector('meta[name="application-version"]').setAttribute('content', '3.1.8')
+        await window.__audit.update.checkForUpdate({ force: true })
+      })
+      const menu = page.getByRole('button', { name: '打开边栏', exact: true })
+      await menu.click()
+      const open = page.getByTestId('sidebar-update')
+      const notes = page.getByTestId('release-notes')
+      const dialog = page.getByRole('dialog').filter({ has: notes })
+      const ready = dialog.getByRole('button', { name: '刷新到新版', exact: true })
+      await open.click()
+      await notes.getByText('九版说明', { exact: true }).waitFor()
+      assert.deepEqual(await notes.getByRole('heading', { level: 3 }).allTextContents(), [
+        'v3.1.12', 'v3.1.11', 'v3.1.10', 'v3.1.9',
+      ])
+      assert.doesNotMatch(await notes.innerText(), /未提供的更新|已安装的旧版|草稿说明|测试版说明|打赏说明|重复十版说明/)
+      assert.equal(await notes.getByText('目标版本说明', { exact: true }).count(), 1)
+      assert.deepEqual(requests, ['1', '2'])
+      await ready.waitFor()
+
+      const close = dialog.getByRole('button', { name: '关闭', exact: true })
+      await close.click()
+      await dialog.waitFor({ state: 'hidden' })
+      historyOffline = true
+      await open.click()
+      await notes.getByText('十一版说明', { exact: true }).waitFor()
+      assert.deepEqual(requests, ['1', '2'])
+      await close.click()
+      await dialog.waitFor({ state: 'hidden' })
+
+      await page.evaluate(() => {
+        localStorage.removeItem('freeseek:upgrade-notes')
+        window.__audit.settingsDialog.openSettings('about')
+      })
+      await page.getByRole('button', { name: /^检查更新/ }).click()
+      await notes.getByText('部分历史更新说明暂时无法获取。', { exact: true }).waitFor()
+      await notes.getByText('目标版本说明', { exact: true }).waitFor()
+      assert.equal(await ready.isEnabled(), true)
+      assert.deepEqual(requests, ['1', '2', '1'])
+    }
+  )
+
+  await run(
     'desktop updates prefetch resources and reload while preserving the current chat',
     async (page) => {
       await desktop(page)
@@ -221,7 +302,7 @@ export async function runDesktopCases(run) {
       })
       await page.evaluate(async () => {
         const a = window.__audit
-        a.settings.setStartupPage('last-chat')
+        await a.settings.setStartupPage('last-chat')
         await a.seed([
           a.fixtures.session({
             id: 'reload-history',

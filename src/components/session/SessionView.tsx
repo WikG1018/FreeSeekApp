@@ -2,10 +2,14 @@ import clsx from 'clsx'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
-import { getVisibleMessages } from '../../services/chat/branches.js'
 import { newChat, saveSessionVoiceRole, setConversationRoleVoiceLive } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
-import { computeReplyUsage, hasKnownPricing, usePricing } from '../../services/usage.js'
+import {
+  hasUsageEstimate,
+  summarizeSessionUsage,
+  usageTokenCount,
+  usePricing,
+} from '../../services/usage.js'
 import { useSettings } from '../../services/settings.js'
 import { useProviders } from '../../services/providers.js'
 import { sessionRoles } from '../../services/speech/roleTable.js'
@@ -23,26 +27,11 @@ import { SessionArtifactsButton } from './SessionArtifacts.js'
 import { SessionTitle } from './SessionTitle.js'
 import styles from './SessionView.module.css'
 
-/** 会话内所有已记录回复的 token 总量（输入含缓存 + 输出） */
-const sessionTokens = (session: Session): number =>
-  getVisibleMessages(session).reduce((total, message) => {
-    if (message.role !== 'assistant' || !message.usage) {
-      return total
-    }
-    return (
-      total +
-      (message.usage.input_tokens ?? 0) +
-      (message.usage.cache_read_input_tokens ?? 0) +
-      (message.usage.cache_creation_input_tokens ?? 0) +
-      (message.usage.output_tokens ?? 0)
-    )
-  }, 0)
-
 const formatTokens = (value: number) =>
   value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)
 
 const formatCost = (value: number) =>
-  value === 0 ? '—' : value >= 0.01 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
+  value === 0 || value >= 0.01 ? `¥${value.toFixed(2)}` : `¥${value.toFixed(4)}`
 
 /** 会话页：标题栏（移动端为顶栏）+ 消息列表，输入框吸底 */
 export const SessionView = ({
@@ -113,18 +102,12 @@ export const SessionView = ({
     (session.title || t(session.inherited ? 'inheritedChatTitle' : 'untitledChat')) +
     (agentName ? ' · ' + agentName : '')
   const openAssistant = () => setAssistantOpen(true)
-  const tokens = useMemo(() => sessionTokens(session), [session])
   const pricing = usePricing()
-  const cost = useMemo(
-    () =>
-      getVisibleMessages(session).reduce((total, message) => {
-        if (message.role !== 'assistant' || !message.usage) {
-          return total
-        }
-        return total + computeReplyUsage(message, pricing.pricing).costCny
-      }, 0),
-    [session, pricing]
+  const usage = useMemo(
+    () => (showUsage && !isMobile ? summarizeSessionUsage(session, pricing) : null),
+    [session, pricing, showUsage, isMobile]
   )
+  const tokens = usage ? usageTokenCount(usage) : 0
   const viewRef = useRef<HTMLDivElement>(null),
     dockRef = useRef<HTMLDivElement>(null),
     headerRef = useRef<HTMLDivElement>(null)
@@ -164,9 +147,6 @@ export const SessionView = ({
     observer.observe(header)
     return () => observer.disconnect()
   }, [isMobile, session.id])
-  const priced = getVisibleMessages(session).every(
-    (message) => message.role !== 'assistant' || hasKnownPricing(message)
-  )
   return (
     <div ref={viewRef} className={styles.view} data-testid="chat-view">
       {isMobile ? (
@@ -187,9 +167,17 @@ export const SessionView = ({
               onTop={backToTop}
               onAssistant={openAssistant}
             />
-            {showUsage && tokens > 0 ? (
-              <span className={styles.usage} title={t('usageTokensTitle')}>
-                {formatTokens(tokens)} tok{priced ? ` · ${formatCost(cost)}` : ''}
+            {usage && (tokens > 0 || usage.costCny > 0) ? (
+              <span
+                className={styles.usage}
+                title={
+                  usage.unpricedRequests > 0
+                    ? `${t('usageTokensTitle')} · ${t('usageMessagePartialCost', { count: usage.unpricedRequests })}`
+                    : t('usageTokensTitle')
+                }
+              >
+                {formatTokens(tokens)} tok
+                {hasUsageEstimate(usage) ? ` · ${formatCost(usage.costCny)}` : ''}
               </span>
             ) : null}
           </div>

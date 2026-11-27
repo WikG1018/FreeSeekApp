@@ -828,6 +828,72 @@ export const runImportCases = async ({ run }) => {
   )
 
   await run(
+    'partial native backup previews missing chats and originals before merge and can be cancelled',
+    async (page) => {
+      const id = 'native-partial-v8'
+      const original = Buffer.from('COMPLETE ORIGINAL', 'utf8')
+      const files = [
+        { id: 'present-v8', name: '现有.txt', size: original.length },
+        { id: 'missing-v8', name: '缺少.txt', size: 24 },
+      ].map((file) => ({ ...file, mimeType: 'text/plain', isImage: false, serverId: null }))
+      const session = {
+        id, title: '部分备份样本', createdAt: 1795737600000, updatedAt: 1795737600000,
+        messages: [{ id: 'partial-question', role: 'user', createdAt: 1795737600000,
+          content: '归档中存在的正文', files }],
+      }
+      const manifest = {
+        freeseek_backup_version: 8, sessions: [id], splitSessions: [],
+        files: [{ id: 'present-v8', type: 'text/plain', size: original.length }],
+        personas: [], defaultPersonaId: 'builtin-default',
+        partial: { kind: 'unreadable', skippedSessions: 2, missingOriginals: 1 },
+      }
+      const zip = Buffer.from(zipSync({
+        'manifest.json': strToU8(JSON.stringify(manifest)),
+        [`freeseek/sessions/${id}.json`]: strToU8(JSON.stringify(session)),
+        'freeseek/files/present-v8.bin': original,
+      }))
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        await a.seed([f.session({ id: 'keep-existing', messages: [f.user('old', '本机原文')] })])
+        a.settingsDialog.openSettings('data')
+      })
+      const start = async () => {
+        await page.locator('input[type="file"][accept*="application/zip"]').setInputFiles({
+          name: '部分备份.zip', mimeType: 'application/zip', buffer: zip,
+        })
+        await page.getByRole('button', { name: '开始导入', exact: true }).click()
+      }
+      const review = page.getByRole('dialog', { name: '备份内容不完整', exact: true })
+      await start()
+      await review.getByText('此备份缺少 2 个会话。', { exact: true }).waitFor()
+      await review.getByText('此备份缺少 1 份附件原件。', { exact: true }).waitFor()
+      await review.getByRole('button', { name: '取消', exact: true }).click()
+      await page.waitForFunction(() => !window.__audit.store.useChatStore.getState().importingHistory)
+      assert.equal(await page.evaluate((key) => window.__audit.db.loadSession(key), id), undefined)
+      await start()
+      await review.getByRole('button', { name: '导入可用会话', exact: true }).click()
+      const done = page.getByRole('dialog', { name: '导入完成', exact: true })
+      await done.getByText('此备份缺少 2 个会话。', { exact: true }).waitFor()
+      await done.getByText('此备份缺少 1 份附件原件。', { exact: true }).waitFor()
+      const stored = await page.evaluate(async (key) => {
+        const { db } = window.__audit
+        const chat = await db.loadSession(key)
+        return {
+          old: (await db.loadSession('keep-existing')).messages[0].content,
+          text: chat.messages[0].content,
+          present: await (await db.loadFile('present-v8')).text(),
+          expectedMissing: chat.messages[0].files[1].id,
+          missing: Boolean(await db.loadFile('missing-v8')),
+        }
+      }, id)
+      assert.deepEqual(stored, {
+        old: '本机原文', text: '归档中存在的正文', present: 'COMPLETE ORIGINAL',
+        expectedMissing: 'missing-v8', missing: false,
+      })
+    }
+  )
+  await run(
     'large native backup restores split parts and a missing part cannot replace history',
     async (page) => {
       const result = await page.evaluate(async () => {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 const dialog = (page) => page.getByRole('dialog').last()
 const back = (page) => dialog(page).getByRole('button', { name: '返回', exact: true }).click()
@@ -97,6 +98,145 @@ export const runInterfaceCases = async ({ run }) => {
       await totals.getByText('Cache hit rate').waitFor()
     }
   )
+  for (const protocol of ['deepseek', 'openai']) {
+    await run(`regeneration keeps each reply's reported cache stats (${protocol})`, async (page) => {
+      const versions = [
+        { text: '第一版回答。', rate: '25%', input: 1000, hit: 250, output: 32 },
+        { text: '重新生成的回答。', rate: '80%', input: 1000, hit: 800, output: 70 },
+        { text: '缓存未命中的回答。', rate: '0%', input: 1000, hit: 0, output: 22 },
+        { text: '没有缓存数据的回答。', rate: '—', input: 2000, output: 10 },
+      ]
+      await page.evaluate(({ protocol, versions }) => {
+        const a = window.__audit
+        const official = protocol === 'deepseek'
+        a.settings.setSearch(false)
+        a.settings.setShowUsage(true)
+        if (official) {
+          a.settings.setApiKey('cache-test-key')
+        } else {
+          a.providers.saveProvider({
+            ...a.providers.emptyProfile(),
+            name: '用量验收连接',
+            url: 'https://cache-fixture.invalid/v1',
+            apiKey: 'cache-test-key',
+            model: 'cache-test-model',
+          }, true)
+        }
+        const fetcher = window.fetch
+        const endpoint = official ? '/anthropic/v1/messages' : '/chat/completions'
+        let requests = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith(endpoint)) return fetcher(url, init)
+          const { text, input, hit, output } = versions[requests++]
+          const initialHit = hit === 0 ? 500 : hit
+          if (official && requests === 1) {
+            return a.response(text, {
+              input_tokens: input - hit,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: hit,
+              output_tokens: output,
+            })
+          }
+          const events = []
+          if (official) {
+            events.push(
+              {
+                type: 'message_start',
+                message: { usage: {
+                  input_tokens: input - (initialHit ?? 0),
+                  cache_read_input_tokens: initialHit,
+                } },
+              },
+              { type: 'content_block_start', index: 0, content_block: { type: 'text', text } },
+              { type: 'content_block_stop', index: 0 },
+              {
+                type: 'message_delta',
+                delta: { stop_reason: 'end_turn' },
+                usage: {
+                  output_tokens: requests === 2 ? 30 : output,
+                  ...(hit === 0 && { input_tokens: input, cache_read_input_tokens: 0 }),
+                },
+              }
+            )
+            if (requests === 2) {
+              events.push({
+                type: 'message_delta', delta: { stop_reason: null }, usage: { output_tokens: output },
+              })
+            }
+            events.push({ type: 'message_stop' })
+          } else {
+            events.push({
+              choices: [{ delta: { content: text }, finish_reason: 'stop' }],
+              usage: {
+                prompt_tokens: input,
+                prompt_tokens_details: { cached_tokens: initialHit },
+                ...(requests === 1 && { completion_tokens: output }),
+              },
+            })
+            if (requests > 1) {
+              events.push({
+                choices: [],
+                usage: {
+                  completion_tokens: output,
+                  prompt_tokens_details: hit === 0 ? { cached_tokens: 0 } : { audio_tokens: 0 },
+                },
+              })
+            }
+            events.push('[DONE]')
+          }
+          return new Response(
+            events.map((event) => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        }
+        a.drafts.setDraftText(null, '请为同一个问题给出另一种回答。')
+        a.store.sendMessage(null)
+      }, { protocol, versions })
+
+      const usage = page.getByTestId('message-scroll').getByRole('button', { name: /tok/ })
+      const verifyReply = async ({ text, rate, input, output }) => {
+        await page.evaluate(() => window.__audit.waitIdle())
+        await page.getByText(text, { exact: true }).waitFor()
+        assert.equal(await usage.count(), 1)
+        assert.match(await usage.getAttribute('title'), new RegExp(`缓存命中率 ${rate}`))
+        assert.match(await usage.innerText(), new RegExp(`^${(input + output).toLocaleString('zh-CN')} tok`))
+      }
+      await verifyReply(versions[0])
+      const regenerate = page.getByRole('button', { name: '重新生成', exact: true })
+      await regenerate.click()
+      await verifyReply(versions[1])
+      await page.getByRole('button', { name: '上一个版本', exact: true }).click()
+      await verifyReply(versions[0])
+      await page.getByRole('button', { name: '下一个版本', exact: true }).click()
+      await verifyReply(versions[1])
+      for (const version of versions.slice(2)) {
+        await regenerate.click()
+        await verifyReply(version)
+      }
+
+      const totals = await page.evaluate(async () => {
+        const a = window.__audit
+        const state = a.store.useChatStore.getState()
+        const session = await a.db.loadSession(state.activeId)
+        const models = await a.usage.collectModelUsage()
+        const snapshots = [
+          a.usage.summarizeSessionUsage(session),
+          (await a.usage.collectUsage()).total,
+          a.usage.sumUsage(models[0].days),
+        ]
+        return snapshots.map((total) => [
+          total.requests, total.outputTokens, total.measuredCacheHits, total.measuredCacheInput,
+          a.usage.formatCacheHitRate(a.usage.totalCacheCounts(total), 'zh-CN'),
+        ])
+      })
+      assert.deepEqual(totals, Array.from({ length: 3 }, () => [4, 134, 1050, 3000, '35%']))
+      await page.reload()
+      await page.getByRole('button', { name: '上一个版本', exact: true }).click()
+      await verifyReply(versions[2])
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('usage'))
+      await page.locator('[data-settings-page="usage"]').getByText('35%', { exact: true }).waitFor()
+    })
+  }
   await run(
     'chat Enter preference applies to the composer, keeps IME selection safe and leaves search submitting',
     async (page) => {
@@ -1074,6 +1214,164 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByRole('button', { name: '全部', exact: true }).click()
       assert.equal(await ranking.getByRole('button').count(), 5)
       assert.ok(await ranking.getByRole('button', { name: /未标注模型/ }).isVisible())
+    }
+  )
+
+  await run(
+    'usage estimates agree across replies, sessions and models with partial pricing and old branches',
+    async (page) => {
+      const evidence = process.env.FREESEEK_UX_EVIDENCE
+      const capture = async (name) => {
+        if (evidence) {
+          await page.screenshot({
+            path: resolve(evidence, `${page.viewportSize().width}-usage-${name}.png`),
+          })
+        }
+      }
+      const reconciliation = await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const makeUsage = (miss, hit, written, output) => ({
+          input_tokens: miss,
+          cache_read_input_tokens: hit,
+          cache_creation_input_tokens: written,
+          output_tokens: output,
+        })
+        const custom = a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name: '用量测试连接',
+          url: 'https://usage.example.test/v1',
+          model: 'test-search-model',
+        })
+        const date = Date.UTC(2026, 10, 26, 2) // Thursday at 10:00 Beijing time
+        const official = { providerId: 'deepseek' }
+        const pro = f.assistant('previous-pro', '重试前的回复', {
+          parentId: 'question',
+          model: 'deepseek-v4-pro',
+          connection: official,
+          createdAt: Date.UTC(2026, 10, 22, 1), // Sunday at 09:00 Beijing time
+          usage: makeUsage(400_000, 100_000, 0, 210_000),
+        })
+        const current = f.assistant('mixed-search', '已完成两次独立搜索。', {
+          parentId: 'question',
+          model: 'test-search-model',
+          connection: { providerId: custom.id },
+          createdAt: date,
+          usage: { ...makeUsage(100_000, 0, 0, 20_000), standalone_search_requests: 2 },
+        })
+        const flash = f.assistant('flash-priced', '已完成服务端搜索。', {
+          model: 'deepseek-flash',
+          connection: official,
+          createdAt: date,
+          usage: {
+            ...makeUsage(300_000, 600_000, 100_000, 200_000),
+            server_tool_use: { tool_search: 2, tool_fetch: 1 },
+          },
+        })
+        const older = f.assistant('unknown-model', '旧档案没有记录模型。', {
+          model: null,
+          createdAt: date,
+          usage: makeUsage(100_000, 0, 0, 0),
+        })
+        await a.seed([
+          f.session({
+            id: 'search-usage',
+            title: '独立搜索费用',
+            rootMessageId: 'question',
+            messages: [
+              f.user('question', '核对用量', { selectedChildId: current.id }),
+              pro,
+              current,
+            ],
+          }),
+          f.session({ title: '官方服务端搜索', messages: [flash] }),
+          f.session({ title: '旧会话费用', messages: [older] }),
+        ])
+        const ledger = await a.usage.collectUsage()
+        const models = a.usage.sumUsage(
+          (await a.usage.collectModelUsage()).flatMap((row) => row.days)
+        )
+        const metrics = ({
+          costCny,
+          requests,
+          unpricedRequests,
+          measuredCacheHits,
+          measuredCacheInput,
+        }) => ({
+          cost: Number(costCny.toFixed(4)),
+          requests,
+          unpricedRequests,
+          measuredCacheHits,
+          measuredCacheInput,
+        })
+        const holidayPrices = [
+          Date.UTC(2026, 9, 1, 1), // National Day, Thursday
+          Date.UTC(2026, 9, 8, 1), // First Thursday back
+          Date.UTC(2026, 9, 10, 1), // Saturday makeup workday
+          Date.UTC(2027, 0, 1, 1), // New Year's Day, Friday
+        ].map(
+          (createdAt) =>
+            a.usage.computeMessageUsage(makeUsage(1_000_000, 0, 0, 0), createdAt).costCny
+        )
+        return { totals: [metrics(ledger.total), metrics(models)], holidayPrices }
+      })
+      const expected = {
+        cost: 7.084,
+        requests: 4,
+        unpricedRequests: 2,
+        measuredCacheHits: 700_000,
+        measuredCacheInput: 1_500_000,
+      }
+      assert.deepEqual(reconciliation, {
+        totals: [expected, expected],
+        holidayPrices: [1, 2, 1, 1],
+      })
+      const replyUsage = page.getByRole('button', { name: '120.0k tok · ¥0.010', exact: true })
+      await replyUsage.click()
+      await page.getByText(/另有 1 次请求的模型费用待计/).waitFor()
+      if (page.viewportSize().width > 900) {
+        await page
+          .getByTestId('chat-header')
+          .getByText('830.0k tok · ¥4.66', { exact: true })
+          .waitFor()
+      }
+      await capture('reply-zh-light')
+      const mobileOpener = page.getByRole('button', { name: '打开边栏', exact: true })
+      if (await mobileOpener.isVisible()) {
+        await mobileOpener.click()
+      }
+      await page
+        .getByTestId('sider-footer')
+        .getByRole('button', { name: '设置', exact: true })
+        .click()
+      await page.getByRole('button', { name: '用量与费用', exact: true }).click()
+      const ledger = page.locator('[data-settings-page="usage"]')
+      await ledger.getByText('¥7.08', { exact: true }).first().waitFor()
+      await ledger.getByText(/另有 2 次请求的模型费用待计/).waitFor()
+      await ledger.getByText('46.7%', { exact: true }).waitFor()
+      await capture('total-zh-light')
+      await page.evaluate(() => {
+        window.__audit.settings.setThemePreference('dark')
+        window.__audit.settings.setFontScale(1.25)
+      })
+      await capture('total-zh-dark-large')
+      await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
+      await ledger.getByText('Cache hit rate').waitFor()
+      await ledger.getByText(/Model costs for 2 requests are still unknown/).waitFor()
+      assert.equal(
+        await ledger.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+        true
+      )
+      await capture('total-en-dark-large')
+      await page.evaluate(() => window.__audit.settings.setLocale('zh-CN'))
+      await ledger.getByRole('button', { name: '按模型统计', exact: true }).click()
+      await page.getByRole('button', { name: '全部', exact: true }).click()
+      const ranking = page.getByTestId('model-usage-ranking')
+      const custom = ranking.getByRole('button', { name: /test-search-model.*用量测试连接/ })
+      await custom.click()
+      await page.getByTestId('model-usage-overview').getByText('¥0.0100', { exact: true }).waitFor()
+      await page.getByText(/另有 1 次请求的模型单价待补充/).waitFor()
+      await capture('model-zh-dark-large')
     }
   )
 

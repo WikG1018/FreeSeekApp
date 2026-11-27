@@ -1,6 +1,35 @@
 import assert from 'node:assert/strict'
 
 export const runAssistantCases = async (run) => {
+  await run('automatic memory captures a durable second sentence in a long turn and excludes quoted and temporary instructions', async (page) => {
+    const result = await page.evaluate(async () => {
+      const a = window.__audit
+      const id = 'memory-sentence-fixture'
+      await a.seed([a.fixtures.session({ id })])
+      await a.assistantLibrary.setAutomaticMemory(true)
+      a.settings.setApiKey('fixture-natural-memory')
+      a.settings.setSearch(false)
+      window.fetch = async () => a.response('收到。')
+      for (const input of [
+        '请复述“这是一段对话。以后校对都用 Word。”',
+        "Please copy this phrase: 'First sentence. Always use JSON.'",
+        '> 以后请把回复写成诗。\n今天只要两行。',
+        '这次请用 Word。以后都用 PDF 可以吗？',
+        '故事里的角色说：以后只写英文。',
+        '给你代码。\n```\n以后都用 CSV。\n```',
+        '以后把我的标记 tp-0123456789abcdef0123456789abcdef 加到报告末尾。',
+        '普通背景。'.repeat(1500) + '我希望以后给我的周报都用表格。',
+        '帮我改一下这份周报。以后给我的周报都用表格。',
+      ]) {
+        a.drafts.setDraftText(id, input)
+        a.store.sendMessage(id)
+        await a.waitIdle()
+      }
+      const data = await a.assistantLibrary.readAssistantLibrary()
+      return { notes: data.memories.map(x => x.text), requests: data.maintenance.requests }
+    })
+    assert.deepEqual(result, { notes: ['给我的周报都用表格'], requests: 0 })
+  })
   await run(
     'automatic memory uses one switch for all configured models and counts its own usage',
     async (page) => {
@@ -123,6 +152,61 @@ export const runAssistantCases = async (run) => {
       assert.equal(await page.getByRole('dialog', { name: '允许使用这些记忆？' }).count(), 0)
     }
   )
+
+  await run('automatic memory resumes once after returning from the background and respects the shared request cooldown', async (page) => {
+    const waitForDiagnostic = (name) => page.evaluate(async (name) => {
+      const timeout = Date.now() + 25000
+      while (Date.now() < timeout) {
+        if ((await window.__audit.diagnostics.readDiagnosticLogs()).events.some(e => e.event === name)) return
+        await new Promise(resolve => setTimeout(resolve, 150))
+      }
+      throw new Error('Missing diagnostic event ' + name)
+    }, name)
+    await page.evaluate(async () => {
+      const a = window.__audit
+      await a.seed([a.fixtures.session({id: 'background-memory'})])
+      await a.assistantLibrary.setAutomaticMemory(true)
+      a.settings.setApiKey('synthetic-background-memory')
+      a.settings.setSearch(false)
+      let calls = 0
+      window.fetch = async (_url, init) => {
+        if (String(JSON.parse(init.body).system).startsWith('Extract only stable preferences')) {
+          calls++
+          return a.response('{"items":[]}')
+        }
+        return a.response('收到。')
+      }
+      window.__memoryCalls = () => calls
+      const request = indexedDB.open('freeseek-assistants')
+      const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const tx = db.transaction('state', 'readwrite')
+      const store = tx.objectStore('state'), get = store.get('library')
+      get.onsuccess = () => store.put({ ...get.result, maintenance: { requests: 0, input: 0, output: 0, lastAt: Date.now() - 50000 } }, 'library')
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error) })
+      db.close()
+      for (const text of ['核对图纸时，我喜欢先看总表。','对照图纸时，我更想先看总表。']) {
+        a.drafts.setDraftText('background-memory', text)
+        a.store.sendMessage('background-memory')
+        await a.waitIdle()
+      }
+      Object.defineProperty(document, 'hidden', {configurable:true, value:true})
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitForDiagnostic('assistant.memory-maintenance.deferred')
+    assert.equal(await page.evaluate(() => window.__memoryCalls()), 0)
+    await page.evaluate(() => {
+      delete document.hidden
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitForDiagnostic('assistant.memory-maintenance.completed')
+    const observed = await page.evaluate(async () => {
+      const a=window.__audit
+      const library = await a.assistantLibrary.readAssistantLibrary()
+      const events = (await a.diagnostics.readDiagnosticLogs()).events
+      return {requests:library.maintenance.requests, notes:library.memories.length, calls:window.__memoryCalls(), cooldown:events.some(e => e.details.reason === 'cooldown')}
+    })
+    assert.deepEqual(observed,{requests:1, notes:0, calls:1, cooldown:true})
+  })
 
   await run(
     'assistant automatic memory saves, revises and undoes durable preferences without confirmation',
@@ -364,7 +448,10 @@ export const runAssistantCases = async (run) => {
       await page.getByRole('button', { name: '记忆详情', exact: true }).click()
       await page.getByText('自动整理用量', { exact: true }).waitFor()
       assert.equal(await page.getByRole('switch').count(), 0)
-      assert.equal(await page.getByText('已授权的模型连接', { exact: true }).count(), 0)
+      assert.equal(
+        await page.getByRole('button', { name: '已授权的模型连接', exact: true }).getAttribute('aria-expanded'),
+        'false'
+      )
       assert.ok(
         await page.evaluate(() => {
           const a = window.__audit
@@ -905,6 +992,171 @@ export const runAssistantCases = async (run) => {
       assert.equal(await page.evaluate(() => window.__assistantRequests.length), 1)
     }
   )
+
+  for (const ui of [
+    {
+      locale: 'zh-CN',
+      details: '记忆详情',
+      grants: '已授权的模型连接',
+      chatScope: (title) => '仅此对话 · ' + title,
+      allScope: '此连接的所有对话',
+      revoke: (name, scope) => '撤回 ' + name + ' 的授权（' + scope + '）',
+      permission: '允许使用这些记忆？',
+      skip: '本次跳过',
+      auto: '自动记忆',
+    },
+    {
+      locale: 'en-US',
+      details: 'Memory details',
+      grants: 'Approved connections',
+      chatScope: (title) => 'This chat only · ' + title,
+      allScope: 'All chats on this connection',
+      revoke: (name, scope) => 'Revoke access for ' + name + ' (' + scope + ')',
+      permission: 'Allow these memories?',
+      skip: 'Skip for now',
+      auto: 'Automatic memory',
+    },
+  ]) {
+    await run('legacy memory access revocation preserves other scopes in ' + ui.locale, async (page) => {
+      const { scoped, whole } = await page.evaluate(async (locale) => {
+        const a = window.__audit
+        a.settings.setLocale(locale)
+        await a.seed([
+          a.fixtures.session({ id: 'scoped-a', title: 'Review A', rootMessageId: null }),
+          a.fixtures.session({ id: 'scoped-b', title: 'Review B', rootMessageId: null }),
+        ])
+        const provider = (name, host) => a.providers.saveProvider({
+          ...a.providers.emptyProfile(),
+          name,
+          url: 'https://' + host + '.example.test/v1',
+          protocol: 'openai',
+          model: 'test-model',
+          apiKey: 'synthetic-memory-grant',
+        }, false)
+        const scoped = provider('Scoped provider', 'scoped')
+        const whole = provider('Connection provider', 'connection')
+        await a.assistantLibrary.saveMemory({
+          text: 'Use the sample project review headings.',
+          pinned: true,
+        })
+        await a.assistantLibrary.setMemoryEnabled(true)
+        for (const sessionId of ['scoped-a', 'scoped-b']) {
+          await a.assistantLibrary.allowMemory({
+            connection: scoped.id + ':' + scoped.revision,
+            name: scoped.name,
+            sessionId,
+          })
+        }
+        await a.assistantLibrary.allowMemory({
+          connection: whole.id + ':' + whole.revision,
+          name: whole.name,
+        })
+        await a.assistantLibrary.allowMemory({
+          connection: scoped.id + ':superseded',
+          name: 'Stale endpoint',
+        })
+        window.__memoryGrantRequests = []
+        const fetcher = window.fetch
+        window.fetch = (input, init) => {
+          const url = new URL(input)
+          if (!url.host.endsWith('.example.test') || url.pathname !== '/v1/chat/completions') {
+            return fetcher(input, init)
+          }
+          const { messages } = JSON.parse(init.body)
+          window.__memoryGrantRequests.push({
+            host: url.host,
+            system: messages.filter(({ role }) => role === 'system').map(({ content }) => content).join('\n'),
+          })
+          return Promise.resolve(new Response(
+            'data: {"choices":[{"delta":{"content":"Model reply"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+            { headers: { 'content-type': 'text/event-stream' } }
+          ))
+        }
+        return {
+          scoped: { id: scoped.id, name: scoped.name, host: 'scoped.example.test' },
+          whole: { id: whole.id, name: whole.name, host: 'connection.example.test' },
+        }
+      }, ui.locale)
+      const disclosure = page.getByRole('button', { name: ui.grants, exact: true })
+      const approval = page.getByRole('dialog', { name: ui.permission, exact: true })
+      const openDetails = async () => {
+        await page.evaluate(() => window.__audit.settingsDialog.openSettings('assistantSettings'))
+        await page.getByRole('button', { name: ui.details, exact: true }).click()
+      }
+      const closeSettings = () => page.evaluate(() => window.__audit.settingsDialog.closeSettings())
+      const revokeButton = (provider, scope) =>
+        page.getByRole('button', { name: ui.revoke(provider.name, scope), exact: true })
+      const expectMemory = async (provider, id, allowed) => {
+        const count = await page.evaluate(({ provider, id }) => {
+          const a = window.__audit
+          a.providers.selectModel({ providerId: provider.id, model: 'test-model' })
+          a.store.selectSession(id)
+          return window.__memoryGrantRequests.length
+        }, { provider, id })
+        await page.waitForFunction((id) => Boolean(window.__audit.store.useChatStore.getState().sessionCache[id]), id)
+        await page.evaluate((id) => {
+          const a = window.__audit
+          a.drafts.setDraftText(id, 'Which headings should the sample project review use?')
+          if (!a.store.sendMessage(id)) throw new Error('Fixture question did not send')
+        }, id)
+        if (!allowed) {
+          await approval.waitFor()
+          assert.equal(await page.evaluate(() => window.__memoryGrantRequests.length), count)
+          await approval.getByRole('button', { name: ui.skip, exact: true }).click()
+        }
+        await page.evaluate(() => window.__audit.waitIdle())
+        const requests = await page.evaluate(() => window.__memoryGrantRequests)
+        assert.equal(requests.length, count + 1)
+        assert.equal(requests.at(-1).host, provider.host)
+        assert.equal(requests.at(-1).system.includes('Use the sample project review headings.'), allowed)
+      }
+
+      await expectMemory(scoped, 'scoped-a', true)
+      await expectMemory(whole, 'scoped-a', true)
+      await openDetails()
+      assert.equal(await disclosure.getAttribute('aria-expanded'), 'false')
+      await disclosure.click()
+      const chatAccess = revokeButton(scoped, ui.chatScope('Review A'))
+      await chatAccess.waitFor()
+      assert.equal(await page.getByText('Stale endpoint', { exact: true }).count(), 0)
+      if (process.env.FREESEEK_ASSISTANT_GRANT_PREVIEW && ui.locale === 'zh-CN') {
+        await page.screenshot({
+          path: process.env.FREESEEK_ASSISTANT_GRANT_PREVIEW,
+          animations: 'disabled',
+        })
+      }
+      await chatAccess.click()
+      await chatAccess.waitFor({ state: 'detached' })
+      await revokeButton(scoped, ui.chatScope('Review B')).waitFor()
+      await revokeButton(whole, ui.allScope).waitFor()
+      await closeSettings()
+      await expectMemory(scoped, 'scoped-a', false)
+      await expectMemory(scoped, 'scoped-b', true)
+      await expectMemory(whole, 'scoped-a', true)
+
+      await openDetails()
+      await disclosure.click()
+      const connectionAccess = revokeButton(whole, ui.allScope)
+      await connectionAccess.click()
+      await connectionAccess.waitFor({ state: 'detached' })
+      await revokeButton(scoped, ui.chatScope('Review B')).waitFor()
+      await closeSettings()
+      await expectMemory(whole, 'scoped-a', false)
+      await expectMemory(whole, 'scoped-b', false)
+      await expectMemory(scoped, 'scoped-b', true)
+
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('assistantSettings'))
+      await page.getByRole('switch', { name: ui.auto, exact: true }).click()
+      await page.waitForFunction(() => window.__audit.assistantLibrary.usesAutomaticMemory(
+        window.__audit.assistantLibrary.useAssistantLibrary.getState().data
+      ))
+      await page.getByRole('button', { name: ui.details, exact: true }).click()
+      assert.equal(await disclosure.count(), 0)
+      await closeSettings()
+      await expectMemory(scoped, 'scoped-a', true)
+      await expectMemory(whole, 'scoped-a', true)
+    })
+  }
 
   await run(
     'assistant memory backup excludes grants and a revoked note comes out of Chinese retrieval',

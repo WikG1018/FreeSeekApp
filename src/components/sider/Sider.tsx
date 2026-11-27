@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { useAssistantLibrary } from '../../services/assistants/library.js'
 import {
   IconChevronRightOutline14,
+  IconCloseOutline16,
   IconPanelLeftOutline16,
   IconSearchOutline16,
   IconSettingsOutline16,
@@ -16,8 +17,15 @@ import {
   type SiderOrder,
 } from '../../services/settings.js'
 import { groupSessions, orderSessions } from '../../services/chat/sessionGroups.js'
-import { newChat, removeSession, retryInitChat, useChatStore } from '../../services/chat/store.js'
+import {
+  historyMissingMessage,
+  newChat,
+  removeSession,
+  retryInitChat,
+  useChatStore,
+} from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
+import { historyVaultAvailable, useHistoryVault } from '../../services/chat/historyVault.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
@@ -50,6 +58,11 @@ export const Sider = ({
   const initError = useChatStore((state) => state.initError)
   const historyUpgradeBlocked = useChatStore((state) => state.historyUpgradeBlocked)
   const historyMissing = useChatStore((state) => state.historyMissing)
+  const historyRecoveryReason = useChatStore((state) => state.historyRecoveryReason)
+  const restoringVault = useHistoryVault((state) => state.phase === 'restoring')
+  const showRecoveryInMain =
+    !mobile && !ready && initError && historyVaultAvailable() &&
+    historyRecoveryReason === 'empty-after-known-history'
   const activeId = useChatStore((state) => state.activeId)
   const order = useSettings((state) => state.siderOrder)
   // 排序里的「按类型」依赖 Agent 会话：只有开关开启、或历史里已存在 Agent 会话时才有意义
@@ -65,6 +78,12 @@ export const Sider = ({
     onSearchActive?.(searchingHistory)
   }, [onSearchActive, searchingHistory])
   const composing = useRef(false)
+  const searchBox = useRef<HTMLDivElement>(null)
+  const cancelSearch = () => {
+    composing.current = false
+    setQuery('')
+    searchBox.current?.focus({ preventScroll: true })
+  }
   const search = useSessionSearch(sessions, keyword)
   const listRef = useRef<HTMLDivElement>(null)
   const rowPositions = useRef<Map<string, number> | null>(null)
@@ -189,30 +208,54 @@ export const Sider = ({
         <SidebarUpdate />
       </header>
       <div className={styles.quickActions} data-testid="sider-quick-actions">
-        <label className={styles.searchBox}>
-          <span className={styles.searchIcon} aria-hidden="true">
-            <IconSearchOutline16 />
-          </span>
-          <input
-            className={styles.searchInput}
-            type="search"
-            aria-label={t('siderSearchPlaceholder')}
-            placeholder={t('siderSearchShort')}
-            enterKeyHint="search"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            onCompositionStart={() => (composing.current = true)}
-            onCompositionEnd={(event) => {
-              composing.current = false
-              setQuery(event.currentTarget.value)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !composing.current && !event.nativeEvent.isComposing) {
-                event.currentTarget.blur()
-              }
-            }}
-          />
-        </label>
+        <div className={styles.searchBox} ref={searchBox} tabIndex={-1}>
+          <label className={styles.searchField}>
+            <span className={styles.searchIcon} aria-hidden="true">
+              <IconSearchOutline16 />
+            </span>
+            <input
+              className={styles.searchInput}
+              type="search"
+              aria-label={t('siderSearchPlaceholder')}
+              placeholder={t('siderSearchShort')}
+              enterKeyHint="search"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              onCompositionStart={() => (composing.current = true)}
+              onCompositionEnd={(event) => {
+                if (composing.current) {
+                  composing.current = false
+                  setQuery(event.currentTarget.value)
+                }
+              }}
+              onKeyDown={(event) => {
+                if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) {
+                  return
+                }
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur()
+                } else if (event.key === 'Escape' && query) {
+                  event.preventDefault()
+                  cancelSearch()
+                }
+              }}
+            />
+          </label>
+          {query && (
+            <button
+              type="button"
+              className={styles.searchCancel}
+              aria-label={t('siderSearchCancel')}
+              title={t('siderSearchCancel')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={cancelSearch}
+            >
+              <span aria-hidden="true">
+                <IconCloseOutline16 />
+              </span>
+            </button>
+          )}
+        </div>
         <button
           type="button"
           className={styles.newChat}
@@ -254,21 +297,26 @@ export const Sider = ({
           }}
         >
           <div data-scroll-edge-content="">
-            {(!ready || historyMissing) && (
+            {(!ready || historyMissing) && !showRecoveryInMain && (
               <div className={styles.historyStatus} role="status">
                 <p>
                   {t(
                     historyMissing
-                      ? 'historyPreviouslySaved'
+                      ? historyMissingMessage(historyRecoveryReason)
                       : initError
                         ? historyUpgradeBlocked
                           ? 'historyUpgradeBlocked'
-                          : 'sessionListLoadFailed'
+                          : 'historyStartupReadUnavailable'
                         : 'sessionLoading'
                   )}
                 </p>
                 {(initError || historyMissing) && (
-                  <Button variant="outlined" size="m" onClick={() => void retryInitChat()}>
+                  <Button
+                    variant="outlined"
+                    size="m"
+                    disabled={restoringVault}
+                    onClick={() => void retryInitChat()}
+                  >
                     {t('retry')}
                   </Button>
                 )}
@@ -398,7 +446,7 @@ export const Sider = ({
             </>
           }
         >
-          {t('deleteSessionWithFilesDescription')}
+          {t(historyVaultAvailable() ? 'historyVaultDeleteSession' : 'deleteSessionWithFilesDescription')}
           {hasLinkedMemory && (
             <label className={styles.deleteMemory}>
               <input

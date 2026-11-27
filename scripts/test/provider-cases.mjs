@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { resolve } from 'node:path'
 
 const PRO_EXTENSION_REJECTION =
   'The server-side tool calls (deepseek_web_search, deepseek_read_url) and the title generation feature are unavailable for model deepseek-v4-pro. Please use deepseek-flash instead. (request_id: test-pro-extensions)'
@@ -917,7 +918,8 @@ export const runProviderCases = async ({ run }) => {
                   delta: { type: 'input_json_delta', partial_json: '}' },
                 },
                 { type: 'content_block_stop', index: 1 },
-                { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage },
+                { type: 'message_delta', delta: { stop_reason: 'tool_use' } },
+                { type: 'message_delta', delta: {}, usage: { output_tokens: usage.output_tokens } },
                 { type: 'message_stop' },
               ]
               return new Response(
@@ -1000,6 +1002,7 @@ export const runProviderCases = async ({ run }) => {
         input_tokens: 53,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 15,
+        cache_counts: { hit: 15, input: 68 },
         output_tokens: 11,
         standalone_search_requests: 3,
       })
@@ -1205,6 +1208,7 @@ export const runProviderCases = async ({ run }) => {
               apiKey: 'sk-CUSTOM_PRIVATE_CANARY_123',
               model: 'model-any',
               models: ['model-any'],
+              modelSettings: { 'model-any': { vision: true, pdf: true } },
             },
             true
           )
@@ -1290,6 +1294,21 @@ export const runProviderCases = async ({ run }) => {
               { headers: { 'Content-Type': 'text/event-stream' } }
             )
           }
+          const pixel = Uint8Array.from(
+            atob(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cqGQAAAAASUVORK5CYII='
+            ),
+            (byte) => byte.charCodeAt(0)
+          )
+          a.drafts.addDraftFiles(
+            null,
+            [
+              new File([pixel], 'pixel.png', { type: 'image/png' }),
+              new File(['%PDF-1.7\n%%EOF'], 'fixture.pdf', { type: 'application/pdf' }),
+              new File(['本地纯文本标记'], 'fixture.txt', { type: 'text/plain' }),
+            ],
+            ''
+          )
           a.drafts.setDraftText(null, 'hello')
           a.store.sendMessage(null)
           await a.waitIdle()
@@ -1346,6 +1365,29 @@ export const runProviderCases = async ({ run }) => {
           ],
           `${['anthropic', 'gemini'].includes(protocol) ? '' : 'Bearer '}sk-CUSTOM_PRIVATE_CANARY_123`
         )
+        const body = call.body
+        const user = (body.input ?? body.contents ?? body.messages).find(
+          (item) => item.role === 'user'
+        )
+        const parts = user.parts ?? user.content
+        assert.ok(parts.some((part) => part.text?.includes('本地纯文本标记')))
+        const pdf = {
+          openai: () => parts.find((part) => part.type === 'file').file.file_data.split(',')[1],
+          responses: () => parts.find((part) => part.type === 'input_file').file_data.split(',')[1],
+          anthropic: () => parts.find((part) => part.type === 'document').source.data,
+          gemini: () =>
+            parts.find((part) => part.inlineData?.mimeType === 'application/pdf').inlineData.data,
+        }[protocol]()
+        assert.equal(Buffer.from(pdf, 'base64').toString(), '%PDF-1.7\n%%EOF')
+        const image = {
+          openai: () => parts.find((part) => part.type === 'image_url').image_url.url,
+          responses: () => parts.find((part) => part.type === 'input_image').image_url,
+          anthropic: () => parts.find((part) => part.type === 'image').source.media_type,
+          gemini: () =>
+            parts.find((part) => part.inlineData?.mimeType.startsWith('image/')).inlineData
+              .mimeType,
+        }[protocol]()
+        assert.match(image, /image\/(?:png|jpeg|webp)/)
       }
     )
   }
@@ -1577,6 +1619,80 @@ export const runProviderCases = async ({ run }) => {
     }
   )
   await run(
+    'custom attachment preparation cancels active reads and limits repeated attachment references',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const f = a.fixtures
+        const prepare = a.providerContent.prepareProviderMessages
+        const file = {
+          id: 'pdf',
+          name: '校验样本.pdf',
+          size: 8,
+          mimeType: 'application/pdf',
+          isImage: false,
+          serverId: null,
+        }
+        const question = f.user('q', '文件测试', { files: [file] })
+        const controller = new AbortController()
+        const Reader = window.FileReader
+        let cancelled = 0
+        window.FileReader = class extends Reader {
+          readAsDataURL(blob) {
+            super.readAsDataURL(blob)
+            queueMicrotask(() => controller.abort())
+          }
+          abort() {
+            cancelled++
+            super.abort()
+          }
+        }
+        let abortName = null
+        try {
+          await prepare(
+            { vision: false, pdf: true },
+            { history: [], question },
+            controller.signal,
+            async () => new Blob(['%PDF-fixture'], { type: 'application/pdf' })
+          )
+        } catch (error) {
+          abortName = error.name
+        } finally {
+          window.FileReader = Reader
+        }
+        const large = new Blob([new Uint8Array(7 * 1024 * 1024)], { type: 'application/pdf' })
+        const history = [
+          f.user('first', '首次引用', { files: [file] }),
+          f.assistant('one', '已读'),
+          f.user('second', '再次引用', { files: [file] }),
+          f.assistant('two', '已读'),
+        ]
+        let limit = null
+        let reads = 0
+        try {
+          await prepare(
+            { vision: false, pdf: true },
+            { history, question },
+            new AbortController().signal,
+            async () => {
+              reads++
+              return large
+            }
+          )
+        } catch (error) {
+          limit = error.localMessage?.key
+        }
+        return { abortName, cancelled, limit, reads }
+      })
+      assert.deepEqual(result, {
+        abortName: 'AbortError',
+        cancelled: 1,
+        limit: 'providerFileTooLarge',
+        reads: 1,
+      })
+    }
+  )
+  await run(
     'provider errors and cut streams retain partial output without auto-retrying another service',
     async (page) => {
       const result = await page.evaluate(async () => {
@@ -1610,6 +1726,260 @@ export const runProviderCases = async ({ run }) => {
         }
       })
       assert.deepEqual(result, { calls: 1, text: 'partial', status: 'error', kind: 'interrupted' })
+    }
+  )
+  await run(
+    'custom protocol endings preserve partial replies and reported usage without misreporting success',
+    async (page) => {
+      const samples = [
+        {
+          protocol: 'openai',
+          events: [
+            {
+              choices: [{ delta: { content: '已收到合成正文。' }, finish_reason: 'gateway_exit' }],
+            },
+            { choices: [], usage: { prompt_tokens: 11, completion_tokens: 3 } },
+            '[DONE]',
+          ],
+          expected: { status: 'error', key: 'providerUnknownStopReason', tokens: 14 },
+        },
+        {
+          protocol: 'responses',
+          events: [
+            { type: 'response.output_text.delta', delta: '已收到合成正文。' },
+            {
+              type: 'response.incomplete',
+              response: { status: 'incomplete', usage: { input_tokens: 11, output_tokens: 3 } },
+            },
+          ],
+          expected: { status: 'error', key: 'providerInterrupted', tokens: 14 },
+        },
+        {
+          protocol: 'responses',
+          json: {
+            status: 'cancelled',
+            output: [
+              { type: 'message', content: [{ type: 'output_text', text: '已收到合成正文。' }] },
+            ],
+          },
+          expected: { status: 'error', key: 'providerInterrupted', tokens: 0 },
+        },
+        {
+          protocol: 'responses',
+          events: [
+            { type: 'response.output_text.delta', delta: '已收到合成正文。' },
+            {
+              type: 'response.incomplete',
+              response: {
+                status: 'incomplete',
+                incomplete_details: { reason: 'max_output_tokens' },
+                usage: { input_tokens: 11, output_tokens: 3 },
+              },
+            },
+          ],
+          expected: { status: 'done', reason: 'max_tokens', tokens: 14 },
+        },
+        {
+          protocol: 'anthropic',
+          events: [
+            { type: 'message_start', message: { usage: { input_tokens: 11 } } },
+            {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '已收到合成正文。' },
+            },
+            {
+              type: 'message_delta',
+              delta: { stop_reason: 'pause_turn' },
+              usage: { output_tokens: 3 },
+            },
+            { type: 'message_stop' },
+          ],
+          expected: { status: 'error', key: 'providerInterrupted', tokens: 14 },
+        },
+        {
+          protocol: 'anthropic',
+          events: [
+            { type: 'message_start', message: {} },
+            {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '已收到合成正文。' },
+            },
+            { type: 'message_delta', delta: { stop_reason: 'model_context_window_exceeded' } },
+            { type: 'message_stop' },
+          ],
+          expected: { status: 'error', key: 'replyContextTooLong', tokens: 0 },
+        },
+        {
+          protocol: 'anthropic',
+          events: [
+            {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '已收到合成正文。' },
+            },
+            { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+            { type: 'message_delta', delta: {}, usage: { input_tokens: 11, output_tokens: 3 } },
+            { type: 'message_stop' },
+          ],
+          expected: { status: 'done', reason: 'max_tokens', tokens: 14 },
+        },
+        {
+          protocol: 'gemini',
+          events: [
+            {
+              candidates: [
+                {
+                  content: { parts: [{ text: '已收到合成正文。' }] },
+                  finishReason: 'IMAGE_SAFETY',
+                },
+              ],
+              usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 3 },
+            },
+          ],
+          expected: { status: 'done', reason: 'refusal', tokens: 14 },
+        },
+        {
+          protocol: 'gemini',
+          events: [
+            {
+              candidates: [
+                { content: { parts: [{ text: '已收到合成正文。' }] }, finishReason: 'OTHER' },
+              ],
+              usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 3 },
+            },
+          ],
+          expected: { status: 'error', key: 'providerUnknownStopReason', tokens: 14 },
+        },
+      ]
+      const observations = []
+      for (const [index, sample] of samples.entries()) {
+        await page.evaluate(({ protocol, events, json }) => {
+          const a = window.__audit
+          a.store.newChat()
+          a.providers.saveProvider(
+            {
+              ...a.providers.emptyProfile(),
+              name: `结束状态 ${protocol}`,
+              protocol,
+              model: 'termination-fixture',
+              url: 'https://terminations.example.test/v1',
+              apiKey: 'fixture-key',
+              stream: !json,
+            },
+            true
+          )
+          window.fetch = async () =>
+            json
+              ? Response.json(json)
+              : new Response(
+                  events
+                    .map(
+                      (value) =>
+                        `data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`
+                    )
+                    .join(''),
+                  { headers: { 'Content-Type': 'text/event-stream' } }
+                )
+        }, sample)
+        const input = page.getByTestId('chat-composer').locator('textarea')
+        const question = `验证第 ${index + 1} 个结束状态`
+        await input.fill(question)
+        await page.getByRole('button', { name: '发送', exact: true }).click()
+        await page.getByTestId('message-scroll').getByText(question, { exact: true }).waitFor()
+        observations.push(
+          await page.evaluate(async () => {
+            const a = window.__audit
+            await a.waitIdle()
+            const state = a.store.useChatStore.getState()
+            const reply = state.sessionCache[state.activeId].messages.at(-1)
+            return {
+              status: reply.status,
+              key: reply.error?.localMessage?.key,
+              reason: reply.stopReason,
+              tokens: a.usage.computeReplyUsage(reply).tokens,
+              entries: reply.usageHistory?.length ?? 0,
+            }
+          })
+        )
+        const partial = page.getByText('已收到合成正文。', { exact: true })
+        if (sample.expected.reason === 'refusal') {
+          await page
+            .getByText('你好，这个问题我暂时无法回答，让我们换个话题再聊聊吧。', { exact: true })
+            .waitFor()
+          assert.equal(await partial.count(), 0)
+        } else {
+          await partial.waitFor()
+        }
+        if (sample.expected.reason === 'max_tokens') {
+          await page.getByText('已达到本次输出上限，回复尚未写完。', { exact: true }).waitFor()
+        }
+      }
+      assert.deepEqual(
+        observations,
+        samples.map(({ expected }) => ({
+          key: undefined,
+          reason: undefined,
+          ...expected,
+          entries: expected.tokens ? 1 : 0,
+        }))
+      )
+      await page
+        .getByText('模型返回了无法识别的结束原因，已收到的内容已保留', { exact: true })
+        .waitFor()
+      const evidence = process.env.FREESEEK_UX_EVIDENCE
+      if (evidence) {
+        await page.screenshot({
+          path: resolve(evidence, 'phase3-interrupted-reply-zh.png'),
+          animations: 'disabled',
+        })
+      }
+    }
+  )
+  await run(
+    'model connection verification requires a complete non-refused answer',
+    async (page) => {
+      const result = await page.evaluate(async () => {
+        const a = window.__audit
+        const profile = {
+          ...a.providers.emptyProfile(),
+          name: '检测连接',
+          model: 'test-model',
+          url: 'https://verify-completion.example.test/v1',
+          stream: false,
+        }
+        const budgets = []
+        let responses = []
+        window.fetch = async (_url, init) => {
+          budgets.push(JSON.parse(init.body).max_tokens)
+          const reason = responses.shift()
+          return Response.json({
+            choices: [
+              { message: { content: reason === 'stop' ? 'OK' : 'partial' }, finish_reason: reason },
+            ],
+          })
+        }
+        const verify = async (reasons) => {
+          responses = [...reasons]
+          try {
+            return (await a.providerClient.testProviderModel(profile, new AbortController().signal))
+              .text
+          } catch (error) {
+            return error.localMessage?.key
+          }
+        }
+        const results = [
+          await verify(['length', 'length']),
+          await verify(['content_filter']),
+          await verify(['length', 'stop']),
+        ]
+        return { results, budgets }
+      })
+      assert.deepEqual(result, {
+        results: ['providerTestOutputExhausted', 'replyRefused', 'OK'],
+        budgets: [1024, 4096, 1024, 1024, 4096],
+      })
     }
   )
   await run(
@@ -2305,6 +2675,9 @@ export const runProviderCases = async ({ run }) => {
             text: a.reply.getReplyText(reply),
             searchCount: reply.usage?.standalone_search_requests ?? 0,
             searchBlocks: reply.blocks.filter((block) => block.type === 'web_search_tool_result'),
+            modelRounds: (await a.diagnostics.readDiagnosticLogs()).events
+              .filter(({ event, details }) => event === 'provider.request' && details.protocol === protocol)
+              .map(({ details: { requestId, operationId } }) => [requestId, operationId]),
           }
         }, protocol)
         assert.equal(result.status, 'done')
@@ -2312,6 +2685,9 @@ export const runProviderCases = async ({ run }) => {
         assert.equal(result.searchCount, 1)
         assert.equal(result.searchBlocks[0].content[0].url, 'https://example.test/verified')
         assert.equal(result.searchBlocks[1].content[0].error_code, 'unavailable')
+        assert.equal(result.modelRounds.length, 3)
+        assert.equal(new Set(result.modelRounds.map(([id]) => id)).size, 3)
+        assert.ok(result.modelRounds.every(([, operationId]) => operationId === result.modelRounds[0][0]))
         assert.equal(result.requests.length, 5)
         const [first, search, second, failed, final] = result.requests
         assert.match(search.route, /\/v1\/tools\/search$/)

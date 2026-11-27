@@ -302,6 +302,40 @@
 .settingError {
   color: var(--dsw-alias-state-error-primary);
 }
+.memoryGrants {
+  list-style: none;
+  margin: 0;
+  padding: 0 14px;
+}
+.memoryGrants li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+.memoryGrants li + li {
+  border-top: 1px solid var(--fs-line);
+}
+.memoryGrants li > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.memoryGrants strong,
+.memoryGrants small {
+  display: block;
+}
+.memoryGrants strong {
+  font-size: 14px;
+}
+.memoryGrants small {
+  margin-top: 3px;
+  color: var(--fs-secondary-text);
+  line-height: 1.5;
+}
+.memoryGrants button {
+  flex: none;
+}
 .prompt {
   min-height: 104px;
 }

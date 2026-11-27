@@ -43,9 +43,10 @@ const secrets = new Set<string>()
 const recent: DiagnosticEvent[] = []
 const pending: DiagnosticEvent[] = []
 let timer: ReturnType<typeof setTimeout> | undefined
-let writing = Promise.resolve()
+let writing: Promise<void> | undefined
 let dbPromise: ReturnType<typeof openDB<LogDB>> | undefined
 let unavailableWrites = 0
+let pendingEvicted = 0
 let databaseCreatedThisRun = false
 const db = () =>
   (dbPromise ??= openDB<LogDB>('freeseek-diagnostics', 2, {
@@ -81,7 +82,7 @@ const redactString = (value: string): string => {
   }
   return result
     .replace(/Bearer\s+[^\s,;)]+/gi, 'Bearer [REDACTED]')
-    .replace(/\bsk[-_][A-Za-z0-9_-]{8,}/gi, '[REDACTED]')
+    .replace(/\b(?:sk|ttp|tp)[-_][A-Za-z0-9_-]{8,}/gi, '[REDACTED]')
     .replace(/\bhttps?:\/\/[^\s<>"')]+/gi, '[URL]')
     .replace(/(?:[A-Za-z]:[\\/]|\/data\/user\/|\/storage\/)[^\s)]+/g, '[PATH]')
     .slice(0, 800)
@@ -140,6 +141,8 @@ const errorNames = new Set([
   'NetworkError',
   'NotAllowedError',
   'NotFoundError',
+  'NotReadableError',
+  'ChangedSessionError',
   'InvalidStateError',
   'NotSupportedError',
   'SecurityError',
@@ -263,6 +266,8 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
   const name = typeof item.name === 'string' && errorNames.has(item.name) ? item.name : 'Error'
   const reasons: [string, RegExp][] = [
     ['no-space', /ENOSPC|QuotaExceeded|no space|disk.*full/i],
+    ['source-unreadable', /NotReadableError|requested file could not be read/i],
+    ['another-window', /ChangedSessionError/],
     ['permission', /EACCES|permission denied|not allowed/i],
     ['invalid-image', /unsupported|invalid.*image|image.*large/i],
     ['quota', /quota|count limit|storage.*limit/i],
@@ -275,6 +280,12 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
       ? (item.localMessage as Record<string, unknown>)
       : {}
   const limitKey = describeKnownApiError(message)?.key
+  const runtimeApi =
+    name === 'TypeError' && /not a function|undefined is not an object/i.test(message)
+      ? (['toReversed', 'toSorted', 'findLast', 'flatMap'] as const).find(
+          (method) => typeof Array.prototype[method] !== 'function' && message.includes(method)
+        )
+      : undefined
   return {
     name,
     ...(typeof item.status === 'number' ? { status: item.status } : {}),
@@ -282,13 +293,15 @@ export const diagnosticError = (error: unknown): Record<string, unknown> => {
     ...(typeof local.key === 'string' && Object.hasOwn(zh, local.key)
       ? { localKey: local.key }
       : {}),
-    reason:
-      limitKey === 'replyContextTooLong'
+    reason: runtimeApi
+      ? 'runtime-capability'
+      : limitKey === 'replyContextTooLong'
         ? 'context-limit'
         : limitKey === 'replyOutputLimitInvalid'
           ? 'output-limit'
           : (reasons.find(([, pattern]) => pattern.test(message + ' ' + name))?.[0] ??
             'unclassified'),
+    ...(runtimeApi ? { runtimeApi } : {}),
     ...(limitKey ? { limits: apiLimitCounts(message) } : {}),
     field: messageField.exec(message)?.[0],
     frames:
@@ -344,7 +357,9 @@ export const logEvent = (
   recent.push(entry)
   trimLogBuffer(recent)
   pending.push(entry)
+  const queued = pending.length
   trimLogBuffer(pending)
+  pendingEvicted += queued - pending.length
   retainClientEvent(entry)
   if (timer === undefined) {
     timer = setTimeout(() => {
@@ -374,48 +389,71 @@ export const beginDiagnosticOperation = (
 export const flushDiagnosticLogs = (): Promise<void> => {
   clearTimeout(timer)
   timer = undefined
-  if (!pending.length) {
-    return writing
+  if (writing || !pending.length) {
+    return writing ?? Promise.resolve()
   }
-  const batch = pending.splice(0)
-  writing = writing.then(async () => {
-    try {
-      const database = await db(),
-        tx = database.transaction('events', 'readwrite')
-      void tx.done.catch(() => {})
-      await Promise.all(batch.map((entry) => tx.store.put(entry)))
-      const cutoff = Date.now() - LOG_RETENTION_MS
-      for (
-        let cursor = await tx.store.index('timestamp').openCursor(IDBKeyRange.upperBound(cutoff));
-        cursor;
-        cursor = await cursor.continue()
-      ) {
-        await cursor.delete()
-      }
-      let excess = Math.max(0, (await tx.store.count()) - LOG_LIMIT)
-      const levels = tx.store.index('level')
-      let issues = excess ? (await levels.count('warn')) + (await levels.count('error')) : 0
-      for (
-        let cursor = await tx.store.index('timestamp').openCursor();
-        cursor && excess > 0;
-        cursor = await cursor.continue()
-      ) {
-        const issue = cursor.value.level === 'warn' || cursor.value.level === 'error'
-        if (issue && issues <= LOG_ISSUE_RESERVE) {
-          continue
+  writing = Promise.resolve().then(async () => {
+    while (pending.length) {
+      const batch = pending.splice(0)
+      try {
+        const database = await db(),
+          tx = database.transaction('events', 'readwrite')
+        void tx.done.catch(() => {})
+        await Promise.all(batch.map((entry) => tx.store.put(entry)))
+        const cutoff = Date.now() - LOG_RETENTION_MS
+        for (
+          let cursor = await tx.store.index('timestamp').openCursor(IDBKeyRange.upperBound(cutoff));
+          cursor;
+          cursor = await cursor.continue()
+        ) {
+          await cursor.delete()
         }
-        await cursor.delete()
-        excess--
-        if (issue) {
-          issues--
+        let excess = Math.max(0, (await tx.store.count()) - LOG_LIMIT)
+        const levels = tx.store.index('level')
+        let issues = excess ? (await levels.count('warn')) + (await levels.count('error')) : 0
+        for (
+          let cursor = await tx.store.index('timestamp').openCursor();
+          cursor && excess > 0;
+          cursor = await cursor.continue()
+        ) {
+          const issue = cursor.value.level === 'warn' || cursor.value.level === 'error'
+          if (issue && issues <= LOG_ISSUE_RESERVE) {
+            continue
+          }
+          await cursor.delete()
+          excess--
+          if (issue) {
+            issues--
+          }
         }
+        await tx.done
+      } catch {
+        unavailableWrites += batch.length
       }
-      await tx.done
-    } catch {
-      unavailableWrites += batch.length
+    }
+  }).finally(() => {
+    writing = undefined
+    if (pending.length) {
+      void flushDiagnosticLogs()
     }
   })
   return writing
+}
+
+const withinLogDeadline = async <T>(read: () => Promise<T>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve().then(read).then((value) => ({ status: 'available' as const, value })),
+      new Promise<{ status: 'timeout'; value?: undefined }>((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timeout' }), 2000)
+      }),
+    ])
+  } catch {
+    return { status: 'failed' as const, value: undefined }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export const readDiagnosticLogs = async (): Promise<{
@@ -424,43 +462,34 @@ export const readDiagnosticLogs = async (): Promise<{
   storageAvailable: boolean
   persistedEvents: number
   databaseCreatedThisRun: boolean
+  flushStatus: 'available' | 'timeout' | 'failed'
+  readStatus: 'available' | 'timeout' | 'failed'
+  pendingEvicted: number
 }> => {
-  let stored: DiagnosticEvent[] = []
-  let storageAvailable = false
-  try {
-    await Promise.race([
-      flushDiagnosticLogs(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Log timeout')), 2000)),
-    ])
-    stored = await Promise.race([
-      db().then(async (database) => {
-        const tx = database.transaction('events')
-        const range = IDBKeyRange.lowerBound(Date.now() - LOG_RETENTION_MS, true)
-        const entries: DiagnosticEvent[] = []
-        for (
-          let cursor = await tx.store.index('timestamp').openCursor(range, 'prev');
-          cursor;
-          cursor = await cursor.continue()
-        ) {
-          const entry = cursor.value
-          if (entry && typeof entry.id === 'string' && Number.isFinite(entry.timestamp)) {
-            entries.push(entry)
-            if (entries.length === LOG_LIMIT) {
-              break
-            }
-          }
+  const flush = await withinLogDeadline(flushDiagnosticLogs)
+  // A blocked write does not prove the earlier persisted entries are unreadable.
+  const read = await withinLogDeadline(async () => {
+    const database = await db()
+    const tx = database.transaction('events')
+    const range = IDBKeyRange.lowerBound(Date.now() - LOG_RETENTION_MS, true)
+    const entries: DiagnosticEvent[] = []
+    for (
+      let cursor = await tx.store.index('timestamp').openCursor(range, 'prev');
+      cursor;
+      cursor = await cursor.continue()
+    ) {
+      const entry = cursor.value
+      if (entry && typeof entry.id === 'string' && Number.isFinite(entry.timestamp)) {
+        entries.push(entry)
+        if (entries.length === LOG_LIMIT) {
+          break
         }
-        await tx.done
-        return entries
-      }),
-      new Promise<DiagnosticEvent[]>((_, reject) =>
-        setTimeout(() => reject(new Error('Log timeout')), 2000)
-      ),
-    ])
-    storageAvailable = true
-  } catch {
-    /* 日志存储不可用时仍能导出内存记录。 */
-  }
+      }
+    }
+    await tx.done
+    return entries
+  })
+  const stored = read.value ?? []
   const unique = new Map([...stored, ...recent].map((entry) => [entry.id, entry]))
   return {
     events: trimLogBuffer(
@@ -469,9 +498,12 @@ export const readDiagnosticLogs = async (): Promise<{
         .sort((a, b) => a.timestamp - b.timestamp)
     ),
     unavailableWrites,
-    storageAvailable,
+    storageAvailable: read.status === 'available',
     persistedEvents: stored.length,
     databaseCreatedThisRun,
+    flushStatus: flush.status,
+    readStatus: read.status,
+    pendingEvicted,
   }
 }
 

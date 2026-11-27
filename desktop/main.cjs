@@ -1,4 +1,4 @@
-const { app, BrowserWindow, net, protocol, session, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, net, protocol, session, shell } = require('electron')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const { registerWindowsUpdates } = require('./updates.cjs')
@@ -6,13 +6,14 @@ const { registerOutputShare } = require('./share.cjs')
 const { registerOfficePreview } = require('./officePreview.cjs')
 const { registerAgentHost } = require('./agentHost.cjs')
 const { registerPublicWeb } = require('./publicWeb.cjs')
+const { createDesktopDiagnostics } = require('./diagnostics.cjs')
 
 const SCHEME = 'freeseek'
 const HOME = 'freeseek://app/'
 const assets = path.join(__dirname, '..', 'dist')
 const allowedAssets =
   /^(?:index\.html|startup-mark\.png|web-version\.json|LICENSE|static\/[\w./~-]+)$/
-let mainWindow, agentHost
+let mainWindow, agentHost, diagnostics
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -141,6 +142,15 @@ const createWindow = () => {
   })
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  mainWindow.webContents.on('did-finish-load', () => diagnostics.record('desktop.renderer-ready'))
+  mainWindow.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => {
+    if (mainFrame && code !== -3) diagnostics.record('desktop.renderer-load-failed', { code }, 'error')
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, { reason, exitCode }) => {
+    diagnostics.record('desktop.renderer-exited', { reason, exitCode }, reason === 'clean-exit' ? 'info' : 'error')
+  })
+  mainWindow.on('unresponsive', () => diagnostics.record('desktop.renderer-unresponsive', {}, 'warn'))
+  mainWindow.on('responsive', () => diagnostics.record('desktop.renderer-responsive'))
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     const target = httpUrl(url)
     if (target) {
@@ -152,7 +162,7 @@ const createWindow = () => {
     mainWindow = null
   })
   agentHost?.attach(mainWindow)
-  void mainWindow.loadURL(HOME)
+  void mainWindow.loadURL(HOME).catch(() => {})
 }
 
 const showMainWindow = () => {
@@ -162,6 +172,9 @@ const showMainWindow = () => {
 }
 
 if (app.requestSingleInstanceLock()) {
+  diagnostics = createDesktopDiagnostics(app)
+  diagnostics.record('desktop.started', { version: app.getVersion() })
+  app.on('will-quit', () => diagnostics.record('desktop.quitting'))
   app.on('second-instance', showMainWindow)
   app.on('window-all-closed', () => app.quit())
   app
@@ -184,6 +197,10 @@ if (app.requestSingleInstanceLock()) {
         event.sender === mainWindow?.webContents &&
         event.senderFrame === event.sender.mainFrame &&
         isAppUrl(event.senderFrame?.url)
+      ipcMain.handle('freeseek:diagnostics:snapshot', (event) => {
+        if (!isMainFrame(event)) throw new Error('Diagnostics require the app window')
+        return diagnostics.snapshot()
+      })
       registerOutputShare(isMainFrame)
       registerOfficePreview(isMainFrame)
       registerPublicWeb(isMainFrame)
@@ -193,7 +210,10 @@ if (app.requestSingleInstanceLock()) {
       })
       createWindow()
     })
-    .catch(() => app.exit(1))
+    .catch(() => {
+      diagnostics.record('desktop.start-failed', {}, 'error')
+      app.exit(1)
+    })
 } else {
   app.quit()
 }

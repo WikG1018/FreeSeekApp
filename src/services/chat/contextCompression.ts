@@ -14,6 +14,7 @@ import type {
   AssistantMessage,
   CompressionCharge,
   CompressionCheckpoint,
+  ContextRoundRange,
   ContextSummary,
   Message,
   UserMessage,
@@ -37,6 +38,7 @@ const MAX_SEGMENT_WINDOW = 64 * 1024
 const MAX_SEGMENT_MS = 180_000
 const MAX_READ_RETRIES = 2
 const MAX_PASS_MS = 300_000
+const RECENT_ROUNDS_TO_KEEP = 4
 /** 自定义模型没配上下文窗口时的保守假设。8192 太小：摘要分块会过度切分、输出额度被压到 1024。 */
 const DEFAULT_CUSTOM_WINDOW = 32 * 1024
 
@@ -185,6 +187,32 @@ function* prefixParts(rounds: ContextRound[], count: number) {
 }
 const prefixSignature = (rounds: ContextRound[], count: number) =>
   textSignature(prefixParts(rounds, count))
+const rangeKey = (ranges: ContextRoundRange[]) =>
+  ranges.map(({ start, end }) => start + ':' + end).join(',')
+const summarySignature = (
+  rounds: ContextRound[],
+  count: number,
+  retained?: ContextRoundRange[]
+) =>
+  retained?.length
+    ? textSignature(['summary-with-originals', prefixSignature(rounds, count), rangeKey(retained)])
+    : prefixSignature(rounds, count)
+
+export const validRetainedRanges = (ranges: ContextRoundRange[], start: number, end: number) =>
+  ranges.every(
+    (range, index) =>
+      range &&
+      Number.isSafeInteger(range.start) &&
+      Number.isSafeInteger(range.end) &&
+      range.start >= (ranges[index - 1]?.end ?? start) &&
+      range.end > range.start &&
+      range.end <= end
+  )
+const retainedCount = (ranges: ContextRoundRange[] = []) =>
+  ranges.reduce((count, { start, end }) => count + end - start, 0)
+export const compressedRoundCount = (summary: ContextSummary) =>
+  summary.coveredRounds - retainedCount(summary.retainedRanges)
+
 const compressionScope = (
   connection: Connection,
   start: number,
@@ -202,10 +230,11 @@ const compressionScope = (
     String(end),
     signature,
     prior?.text ?? '',
+    ...(prior?.retainedRanges?.length ? [rangeKey(prior.retainedRanges)] : []),
   ])
 
-/** Match the declined prefix independently of a new plan's end or an appended turn. */
-export const refusedCompressionBoundary = (
+/** Match persisted progress independently of a new plan's end or an appended turn. */
+const checkpointBoundary = (
   connection: Connection,
   rounds: ContextRound[],
   prior: ContextSummary | undefined,
@@ -214,7 +243,7 @@ export const refusedCompressionBoundary = (
   const start = prior?.coveredRounds ?? 0
   const end = checkpoint?.targetRounds
   if (
-    !checkpoint?.refused ||
+    !checkpoint ||
     end === undefined ||
     !Number.isSafeInteger(end) ||
     end <= start ||
@@ -226,11 +255,66 @@ export const refusedCompressionBoundary = (
     ? end
     : undefined
 }
+
+export const compressionRefusals = (
+  connection: Connection,
+  rounds: ContextRound[],
+  prior: ContextSummary | undefined,
+  checkpoint?: CompressionCheckpoint
+): ContextRoundRange[] => {
+  if (!checkpoint || (!checkpoint.refused && !checkpoint.retainedRanges?.length)) {
+    return []
+  }
+  const end = checkpointBoundary(connection, rounds, prior, checkpoint)
+  if (end === undefined) {
+    return []
+  }
+  const start = prior?.coveredRounds ?? 0
+  const ranges = checkpoint.retainedRanges
+  if (Array.isArray(ranges) && ranges.length && validRetainedRanges(ranges, start, end)) {
+    return ranges
+  }
+  if (checkpoint.refused && Number.isSafeInteger(checkpoint.offset) && checkpoint.offset >= 0) {
+    const { coveredRounds } = transcriptProgress(rounds, start, end, checkpoint.offset)
+    if (coveredRounds < end) {
+      return [{ start: coveredRounds, end }]
+    }
+  }
+  return []
+}
+
+const endAfterRefusal = (end: number, skipped: number, total: number) =>
+  Math.min(total, Math.max(end + skipped, total - RECENT_ROUNDS_TO_KEEP))
+
+/** Use the other older turns where a refused segment made no room. */
+export const compressionWork = (
+  plan: SummaryPlan,
+  rounds: ContextRound[],
+  retained: ContextRoundRange[]
+) => {
+  let end = plan.end
+  let skipped = 0
+  for (const range of retained) {
+    if (range.start >= end) {
+      break
+    }
+    const length = range.end - range.start
+    skipped += length
+    end = endAfterRefusal(end, length, rounds.length)
+  }
+  return { end, pending: Math.max(0, end - plan.start - skipped) }
+}
+
 export const applicableSummary = (summary: ContextSummary | undefined, rounds: ContextRound[]) =>
   summary &&
+  Number.isSafeInteger(summary.coveredRounds) &&
   summary.coveredRounds > 0 &&
   summary.coveredRounds <= rounds.length &&
-  summary.signature === prefixSignature(rounds, summary.coveredRounds)
+  (!summary.retainedRanges ||
+    (Array.isArray(summary.retainedRanges) &&
+      validRetainedRanges(summary.retainedRanges, 0, summary.coveredRounds) &&
+      compressedRoundCount(summary) > 0)) &&
+  summary.signature === summarySignature(rounds, summary.coveredRounds, summary.retainedRanges)
     ? summary
     : undefined
 
@@ -241,15 +325,30 @@ export const rebaseContextSummary = (
   after: ContextRound[]
 ) =>
   summary && applicableSummary(summary, before) && summary.coveredRounds <= after.length
-    ? { ...summary, signature: prefixSignature(after, summary.coveredRounds) }
+    ? {
+        ...summary,
+        signature: summarySignature(after, summary.coveredRounds, summary.retainedRanges),
+      }
     : summary
+
+export const uncompressedRounds = (rounds: ContextRound[], summary: ContextSummary) =>
+  (summary.retainedRanges ?? []).flatMap(({ start, end }) => rounds.slice(start, end))
+    .concat(rounds.slice(summary.coveredRounds))
 
 export const estimateContextHistory = (rounds: ContextRound[], summary?: ContextSummary) => {
   const sizes = rounds.slice(summary?.coveredRounds ?? 0).map(roundTokens)
+  let retainedTokens = 0
+  for (const { start, end } of summary?.retainedRanges ?? []) {
+    for (let index = start; index < end; index++) {
+      retainedTokens += roundTokens(rounds[index])
+    }
+  }
   return {
     sizes,
+    retainedTokens,
     tokens:
       estimatedTokens(summary?.recentOnly ? '' : (summary?.text ?? '')) +
+      retainedTokens +
       sizes.reduce((total, size) => total + size, 0),
   }
 }
@@ -324,9 +423,9 @@ export const planCompression = (
     (current ? estimatedUserTokens(current.question) : 0) +
     (current?.prefix ? estimatedTokens(getReplyText(current.prefix)) : 0)
   const start = summary?.coveredRounds ?? 0
-  const { sizes, tokens } = estimateContextHistory(rounds, summary)
+  const { sizes, tokens, retainedTokens } = estimateContextHistory(rounds, summary)
   // Keep up to four recent turns verbatim. If a single historical turn is huge it too can be summarized.
-  let end = Math.max(start + 1, rounds.length - 4),
+  let end = Math.max(start + 1, rounds.length - RECENT_ROUNDS_TO_KEEP),
     retained = fixed
   for (let i = rounds.length - 1; i >= end; i--) {
     retained += sizes[i - start]
@@ -336,7 +435,8 @@ export const planCompression = (
     }
   }
   end = Math.min(end, rounds.length)
-  const retainedHistory = sizes.slice(end - start).reduce((total, size) => total + size, 0)
+  const retainedHistory =
+    retainedTokens + sizes.slice(end - start).reduce((total, size) => total + size, 0)
   return {
     start,
     end,
@@ -408,7 +508,7 @@ export const approvedPrefixBeforeRefusal = (
   ) {
     return undefined
   }
-  const end = refusedCompressionBoundary(connection, rounds, prior, checkpoint)
+  const end = checkpoint.refused ? checkpointBoundary(connection, rounds, prior, checkpoint) : undefined
   if (end === undefined) {
     return undefined
   }
@@ -420,7 +520,8 @@ export const approvedPrefixBeforeRefusal = (
   const summary: ContextSummary = {
     text: checkpoint.text,
     coveredRounds,
-    signature: prefixSignature(rounds, coveredRounds),
+    retainedRanges: prior?.retainedRanges,
+    signature: summarySignature(rounds, coveredRounds, prior?.retainedRanges),
     updatedAt: Date.now(),
   }
   const before = estimateContextHistory(rounds, prior).tokens
@@ -443,6 +544,19 @@ const splitIndex = (text: string, index: number) =>
   (text.charCodeAt(index) & 0xfc00) === 0xdc00 && (text.charCodeAt(index - 1) & 0xfc00) === 0xd800
     ? index - 1
     : index
+
+const mergeRetainedRanges = (ranges: ContextRoundRange[]) => {
+  const result: ContextRoundRange[] = []
+  for (const range of ranges.sort((a, b) => a.start - b.start)) {
+    const last = result.at(-1)
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end)
+    } else {
+      result.push({ ...range })
+    }
+  }
+  return result
+}
 
 // Replay source pieces without duplicating the entire transcript or resending completed pieces.
 function* transcriptChunks(parts: Iterable<string>, skip: number, size: () => number) {
@@ -544,6 +658,8 @@ async function summarizeChunk(
           } else if (event.type === 'message_delta') {
             reason = event.delta.stop_reason
             usage = event.usage ?? usage
+          } else if (event.type === 'message_usage') {
+            usage = event.usage
           } else if (event.type === 'message_stop') {
             complete = true
           }
@@ -667,50 +783,46 @@ export async function generateContextSummary(
     throw new ApiError('protocol', { key: 'compressionNoKey' })
   }
   const saved = job.checkpoint
-  const refusedThrough = refusedCompressionBoundary(connection, rounds, prior, saved)
-  if (refusedThrough !== undefined) {
-    logEvent('chat', 'compression.refusal.retained', {
-      sessionId: job.sessionId,
-      coveredRounds: plan.start,
-      targetRounds: refusedThrough,
-      processedChars: saved?.offset,
-    })
-    throw new ApiError('protocol', { key: 'compressionFailedRefused' })
-  }
+  let retained = compressionRefusals(connection, rounds, prior, saved)
+  const savedTarget = checkpointBoundary(connection, rounds, prior, saved)
   const scopeFor = (end: number, signature: string) =>
     compressionScope(connection, plan.start, end, signature, prior)
   const legacyEnd = plan.legacyEnd ?? plan.end
-  let end = plan.end
-  if (
-    saved?.targetRounds &&
-    Number.isSafeInteger(saved.targetRounds) &&
-    saved.targetRounds > end &&
-    saved.targetRounds <= legacyEnd &&
-    saved.scope === scopeFor(saved.targetRounds, prefixSignature(rounds, saved.targetRounds))
-  ) {
-    end = saved.targetRounds
+  let end = Math.max(compressionWork(plan, rounds, retained).end, savedTarget ?? 0)
+
+  // Measure the transcript without allocating a single copy of the entire history.
+  const boundaries = [0]
+  for (let round = plan.start; round < rounds.length; round++) {
+    let at = boundaries[round - plan.start]
+    for (const part of transcriptParts(rounds, round, round + 1)) {
+      at += part.length
+    }
+    boundaries.push(at)
   }
-  let signature = prefixSignature(rounds, end)
-  let scope = scopeFor(end, signature)
-  let total = 0
-  for (const part of transcriptParts(rounds, plan.start, end)) {
-    total += part.length
+  const atRound = (round: number) => boundaries[round - plan.start]
+  const roundAt = (position: number) => {
+    let left = 0, right = boundaries.length - 1
+    while (left < right) {
+      const mid = Math.ceil((left + right) / 2)
+      if (boundaries[mid] <= position) {
+        left = mid
+      } else {
+        right = mid - 1
+      }
+    }
+    return plan.start + left
   }
+
+  let scope = scopeFor(end, prefixSignature(rounds, end))
   const legacyCheckpoint =
     saved &&
     saved.scope !== scope &&
     legacyEnd > end &&
     saved.scope === scopeFor(legacyEnd, prefixSignature(rounds, legacyEnd))
-  if (saved && legacyCheckpoint && Number.isSafeInteger(saved.offset) && saved.offset > total) {
+  if (saved && legacyCheckpoint && Number.isSafeInteger(saved.offset) && saved.offset > atRound(end)) {
     // Old checkpoints may end in the middle of a turn. Extend the new plan to include that turn.
-    while (end < legacyEnd && total < saved.offset) {
-      for (const part of transcriptParts(rounds, end, end + 1)) {
-        total += part.length
-      }
-      end++
-    }
-    signature = prefixSignature(rounds, end)
-    scope = scopeFor(end, signature)
+    end = Math.min(legacyEnd, roundAt(saved.offset - 1) + 1)
+    scope = scopeFor(end, prefixSignature(rounds, end))
   }
   let windowTokens = Math.min(plan.limit ?? DEFAULT_CUSTOM_WINDOW, MAX_SEGMENT_WINDOW)
   let previous = prior?.recentOnly ? '' : (prior?.text ?? '')
@@ -720,17 +832,18 @@ export async function generateContextSummary(
   )
   let segmentLimit = MAX_SEGMENT_CHARS
   let offset = 0
+  let completedText = previous
   let readRetries = 0,
     lastRetryOffset = -1
   const deadline = performance.now() + MAX_PASS_MS
   if (
     saved &&
-    (saved.scope === scope || legacyCheckpoint) &&
+    (savedTarget !== undefined || saved.scope === scope || legacyCheckpoint) &&
     Number.isSafeInteger(saved.offset) &&
-    saved.offset > 0 &&
-    saved.offset <= total &&
+    saved.offset >= 0 &&
+    saved.offset <= atRound(savedTarget ?? end) &&
     typeof saved.text === 'string' &&
-    saved.text.trim() &&
+    (saved.text.trim() || retained.length) &&
     saved.text.length <= MAX_SUMMARY_CHARS &&
     Number.isSafeInteger(saved.segmentLimit) &&
     saved.segmentLimit >= MIN_SEGMENT_CHARS &&
@@ -739,12 +852,14 @@ export async function generateContextSummary(
     Number.isSafeInteger(saved.outputTokens) &&
     saved.outputTokens > 0
   ) {
-    offset = saved.offset
+    const lastRetained = retained.at(-1)
+    offset = saved.refused && lastRetained ? atRound(lastRetained.end) : saved.offset
     previous = saved.text
+    completedText = saved.completedText ?? previous
     windowTokens = Math.min(windowTokens, saved.windowTokens)
     segmentLimit = Math.min(segmentLimit, saved.segmentLimit)
     outputTokens = Math.min(saved.outputTokens, summaryOutputBudget(connection, windowTokens))
-    logEvent('chat', 'compression.resumed', { processedChars: offset, totalChars: total })
+    logEvent('chat', 'compression.resumed', { processedChars: offset, totalChars: atRound(end) })
   }
 
   const checkpointAtProgress = () => ({
@@ -755,14 +870,34 @@ export async function generateContextSummary(
     outputTokens,
     windowTokens,
     targetRounds: end,
+    ...(retained.length && { retainedRanges: retained }),
+    ...(previous !== completedText && { completedText }),
   })
-  const showProgress = () => job.progress(Math.floor((offset * 100) / total))
+  const showProgress = () => job.progress(Math.floor((offset * 100) / atRound(end)))
   showProgress()
-  for (const source of transcriptChunks(
-    transcriptParts(rounds, plan.start, end),
-    offset,
-    () => segmentLimit
-  )) {
+  segment: while (offset < atRound(end)) {
+    const first = roundAt(offset)
+    const nextRetained = retained.find(({ end }) => end > first)
+    if (nextRetained && nextRetained.start <= first) {
+      offset = atRound(nextRetained.end)
+      continue
+    }
+    const cap = Math.min(
+      offset + segmentLimit,
+      atRound(nextRetained?.start ?? end),
+      atRound(offset === atRound(first) ? end : first + 1)
+    )
+    // Keep complete rounds together when possible. Only split a single oversized round.
+    const fullBoundary = atRound(roundAt(cap))
+    const cut = fullBoundary > offset ? fullBoundary : cap
+    const source = transcriptChunks(
+      transcriptParts(rounds, first, roundAt(cut - 1) + 1),
+      offset - atRound(first),
+      () => cut - offset
+    ).next().value
+    if (!source) {
+      throw new ApiError('protocol', { key: 'compressionFailedIncomplete' })
+    }
     const pending = [source]
     let reductions = 0
     for (let chunk = pending.pop(); chunk !== undefined; chunk = pending.pop()) {
@@ -798,14 +933,25 @@ export async function generateContextSummary(
           const refused =
             !signal.aborted && describeCompressionFailure(error).key === 'compressionFailedRefused'
           if (refused) {
-            const { through } = transcriptProgress(rounds, plan.start, end, offset + chunk.length)
-            await job.record(charge, {
-              ...checkpointAtProgress(),
-              targetRounds: through,
-              scope: scopeFor(through, prefixSignature(rounds, through)),
-              refused: true,
+            const start = roundAt(offset)
+            const through = roundAt(offset + chunk.length - 1) + 1
+            retained = mergeRetainedRanges([...retained, { start, end: through }])
+            offset = atRound(through)
+            previous = completedText
+            // The refused segment made no room. Continue into later completed turns to replace it.
+            const extended = endAfterRefusal(end, through - start, rounds.length)
+            if (extended > end) {
+              end = extended
+              scope = scopeFor(end, prefixSignature(rounds, end))
+            }
+            await job.record(charge, checkpointAtProgress())
+            logEvent('chat', 'compression.segment.retained', {
+              sessionId: job.sessionId, retainedRounds: through - start, processedChars: offset,
             })
-          } else if (charge) {
+            showProgress()
+            continue segment
+          }
+          if (charge) {
             await job.record(charge)
           }
           signal.throwIfAborted()
@@ -853,25 +999,37 @@ export async function generateContextSummary(
         if (summarized !== undefined) {
           previous = summarized
           offset += chunk.length
+          if (offset === atRound(roundAt(offset))) {
+            completedText = previous
+          }
           await job.record(charge, checkpointAtProgress())
           reductions = 0
           showProgress()
           continue
         }
       }
-      const mid = splitIndex(chunk, Math.floor(chunk.length / 2))
       if (chunk.length < MIN_SEGMENT_CHARS * 2) {
         throw new ApiError('protocol', { key: 'compressionFailedContext' })
       }
-      segmentLimit = Math.min(segmentLimit, Math.max(MIN_SEGMENT_CHARS, mid))
+      const half = Math.floor(chunk.length / 2)
+      const earlierBoundary = atRound(roundAt(offset + half)) - offset
+      const nextBoundary = atRound(roundAt(offset) + 1) - offset
+      const mid = earlierBoundary > 0 ? earlierBoundary :
+        nextBoundary < chunk.length ? nextBoundary : splitIndex(chunk, half)
+      segmentLimit = Math.min(segmentLimit, Math.max(MIN_SEGMENT_CHARS, half))
       pending.push(chunk.slice(mid), chunk.slice(0, mid))
     }
   }
   signal.throwIfAborted()
+  if (retained.length && end - plan.start <= retainedCount(retained)) {
+    throw new ApiError('protocol', { key: 'compressionFailedRefused' })
+  }
+  const retainedRanges = mergeRetainedRanges([...(prior?.retainedRanges ?? []), ...retained])
   return {
     text: previous,
     coveredRounds: end,
-    signature,
+    ...(retainedRanges.length && { retainedRanges }),
+    signature: summarySignature(rounds, end, retainedRanges),
     updatedAt: Date.now(),
   }
 }

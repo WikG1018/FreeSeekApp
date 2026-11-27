@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { useTranslate } from '../../i18n/index.js'
 import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
@@ -6,9 +6,12 @@ import { useSettings } from '../../services/settings.js'
 import {
   currentVersion,
   isNewer,
+  loadUpgradeNotes,
   downloadUpdate,
   installUpdate,
   openReleasePage,
+  publicReleaseNotes,
+  skipsVersions,
   useUpdate,
 } from '../../services/update.js'
 import { Button } from '../base/Button.js'
@@ -122,16 +125,45 @@ export const UpdateDialog = ({
   const nativeApp = Capacitor.isNativePlatform()
   const native = nativeApp || isWindowsDesktop()
   const locale = useSettings((state) => state.locale)
+  const from = currentVersion()
+  const target =
+    !installed && release && skipsVersions(from, release.version) ? release.version : ''
+  const [loaded, setLoaded] = useState<{
+    from: string
+    target: string
+    history: Awaited<ReturnType<typeof loadUpgradeNotes>>
+  }>()
+  useEffect(() => {
+    if (!target) {
+      return
+    }
+    let active = true
+    void loadUpgradeNotes(from, target).then((history) => {
+      if (active) {
+        setLoaded({ from, target, history })
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [from, target])
+  const history = loaded?.from === from && loaded.target === target ? loaded.history : undefined
   const currentNotes =
     locale === 'en-US' && __CURRENT_RELEASE_NOTES_EN__
       ? __CURRENT_RELEASE_NOTES_EN__
       : __CURRENT_RELEASE_NOTES__
-  const info = installed ? { version: currentVersion(), notes: currentNotes } : release
-  if (!info || (!installed && !isNewer(info.version, currentVersion()))) {
+  const info = installed ? { version: from, notes: currentNotes } : release
+  if (!info || (!installed && !isNewer(info.version, from))) {
     return null
   }
-  const version = info.version,
-    notes = info.notes.trim()
+  const { version } = info
+  const notes =
+    publicReleaseNotes(info.notes) ||
+    history?.entries.find((item) => item.version === version)?.notes
+  const entries = [
+    { version, notes: notes || t('updateNoNotes') },
+    ...(history?.entries.filter((item) => item.version !== version) ?? []),
+  ]
   return (
     <Modal
       title={t('updateNotesTitle', { version })}
@@ -165,28 +197,17 @@ export const UpdateDialog = ({
       }
     >
       <div className={styles.notes} data-testid="release-notes">
-        {(notes || t('updateNoNotes')).split(/\n\s*\n/).map((paragraph, i) => {
-          const lines = paragraph.split(/\r?\n/)
-          // 小节标题后面常常紧跟列表（中间没有空行），标题和内容要在同一个分块里拆开。
-          const heading = /^#{2,4} (\S.*)$/.exec(lines[0].trim())
-          const body = heading ? lines.slice(1) : lines
-          const bullets = body.every((line) => /^\s*[-*] /.test(line))
-          const content = bullets ? (
-            <ul>
-              {body.map((line, j) => (
-                <li key={j}>{line.replace(/^\s*[-*] /, '')}</li>
-              ))}
-            </ul>
-          ) : body.length ? (
-            <p>{body.join('\n')}</p>
-          ) : null
-          return heading || content ? (
-            <div key={i} className={styles.noteBlock}>
-              {heading ? <h4 className={styles.notesHeading}>{heading[1]}</h4> : null}
-              {content}
-            </div>
-          ) : null
-        })}
+        {target && !history?.complete && (
+          <p className={styles.notesStatus} role="status">
+            {t(history ? 'updateHistoryUnavailable' : 'updateHistoryLoading')}
+          </p>
+        )}
+        {entries.map((entry) => (
+          <section key={entry.version} className={styles.notesVersion}>
+            {entries.length > 1 && <h3 className={styles.versionHeading}>v{entry.version}</h3>}
+            <ReleaseNoteBody notes={entry.notes} />
+          </section>
+        ))}
       </div>
       {!installed && status === 'downloading' && (
         <div className={styles.downloadStatus} role="status">
@@ -213,3 +234,28 @@ export const UpdateDialog = ({
     </Modal>
   )
 }
+
+const ReleaseNoteBody = ({ notes }: { notes: string }) => (
+  <div className={styles.noteBody}>
+    {notes.split(/\n\s*\n/).map((paragraph, i) => {
+      const lines = paragraph.split(/\r?\n/)
+      const heading = /^#{2,4} (\S.*)$/.exec(lines[0].trim())
+      const body = heading ? lines.slice(1) : lines
+      return (
+        <div key={i}>
+          {heading && <h4 className={styles.notesHeading}>{heading[1]}</h4>}
+          {body.length > 0 &&
+            (body.every((line) => /^\s*[-*] /.test(line)) ? (
+              <ul>
+                {body.map((line, j) => (
+                  <li key={j}>{line.replace(/^\s*[-*] /, '')}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>{body.join('\n')}</p>
+            ))}
+        </div>
+      )
+    })}
+  </div>
+)

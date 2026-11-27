@@ -1,0 +1,51 @@
+.recovery {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  max-width: 28rem;
+  text-align: center;
+}
+
+.note,
+.error {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.error {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.summary {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+}
+
+.settingsRecovery {
+  padding: 0 14px 12px;
+}
+
+.settingsRecovery .recovery {
+  justify-items: start;
+  text-align: start;
+}
+
+.mergeNote {
+  margin: 3px 0 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.outcome {
+  display: grid;
+  gap: 6px;
+}
+
+.outcome p {
+  margin: 0;
+}

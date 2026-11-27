@@ -278,6 +278,18 @@
   flex-shrink: 0;
 }
 
+.backupStatus {
+  padding: 0 8px 6px 9px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.backupError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 :global([data-legacy-spacing]) .kind {
   margin-right: 8px;
 }

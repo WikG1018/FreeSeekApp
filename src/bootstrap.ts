@@ -12,10 +12,7 @@ const step = (name: string) => {
 
 step('bundle')
 
-/**
- * 现代内核是否需要 core-js：这些 API 都在 iOS 15 / Chrome 92 之前普及，
- * 只要全部存在就不必下载数百个 polyfill（国内网络下这几十 KB 很值钱）。
- */
+/** 按应用的实际依赖判断。部分 WebView 支持启动所用的 API，但缺少聊天和导入用的数组方法。 */
 const modernRuntime = () => {
   try {
     return (
@@ -25,6 +22,10 @@ const modernRuntime = () => {
       typeof String.prototype.matchAll === 'function' &&
       typeof Array.prototype.at === 'function' &&
       typeof Array.prototype.flat === 'function' &&
+      typeof Array.prototype.flatMap === 'function' &&
+      typeof Array.prototype.findLast === 'function' &&
+      typeof Array.prototype.toReversed === 'function' &&
+      typeof Array.prototype.toSorted === 'function' &&
       typeof Object.hasOwn === 'function' &&
       typeof Object.fromEntries === 'function' &&
       typeof queueMicrotask === 'function' &&

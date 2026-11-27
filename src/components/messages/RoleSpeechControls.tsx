@@ -3,7 +3,7 @@ import { useTranslate } from '../../i18n/index.js'
 import {
   recoverRoleSpeech,
   stopReadAloud,
-  toggleRoleSpeechPause,
+  toggleReadAloudPause,
   useReadAloud,
 } from '../../services/speech/readAloud.js'
 import { Button } from '../base/Button.js'
@@ -35,7 +35,7 @@ export const RoleSpeechControls = ({
   const label = failed
     ? t('roleVoicePlaybackFailed')
     : active
-      ? t(paused ? 'roleVoiceResume' : 'roleVoicePause')
+      ? t(paused ? 'ttsResume' : 'ttsPause')
       : t(streaming ? 'roleVoiceLive' : 'ttsPlay')
   const PlaybackIcon = failed
     ? IconWarningOutline16
@@ -78,7 +78,7 @@ export const RoleSpeechControls = ({
         aria-description={active ? fullCaption : undefined}
         title={active ? fullCaption : label}
         disabled={failed}
-        onClick={() => (active ? toggleRoleSpeechPause(messageId) : onStart())}
+        onClick={() => (active ? toggleReadAloudPause(messageId) : onStart())}
       >
         <PlaybackIcon />
         <span className={styles.caption}>

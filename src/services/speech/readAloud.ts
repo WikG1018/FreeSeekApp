@@ -15,6 +15,7 @@ import {
 } from './roleMarkers.js'
 import type { MiMoSpeechProfile } from '../api/speech.js'
 import { splitSpeechText } from './speechText.js'
+import { hasActiveRecording } from './recorder.js'
 import { loadRoleVoiceSample, roleVoiceDataUrl, voiceSamplePcm } from './voiceSample.js'
 import { abortableDelay } from '../../utils/abort.js'
 
@@ -66,7 +67,6 @@ const canRetrySpeech = (error: unknown) => error instanceof ApiError && (
 type Playback = {
   controller: AbortController
   context: AudioContext
-  roleReply: boolean
   pause?: { done: Promise<void>; release: () => void; status: 'loading' | 'playing' }
   recover?: (action: 'retry' | 'skip') => void
 }
@@ -114,6 +114,7 @@ export const describeReadAloudError = (error: unknown): TranslationMessage => {
       key === 'ttsInterrupted' ||
       key === 'ttsServiceTimeout' ||
       key === 'ttsAudioUnavailable' ||
+      key === 'ttsRecordingActive' ||
       key === 'roleVoiceSampleMissing' ||
       key === 'roleVoiceSampleTooLong' ||
       key === 'ttsUnavailable'
@@ -168,6 +169,11 @@ export const prepareSpeechOutput = () => {
 }
 
 const begin = (messageId: string, onError: (error: unknown) => void, prepared?: AudioContext, roleReply = false) => {
+  if (hasActiveRecording()) {
+    void prepared?.close().catch(() => {})
+    onError(new ApiError('protocol', { key: 'ttsRecordingActive' }))
+    return null
+  }
   const controller = new AbortController()
   let context: AudioContext
   try {
@@ -181,16 +187,16 @@ const begin = (messageId: string, onError: (error: unknown) => void, prepared?: 
     )
     return null
   }
-  const playback: Playback = { controller, context, roleReply }
+  const playback: Playback = { controller, context }
   current = playback
   useReadAloud.setState({ ...idlePlayback, messageId, status: 'loading', roleReply })
   return playback
 }
 
-export const toggleRoleSpeechPause = (messageId: string) => {
+export const toggleReadAloudPause = (messageId: string) => {
   const playback = current
-  const { status, failure } = useReadAloud.getState()
-  if (!playback?.roleReply || useReadAloud.getState().messageId !== messageId || failure) {
+  const { status, failure, messageId: activeId } = useReadAloud.getState()
+  if (!playback || activeId !== messageId || failure) {
     return
   }
   if (playback.pause) {

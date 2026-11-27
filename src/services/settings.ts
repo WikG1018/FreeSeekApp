@@ -343,12 +343,26 @@ export const setThemePreference = (themePreference: ThemePreference) => {
   useSettings.setState({ themePreference })
 }
 
-export const setStartupPage = (startupPage: StartupPagePreference): boolean => {
-  if (!write(KEYS.startupPage, startupPage)) {
-    return false
+let pendingStartupChoice = Promise.resolve(true)
+export const setStartupPage = (startupPage: StartupPagePreference): Promise<boolean> => {
+  const save = async () => {
+    const previous = useSettings.getState().startupPage
+    if (!write(KEYS.startupPage, startupPage)) {
+      return false
+    }
+    try {
+      const { saveStartupPreference } = await import('./chat/db.js')
+      await saveStartupPreference(startupPage)
+      useSettings.setState({ startupPage })
+      return true
+    } catch (error) {
+      write(KEYS.startupPage, previous)
+      logEvent('storage', 'settings.startup-page-save-failed', diagnosticError(error), 'warn')
+      return false
+    }
   }
-  useSettings.setState({ startupPage })
-  return true
+  pendingStartupChoice = pendingStartupChoice.then(save, save)
+  return pendingStartupChoice
 }
 
 export const setTtsVoice = (ttsVoice: TtsVoice) => {

@@ -6,6 +6,7 @@ import { useSettings } from '../../services/settings.js'
 import {
   collectModelUsage,
   formatCacheHitRate,
+  hasUsageEstimate as hasEstimate,
   totalCacheCounts,
   sumUsage,
   usageTokenCount,
@@ -83,8 +84,6 @@ const withinPeriod = (days: DayUsage[], period: Period) => {
   const start = localDayKey(day.getTime())
   return days.filter((item) => item.date >= start && item.date <= end)
 }
-const hasEstimate = (stats: UsageTotals) =>
-  stats.requests > stats.unpricedRequests || stats.costCny > 0
 const formatCost = (amount: number) => '¥' + amount.toFixed(amount > 0 && amount < 1 ? 4 : 2)
 const shortCount = (number: number) => {
   if (number >= 1_000_000_000) {
@@ -137,22 +136,29 @@ const Overview = ({ totals }: { totals: UsageTotals }) => {
   const t = useTranslate()
   const tokens = usageTokenCount(totals)
   return (
-    <dl className={styles.overview} data-testid="model-usage-overview">
-      <div>
-        <dt>{t('usageModelTotalTokens')}</dt>
-        <dd title={tokens.toLocaleString()}>{shortCount(tokens)}</dd>
-      </div>
-      <div>
-        <dt>{t('usageRequests')}</dt>
-        <dd title={totals.requests.toLocaleString()}>{shortCount(totals.requests)}</dd>
-      </div>
-      <div>
-        <dt>{t('usageModelEstimatedCost')}</dt>
-        <dd data-unpriced={!hasEstimate(totals) || undefined}>
-          {hasEstimate(totals) ? formatCost(totals.costCny) : t('usageModelNoPrice')}
-        </dd>
-      </div>
-    </dl>
+    <>
+      <dl className={styles.overview} data-testid="model-usage-overview">
+        <div>
+          <dt>{t('usageModelTotalTokens')}</dt>
+          <dd title={tokens.toLocaleString()}>{shortCount(tokens)}</dd>
+        </div>
+        <div>
+          <dt>{t('usageRequests')}</dt>
+          <dd title={totals.requests.toLocaleString()}>{shortCount(totals.requests)}</dd>
+        </div>
+        <div>
+          <dt>{t('usageModelEstimatedCost')}</dt>
+          <dd data-unpriced={!hasEstimate(totals) || undefined}>
+            {hasEstimate(totals) ? formatCost(totals.costCny) : t('usageModelNoPrice')}
+          </dd>
+        </div>
+      </dl>
+      {totals.unpricedRequests > 0 && (
+        <p className={styles.note}>
+          {t('usageModelPartialCost', { count: totals.unpricedRequests })}
+        </p>
+      )}
+    </>
   )
 }
 
@@ -277,11 +283,6 @@ export const ModelUsagePage = ({
               </Button>
             )}
           </Section>
-          {overall.unpricedRequests > 0 && (
-            <p className={styles.note}>
-              {t('usageModelPartialCost', { count: overall.unpricedRequests })}
-            </p>
-          )}
         </>
       ) : (
         <p className={styles.feedback}>{t('usageModelEmpty')}</p>
@@ -427,11 +428,6 @@ export const ModelUsageDetail = ({
           )}
         </div>
       </Section>
-      {total.unpricedRequests > 0 && (
-        <p className={styles.note}>
-          {t('usageModelPartialCost', { count: total.unpricedRequests })}
-        </p>
-      )}
     </div>
   )
 }

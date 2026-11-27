@@ -4,6 +4,7 @@ import {
   hasAndroidBackgroundWork,
   openTaskNotificationSettings,
   readTaskNotificationPermission,
+  setLiveTaskProgress,
 } from '../../services/tasks/goalBridge.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
 import {
@@ -158,16 +159,16 @@ const Choice = ({
 
 const BackgroundNotifications = () => {
   const t = useTranslate()
-  const [granted, setGranted] = useState<boolean>()
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof readTaskNotificationPermission>>>()
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<TranslationKey>()
   useEffect(() => {
     let active = true
     const refresh = () => {
       void readTaskNotificationPermission()
-        .then(({ granted }) => {
+        .then((current) => {
           if (active) {
-            setGranted(granted)
+            setStatus(current)
           }
         })
         .catch(() => {})
@@ -183,6 +184,19 @@ const BackgroundNotifications = () => {
       void listener.then((handle) => handle.remove()).catch(() => {})
     }
   }, [])
+  const granted = status?.granted
+  const liveProgress = status?.liveProgressEnabled
+  const saveLiveProgress = async (enabled: boolean) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      setStatus(await setLiveTaskProgress(enabled))
+    } catch {
+      setError('settingsLiveProgressSaveError')
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <Section title={t('settingsBackgroundSection')}>
       <Row
@@ -196,19 +210,29 @@ const BackgroundNotifications = () => {
         disabled={busy}
         onClick={async () => {
           setBusy(true)
-          setError(false)
+          setError(undefined)
           try {
-            setGranted((await openTaskNotificationSettings()).granted)
+            setStatus(await openTaskNotificationSettings())
           } catch {
-            setError(true)
+            setError('settingsBackgroundOpenError')
           } finally {
             setBusy(false)
           }
         }}
       />
+      {liveProgress !== undefined && (
+        <SwitchRow
+          label={t('settingsLiveProgress')}
+          description={t(liveProgress && status?.liveProgressAllowed === false
+            ? 'settingsLiveProgressPermission' : 'settingsLiveProgressHelp')}
+          checked={liveProgress}
+          disabled={busy}
+          change={saveLiveProgress}
+        />
+      )}
       {error && (
-        <p className={styles.paragraph} role="alert">
-          {t('settingsBackgroundOpenError')}
+        <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">
+          {t(error)}
         </p>
       )}
     </Section>
@@ -237,7 +261,7 @@ export const ChatPreferencesPage = ({ openSpeech }: { openSpeech: () => void }) 
             { value: 'last-chat', label: t('settingsStartupLastChat') },
             { value: 'new-chat', label: t('settingsStartupNewChat') },
           ]}
-          onChange={(page) => setStartupSaveFailed(!setStartupPage(page))}
+          onChange={(page) => void setStartupPage(page).then((saved) => setStartupSaveFailed(!saved))}
         />
         {startupSaveFailed && (
           <p className={`${styles.paragraph} ${styles.errorNote}`} role="alert">

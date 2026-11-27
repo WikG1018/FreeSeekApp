@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 export const runTaskModeCases = async (run) => {
   await run(
@@ -644,6 +644,7 @@ export const runTaskModeCases = async (run) => {
             const blob = await a.db.loadFile(file.id)
             return {
               name: file.name,
+              bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
               text: await a.taskAttachments.taskAttachmentText(
                 file,
                 blob,
@@ -721,11 +722,12 @@ export const runTaskModeCases = async (run) => {
           path: 'tmp/regression/task/results-' + page.viewportSize().width + '.png',
         })
       }
-      for (const name of ['报价对比.xlsx', '核对说明.docx']) {
+      for (const { name, bytes } of result.output) {
         const downloaded = page.waitForEvent('download')
         await page.getByRole('button', { name: '保存 ' + name, exact: true }).click()
         const file = await downloaded
         assert.equal(file.suggestedFilename(), name)
+        assert.deepEqual(await readFile(await file.path()), Buffer.from(bytes))
         if (process.env.FREESEEK_TASK_PREVIEWS) {
           await file.saveAs('tmp/regression/task/' + name)
         }

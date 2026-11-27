@@ -73,9 +73,7 @@
   padding-left: 20px;
 }
 .notes li + li,
-.notes > p + p,
-.notes > p + ul,
-.notes > div + div {
+.noteBody > div + div {
   margin-top: 8px;
 }
 .notes p {
@@ -89,8 +87,24 @@
   font-weight: 600;
   line-height: 1.5;
 }
-.notes > div:first-child .notesHeading {
+.noteBody > div:first-child .notesHeading {
   margin-top: 0;
+}
+.notes .notesStatus {
+  margin-bottom: 12px;
+  color: var(--fs-secondary-text);
+  font-size: 12px;
+}
+.notesVersion + .notesVersion {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--fs-accent-line);
+}
+.versionHeading {
+  margin: 0 0 8px;
+  color: var(--fs-accent-text);
+  font-size: 14px;
+  font-weight: 600;
 }
 .downloadStatus {
   margin: 10px 0 0;

@@ -16,13 +16,16 @@ import {
 import {
   BackupError,
   clearHistory,
-  exportHistory,
   importHistory,
+  saveHistoryBackup,
   type HistoryImportPreview,
   type HistoryImportResult,
 } from '../../services/chat/backup.js'
+import type { ArchivePartial } from '../../services/chat/history/importArchive.js'
 import { useChatStore, selectSession } from '../../services/chat/store.js'
+import { historyVaultAvailable, useHistoryVault } from '../../services/chat/historyVault.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
+import { hasHistoryVaultCopy, type HistoryVaultResult } from '../session/HistoryVaultRecovery.js'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { closeMobileSider } from '../sider/mobileSiderState.js'
@@ -69,6 +72,7 @@ import { Section, Row, TutorialSteps } from './SettingsRows.js'
 import { AccountPage } from './AccountPage.js'
 import { AppearancePage, ChatPreferencesPage } from './PreferencesPages.js'
 import { SettingsShell } from './SettingsShell.js'
+import { HistoryVaultSettings } from './HistoryVaultSettings.js'
 import type { Persona } from '../../services/personas.js'
 import { PersonaEditor, PersonaLibrary } from '../personas/PersonaLibrary.js'
 
@@ -78,8 +82,10 @@ const APP_VERSION =
 const useDiagnosticExport = create(() => ({ busy: false }))
 
 /** 目录、返回及跨屏布局由 SettingsShell 管理，导入中的文件随弹窗保留。 */
-export const SettingsDialog = () =>
-  useSettingsDialog((state) => state.open) ? <SettingsRoot /> : null
+type VaultResultProps = { onVaultResult: (result: HistoryVaultResult) => void }
+
+export const SettingsDialog = ({ onVaultResult }: VaultResultProps) =>
+  useSettingsDialog((state) => state.open) ? <SettingsRoot onVaultResult={onVaultResult} /> : null
 import type { AgentProfile } from '../../services/assistants/library.js'
 import { MemoryActivityPage } from './MemoryActivityPage.js'
 import { AgentDetailsPage, AgentToolsPage } from './AssistantWorkflowPages.js'
@@ -94,7 +100,7 @@ import {
   type AgentDraft,
 } from './AssistantSettings.js'
 
-const SettingsRoot = () => {
+const SettingsRoot = ({ onVaultResult }: VaultResultProps) => {
   const [guideOpen, setGuideOpen] = useState(
     () => !useSettings.getState().apiKey || useSettingsDialog.getState().showTutorial
   )
@@ -107,7 +113,8 @@ const SettingsRoot = () => {
   const ready = useChatStore((state) => state.ready)
   const initError = useChatStore((state) => state.initError)
   const replacing = useChatStore((state) => state.importingHistory)
-  const historyBusy = replacing || historyImport.busy || historyDelete.busy
+  const restoringVault = useHistoryVault((state) => state.phase === 'restoring')
+  const historyBusy = replacing || historyImport.busy || historyDelete.busy || restoringVault
   const pageId = useSettingsDialog((state) => state.page)
   const modelUsage = useModelUsage(pageId === 'usageModels' || pageId === 'usageModel')
   const [modelUsageFilters, setModelUsageFilters] = useState(initialModelUsageFilters)
@@ -276,6 +283,8 @@ const SettingsRoot = () => {
                   historyDelete={historyDelete}
                   disabled={!ready || historyBusy}
                   importDisabled={(!ready && !initError) || historyBusy}
+                  ready={ready}
+                  onVaultResult={onVaultResult}
                 />
               )
             case 'usage':
@@ -353,14 +362,18 @@ const DataPage = ({
   historyDelete,
   disabled,
   importDisabled,
+  ready,
+  onVaultResult,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
   historyDelete: ReturnType<typeof useHistoryDelete>
   disabled: boolean
   importDisabled: boolean
-}) => {
+  ready: boolean
+} & VaultResultProps) => {
   const t = useTranslate()
   const hasHistory = useChatStore((state) => state.sessions.length > 0)
+  const hasRecoveryCopy = useHistoryVault(hasHistoryVaultCopy)
   const showTutorial = useSettingsDialog((state) => state.showTutorial)
   return (
     <>
@@ -368,6 +381,9 @@ const DataPage = ({
         <ImportHistory historyImport={historyImport} disabled={importDisabled} />
         {hasHistory && <ExportHistory disabled={disabled} />}
       </Section>
+      {historyVaultAvailable() && (
+        <HistoryVaultSettings disabled={importDisabled} ready={ready} onResult={onVaultResult} />
+      )}
       <SettingsDisclosure
         guide
         defaultOpen={showTutorial}
@@ -386,7 +402,7 @@ const DataPage = ({
           {t(hasHistory ? 'officialExportHint' : 'guideKeyFree')}
         </p>
       </SettingsDisclosure>
-      {hasHistory && (
+      {(hasHistory || (historyVaultAvailable() && hasRecoveryCopy)) && (
         <Section title={t('settingsRemoveGroup')}>
           <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
         </Section>
@@ -615,7 +631,7 @@ const DeleteAllConfirm = ({
         </div>
       }
     >
-      {t('deleteAllSessionsModalDescription')}
+      {t(historyVaultAvailable() ? 'historyVaultDeleteAll' : 'deleteAllSessionsModalDescription')}
     </Modal>
   )
 }
@@ -675,6 +691,24 @@ const DeleteAllSetting = ({
   )
 }
 
+const ArchivePartialSummary = ({ partial }: { partial: ArchivePartial }) => {
+  const t = useTranslate()
+  return (
+    <>
+      {partial.skippedSessions > 0 && (
+        <p className={styles.importSummary}>
+          {t('historyImportArchiveMissingSessions', { count: partial.skippedSessions })}
+        </p>
+      )}
+      {partial.missingOriginals > 0 && (
+        <p className={styles.importSummary}>
+          {t('historyImportArchiveMissingFiles', { count: partial.missingOriginals })}
+        </p>
+      )}
+    </>
+  )
+}
+
 const ImportReview = ({
   preview,
   useBackup,
@@ -708,6 +742,7 @@ const ImportReview = ({
       {preview.skipped > 0 && (
         <p className={styles.importSummary}>{t('historyImportWillSkip', { count: preview.skipped })}</p>
       )}
+      {preview.archivePartial && <ArchivePartialSummary partial={preview.archivePartial} />}
       {preview.conflicts.length > 1 && (
         <div className={styles.importBulkChoices}>
           <button type="button" className={styles.quietAction} onClick={() => setUseBackup(new Set())}>
@@ -797,7 +832,9 @@ const ImportConfirm = ({
   const title = preview
     ? hasConflicts
       ? 'historyImportConflictsTitle'
-      : 'historyImportPartialTitle'
+      : preview.skipped > 0
+        ? 'historyImportPartialTitle'
+        : 'historyImportArchivePartialTitle'
     : busy
       ? 'historyImportBusyTitle'
       : errorKey
@@ -924,7 +961,7 @@ const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHis
   if (!result) {
     return null
   }
-  const { firstImportedId: id, added, kept, replaced, skipped } = result
+  const { firstImportedId: id, added, kept, replaced, skipped, archivePartial } = result
   return (
     <Modal
       title={t('historyImportDoneTitle')}
@@ -957,6 +994,7 @@ const ImportDone = ({ historyImport }: { historyImport: ReturnType<typeof useHis
       {skipped > 0 && (
         <div className={styles.importDone}>{t('historyImportSkipped', { count: skipped })}</div>
       )}
+      {archivePartial && <ArchivePartialSummary partial={archivePartial} />}
     </Modal>
   )
 }
@@ -1123,7 +1161,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
   const empty = useChatStore((state) => state.sessions.length === 0)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
-  const [report, setReport] = useState<{ skipped: number; missingOriginals: number } | null>(null)
+  const [report, setReport] = useState<Awaited<ReturnType<typeof saveHistoryBackup>>>()
 
   const onExport = async () => {
     if (disabled || busy || empty) {
@@ -1131,12 +1169,10 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     }
     setBusy(true)
     setStatus(null)
-    setReport(null)
+    setReport(undefined)
     try {
-      const result = await exportHistory()
-      if (await saveBackup(result.name, result.blob)) {
-        setReport({ skipped: result.skipped, missingOriginals: result.missingOriginals })
-      }
+      const result = await saveHistoryBackup()
+      setReport(result)
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {
@@ -1153,7 +1189,12 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
         onClick={() => void onExport()}
       />
       {status ? (
-        <div className={clsx(styles.rowNote, styles.errorNote)}>{statusText(t, status)}</div>
+        <div className={clsx(styles.rowNote, styles.errorNote)} role="alert">{statusText(t, status)}</div>
+      ) : null}
+      {report ? (
+        <div className={styles.rowNote} role="status">
+          {t(report.destination === 'document' ? 'historyExportSaved' : 'historyExportDownloadStarted')}
+        </div>
       ) : null}
       {report && report.skipped > 0 ? (
         <div className={clsx(styles.rowNote, styles.warnNote)}>

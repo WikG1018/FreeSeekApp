@@ -65,6 +65,12 @@ declare global {
 
 type GoalActivity = { sessionId: string | null }
 type WorkOutcome = 'quiet' | 'completed' | 'attention'
+export type LiveReplyProgress = {
+  phase: 'waiting' | 'thinking' | 'attachments' | 'compressing' | 'searching' | 'reading' | 'working' | 'writing'
+  step?: number
+  total?: number
+}
+type NoticeStatus = { granted: boolean; liveProgressEnabled?: boolean; liveProgressAllowed?: boolean }
 
 const Native = registerPlugin<
   GoalBridge & {
@@ -78,14 +84,15 @@ const Native = registerPlugin<
       sessionId: string
       agent: boolean
       chinese: boolean
-    }): Promise<{ retained: boolean }>
+    }): Promise<{ retained: boolean; liveProgressAvailable?: boolean }>
     finishReply(options: { lease: string; outcome: WorkOutcome }): Promise<void>
-    replyProgress(options: { lease: string }): Promise<void>
+    replyProgress(options: { lease: string } & Partial<LiveReplyProgress>): Promise<void>
     viewingSession(options: { sessionId: string | null }): Promise<void>
     forgetNotices(options: { sessionId: string } | { all: true }): Promise<void>
-    noticeStatus(): Promise<{ granted: boolean }>
-    noticeSettings(): Promise<{ granted: boolean }>
-    requestNotices(): Promise<{ granted: boolean }>
+    noticeStatus(): Promise<NoticeStatus>
+    noticeSettings(): Promise<NoticeStatus>
+    requestNotices(): Promise<NoticeStatus>
+    setLiveProgress(options: { enabled: boolean }): Promise<NoticeStatus>
     pauseForAccessChange(): Promise<void>
   }
 >('AgentGoals')
@@ -137,17 +144,17 @@ export const retainBackgroundReply = (sessionId: string, agent: boolean, chinese
   }
   const lease = createId()
   const retained = Native.retainReply({ lease, sessionId, agent, chinese })
-    .then((result) => result.retained)
-    .catch(() => false)
+    .catch(() => ({ retained: false, liveProgressAvailable: false }))
   let released = false
   let refreshedAt = performance.now()
+  let lastProgress: LiveReplyProgress | undefined
   const finish = (outcome: WorkOutcome) => {
     if (released) {
       return
     }
     released = true
     void retained
-      .then((enabled) => {
+      .then(({ retained: enabled }) => {
         return enabled ? Native.finishReply({ lease, outcome }) : undefined
       })
       .catch(() => {})
@@ -157,11 +164,27 @@ export const retainBackgroundReply = (sessionId: string, agent: boolean, chinese
     if (!released && now - refreshedAt >= 240_000) {
       refreshedAt = now
       void retained
-        .then((enabled) => (enabled && !released ? Native.replyProgress({ lease }) : undefined))
+        .then(({ retained: enabled }) => (enabled && !released ? Native.replyProgress({ lease }) : undefined))
         .catch(() => {})
     }
   }
-  return { finish, progress }
+  const showProgress = (next: LiveReplyProgress) => {
+    if (
+      released ||
+      (lastProgress?.phase === next.phase && lastProgress.step === next.step && lastProgress.total === next.total)
+    ) {
+      return
+    }
+    lastProgress = next
+    void retained
+      .then(({ retained: enabled, liveProgressAvailable }) =>
+        enabled && liveProgressAvailable && !released && lastProgress === next
+          ? Native.replyProgress({ lease, ...next })
+          : undefined
+      )
+      .catch(() => {})
+  }
+  return { finish, progress, showProgress }
 }
 
 export const reportViewedConversation = (sessionId: string | null) => {
@@ -178,6 +201,7 @@ export const clearBackgroundNotices = async (sessionId?: string) => {
 
 export const readTaskNotificationPermission = () => Native.noticeStatus()
 export const openTaskNotificationSettings = () => Native.noticeSettings()
+export const setLiveTaskProgress = (enabled: boolean) => Native.setLiveProgress({ enabled })
 /** 只申请权限，不跳设置页（用于首次启动或升级后自动弹出） */
 export const requestTaskNotifications = () => Native.requestNotices()
 

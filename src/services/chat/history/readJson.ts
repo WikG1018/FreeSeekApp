@@ -1,6 +1,7 @@
 import { JSONParser, TokenType } from '@streamparser/json'
 import { BackupError, fail } from './errors.js'
 import type { ArchiveEntry } from './zipReader.js'
+import { INDEX_PATH, MANIFEST_PATH } from './paths.js'
 
 /** These limits apply to one decompressed JSON entry, never to the whole archive. */
 export const MAX_JSON_BYTES = 128 * 1024 * 1024
@@ -64,8 +65,16 @@ export const readJsonEntry = async (
     kind === 'local' ? entry.size : kind === 'session' ? MAX_SESSION_JSON_BYTES : MAX_JSON_BYTES
   const maxTokens =
     kind === 'local' ? Infinity : kind === 'session' ? MAX_SESSION_TOKENS : MAX_TOKENS
+  const limitKey =
+    kind === 'session' && !entry.path.startsWith('freeseek/workspaces/')
+      ? 'backupSessionJsonTooLarge'
+      : entry.path === INDEX_PATH
+        ? 'backupIndexJsonTooLarge'
+        : entry.path === MANIFEST_PATH
+          ? 'backupManifestJsonTooLarge'
+          : 'backupJsonTooLarge'
   if (entry.size > maxBytes) {
-    fail('backupJsonTooLarge')
+    fail(limitKey)
   }
   const parser = new JSONParser({ paths: ['$'], stringBufferSize: 64 * 1024 })
   let result: unknown
@@ -84,7 +93,7 @@ export const readJsonEntry = async (
       depth--
     }
     if (depth > MAX_DEPTH || ++tokens > maxTokens) {
-      fail('backupJsonTooLarge')
+      fail(limitKey)
     }
   }
   parser.onError = (error) => {
@@ -100,7 +109,7 @@ export const readJsonEntry = async (
       const part = chunk.subarray(offset, offset + PARSE_CHUNK_BYTES)
       bytes += part.byteLength
       if (bytes > maxBytes) {
-        fail('backupJsonTooLarge')
+        fail(limitKey)
       }
       parser.write(part)
       if (performance.now() - yieldedAt >= 16) {

@@ -1,6 +1,7 @@
 import type {
   ContentBlockDelta,
   MessageStreamEvent,
+  MessageUsage,
   OutputBlockStart,
   TextCitation,
 } from './types.js'
@@ -165,14 +166,11 @@ const readDelta = (value: unknown): ContentBlockDelta | null => {
   }
 }
 
-const isUsage = (value: unknown) =>
-  isRecord(value) &&
-  ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens'].every(
-    (key) => typeof value[key] === 'number' && Number.isFinite(value[key])
-  )
-
 /** 未识别或无法安全消费的事件静默丢弃，不影响后续有效内容与正常结束。 */
-export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {
+export const readMessageEvent = (
+  value: unknown,
+  readUsage?: (raw: unknown) => MessageUsage | undefined
+): MessageStreamEvent | null => {
   if (!isRecord(value)) {
     return null
   }
@@ -185,7 +183,7 @@ export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {
         ...value,
         message: {
           ...value.message,
-          usage: isUsage(value.message.usage) ? value.message.usage : undefined,
+          usage: readUsage?.(value.message.usage),
         },
       } as MessageStreamEvent
     case 'content_block_start': {
@@ -205,14 +203,15 @@ export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {
         return null
       }
       break
-    case 'message_delta':
+    case 'message_delta': {
+      const usage = readUsage?.(value.usage)
       if (
         !isRecord(value.delta) ||
         !['end_turn', 'max_tokens', 'tool_use', 'refusal'].includes(
           value.delta.stop_reason as string
         )
       ) {
-        return null
+        return usage ? { type: 'message_usage', usage } : null
       }
       return {
         ...value,
@@ -220,8 +219,9 @@ export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {
           ...value.delta,
           title: isOptionalString(value.delta.title) ? value.delta.title : undefined,
         },
-        usage: isUsage(value.usage) ? value.usage : undefined,
+        usage,
       } as MessageStreamEvent
+    }
     case 'message_stop':
       break
     default:

@@ -35,7 +35,7 @@ import { TaskReminder } from './TaskReminder.js'
 import { workspaceDeviceFiles } from '../../services/tasks/workspacePlatform.js'
 import { useToolApprovals } from '../../services/tasks/extensions.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
-import { replyActivityPhase } from './ReplyActivity.js'
+import { replyActivityPhase } from '../../services/chat/activity.js'
 import styles from './AssistantTask.module.css'
 
 const labels = {

@@ -227,7 +227,12 @@ export const playTimeline = async (
                   if (paused) {
                     void paused.then(scheduleStart)
                   } else if (!signal.aborted && context.state === 'running') {
-                    segment.onStart?.()
+                    // A pause and resume may both happen before this timer fires.
+                    if (time - context.currentTime > 0.008) {
+                      scheduleStart()
+                    } else {
+                      segment.onStart?.()
+                    }
                   }
                 }, Math.max(0, (time - context.currentTime) * 1_000))
                 starts.add(timer)
