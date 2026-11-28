@@ -93,7 +93,11 @@ class VaultFixture {
       id: args.id, bytes: chunk.length, entryId: this.batch?.entry?.row.id,
     } : args })
     if (this.faults.has(method)) throw rejected(this.faults.get(method))
-    if (method === 'status') return this.status()
+    if (method === 'status') {
+      const status = this.status()
+      await this.waitOnPause(method)
+      return status
+    }
     if ('generation' in args && args.generation !== this.generation) throw rejected('CHANGED')
     if (method === 'begin') {
       if (this.batch) throw rejected('BUSY')
@@ -133,12 +137,7 @@ class VaultFixture {
     if (method === 'prepare') {
       assert(!batch.entry)
       batch.prepared = true
-      const gate = this.prepareGate
-      this.prepareGate = undefined
-      if (gate) {
-        gate.entered()
-        await gate.wait
-      }
+      await this.waitOnPause(method)
       return {}
     }
     if (method === 'commit') {
@@ -238,12 +237,25 @@ class VaultFixture {
     }
   }
 
-  pausePrepare() {
+  pauseNext(method) {
     let entered, release
-    const reached = new Promise((resolve) => { entered = resolve })
+    const deadline = AbortSignal.timeout(10000)
+    const reached = new Promise((resolve, reject) => {
+      entered = resolve
+      deadline.addEventListener('abort', () => reject(deadline.reason), { once: true })
+    })
     const wait = new Promise((resolve) => { release = resolve })
-    this.prepareGate = { entered, wait }
+    this.pause = { method, entered, wait }
     return { reached, release }
+  }
+
+  async waitOnPause(method) {
+    const gate = this.pause
+    if (gate?.method === method) {
+      this.pause = undefined
+      gate.entered()
+      await gate.wait
+    }
   }
 }
 
@@ -320,14 +332,10 @@ export const runHistoryVaultCases = async (run) => {
   await nativeApp(run, 'reconciles a restart on both sides of a single delete receipt', async (page, vault) => {
     await saveChats(page, { targeted: '已确认删除的会话', retained: '另一个会话' })
     const before = vault.generation
-    const gate = vault.pausePrepare()
+    const gate = vault.pauseNext('prepare')
     const interrupted = page.evaluate(() => window.__audit.db.deleteSession('targeted')).catch(() => {})
-    const deadline = AbortSignal.timeout(10000)
     try {
-      await Promise.race([
-        gate.reached,
-        new Promise((_, reject) => deadline.addEventListener('abort', () => reject(deadline.reason), { once: true })),
-      ])
+      await gate.reached
       assert(vault.status().pendingId)
       assert.equal(body(vault, 'targeted'), '已确认删除的会话')
       await inspectAfterReload(page)
@@ -646,6 +654,39 @@ export const runHistoryVaultCases = async (run) => {
     assert.equal(await digestLocalOriginal(page, fileId), replacement)
     assert.equal(vault.originals.get(fileId).sha256, replacement, 'a new source revision updates the same original ID')
     assert.deepEqual(vault.sessions.get('manual-chat').originalIds, [fileId])
+  })
+
+  await nativeApp(run, 'repairs a missing original after a concurrent conversation deletion', async (page, vault) => {
+    const fileId = 'recoverable-original'
+    const original = '找回附件时同时删除另一个会话'
+    await saveChats(page, { 'delete-during-recovery': '用户已确认删除' })
+    await page.evaluate(async ({ fileId, original }) => {
+      const { db, fixtures } = window.__audit
+      const blob = new Blob([original])
+      const file = { id: fileId, name: '附件.txt', size: blob.size, mimeType: blob.type, isImage: false }
+      await db.saveSession(fixtures.session({
+        id: 'retain-during-recovery',
+        messages: [fixtures.user('u', '保留', { files: [file] })],
+      }), [{ id: fileId, blob }])
+    }, { fileId, original })
+    await removePrimaryOriginalRecord(page, fileId)
+
+    const gate = vault.pauseNext('status')
+    const restore = page.evaluate(() => window.__audit.historyVault.restoreHistoryVault())
+    try {
+      await gate.reached
+      await page.evaluate(() => {
+        window.__deletionDuringRestore = window.__audit.store.removeSession('delete-during-recovery')
+      })
+    } finally {
+      gate.release()
+    }
+
+    assert.equal(await page.evaluate(() => window.__deletionDuringRestore), true)
+    assert.deepEqual(await restore, { sessions: 0, originals: 1, kept: 1, missing: 0 })
+    assert.deepEqual(await localState(page), { 'retain-during-recovery': '保留' })
+    assert(!vault.sessions.has('delete-during-recovery'))
+    assert.equal(await digestLocalOriginal(page, fileId), digest(Buffer.from(original)))
   })
 
   await nativeApp(run, 'restores paged snapshots with a colliding original ID and preserves both byte streams', async (page, vault) => {

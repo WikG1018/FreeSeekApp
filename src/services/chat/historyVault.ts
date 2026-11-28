@@ -521,96 +521,101 @@ export const restoreHistoryVault = ({ automatic = false } = {}): Promise<Restore
       const repairs = new Map<string, string | null>()
       const supplied = new Set<string>()
       const restored = await mergeHistory(
-        async (reserved) => {
-          const existing = new Set((await db.vaultSessionIndex()).map((row) => row.id))
-          for await (const row of pages(state.generation, (args) =>
-            NativeVault.listSessions(args)
-          )) {
-            if (existing.has(row.id)) {
-              kept++
-              const current = await db.vaultSession(row.id, false)
-              if (!current) {
-                throw new Error('Existing chat changed during recovery')
-              }
-              for (const id of sessionOriginalIds(current.session)) {
-                if (keptMissing.has(id)) {
-                  continue
+        (reserved) =>
+          serial(async () => {
+            // A queued write can advance the vault while mergeHistory waits for local writes.
+            // Read one generation and keep it stable until all originals are staged.
+            const state = await settledStatus()
+            set({ total: state.sessionCount + state.originalCount })
+            const existing = new Set((await db.vaultSessionIndex()).map((row) => row.id))
+            for await (const row of pages(state.generation, (args) =>
+              NativeVault.listSessions(args)
+            )) {
+              if (existing.has(row.id)) {
+                kept++
+                const current = await db.vaultSession(row.id, false)
+                if (!current) {
+                  throw new Error('Existing chat changed during recovery')
                 }
-                const file = await db.vaultOriginal(id, false)
-                if (!file) {
-                  keptMissing.set(id, null)
-                } else if ('disk' in file) {
-                  try {
-                    await checkDiskOriginal(file.disk)
-                  } catch {
-                    keptMissing.set(id, file.disk.key)
+                for (const id of sessionOriginalIds(current.session)) {
+                  if (keptMissing.has(id)) {
+                    continue
+                  }
+                  const file = await db.vaultOriginal(id, false)
+                  if (!file) {
+                    keptMissing.set(id, null)
+                  } else if ('disk' in file) {
+                    try {
+                      await checkDiskOriginal(file.disk)
+                    } catch {
+                      keptMissing.set(id, file.disk.key)
+                    }
                   }
                 }
-              }
-            } else {
-              const session = (await readJsonEntry(
-                {
-                  path: 'session.json',
-                  size: row.size,
-                  stream: readBody(state.generation, row.id, row.size),
-                },
-                undefined,
-                'local'
-              )) as Session
-              if (!session || session.id !== row.id || !Array.isArray(session.messages)) {
-                throw new Error('Invalid recovery conversation')
-              }
-              for (const id of sessionOriginalIds(session)) {
-                if (!required.has(id)) {
-                  required.set(id, reserved.has(id) ? createId() : id)
+              } else {
+                const session = (await readJsonEntry(
+                  {
+                    path: 'session.json',
+                    size: row.size,
+                    stream: readBody(state.generation, row.id, row.size),
+                  },
+                  undefined,
+                  'local'
+                )) as Session
+                if (!session || session.id !== row.id || !Array.isArray(session.messages)) {
+                  throw new Error('Invalid recovery conversation')
                 }
+                for (const id of sessionOriginalIds(session)) {
+                  if (!required.has(id)) {
+                    required.set(id, reserved.has(id) ? createId() : id)
+                  }
+                }
+                await db.addStagingSession(mapSessionFileIds(session, (id) => required.get(id) ?? id))
+                savedCount++
               }
-              await db.addStagingSession(mapSessionFileIds(session, (id) => required.get(id) ?? id))
-              savedCount++
+              set({ processed: savedCount + kept })
             }
-            set({ processed: savedCount + kept })
-          }
-          if (savedCount + kept !== state.sessionCount) {
-            throw new Error('Incomplete recovery index')
-          }
-          let listed = 0
-          for await (const row of pages(state.generation, (args) =>
-            NativeVault.listOriginals(args)
-          )) {
-            listed++
-            const mapped = required.get(row.id)
-            const destinations = new Set<string>()
-            if (mapped) {
-              destinations.add(mapped)
+            if (savedCount + kept !== state.sessionCount) {
+              throw new Error('Incomplete recovery index')
             }
-            if (keptMissing.has(row.id)) {
-              destinations.add(row.id)
-              repairs.set(row.id, keptMissing.get(row.id) ?? null)
-            }
-            for (const id of destinations) {
-              const key = createId()
-              const disk = await NativeVault.restoreOriginal({
-                generation: state.generation,
-                fileId: row.id,
-                key,
-              })
-              created.push(key)
-              if (disk.key !== key || disk.size !== row.size || disk.sha256 !== row.sha256) {
-                throw new Error('Incomplete recovered original')
+            let listed = 0
+            for await (const row of pages(state.generation, (args) =>
+              NativeVault.listOriginals(args)
+            )) {
+              listed++
+              const mapped = required.get(row.id)
+              const destinations = new Set<string>()
+              if (mapped) {
+                destinations.add(mapped)
               }
-              await db.saveStagingDiskFile(id, { key, size: disk.size, type: disk.type })
+              if (keptMissing.has(row.id)) {
+                destinations.add(row.id)
+                repairs.set(row.id, keptMissing.get(row.id) ?? null)
+              }
+              for (const id of destinations) {
+                const key = createId()
+                const disk = await NativeVault.restoreOriginal({
+                  generation: state.generation,
+                  fileId: row.id,
+                  key,
+                })
+                created.push(key)
+                if (disk.key !== key || disk.size !== row.size || disk.sha256 !== row.sha256) {
+                  throw new Error('Incomplete recovered original')
+                }
+                await db.saveStagingDiskFile(id, { key, size: disk.size, type: disk.type })
+              }
+              if (destinations.size) {
+                originals++
+                supplied.add(row.id)
+              }
+              set({ processed: state.sessionCount + listed })
             }
-            if (destinations.size) {
-              originals++
-              supplied.add(row.id)
+            if (listed !== state.originalCount) {
+              throw new Error('Incomplete original index')
             }
-            set({ processed: state.sessionCount + listed })
-          }
-          if (listed !== state.originalCount) {
-            throw new Error('Incomplete original index')
-          }
-        },
-        async () => new Set<string>(),
+          }),
+        async () => (savedCount || kept ? new Set<string>() : null),
         () => removeDiskOriginals(created),
         repairs,
         { onlyAfterLoss: automatic }

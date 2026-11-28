@@ -5,7 +5,7 @@
 - Start a separate conversation from a completed reply. The branch keeps the conversation up to that reply, its attachments, and its character voices. The sidebar returns to its previous scroll position.
 - Fixed replies and live narration appearing to stop when a regenerated answer contains an unfinished voice marker. An interrupted reply keeps the text received so far, and each reply version retains its own usage.
 - Updates prefer a direct download and try an alternate source when the connection is unavailable or persistently slow. Interrupted downloads can resume, and the complete file is verified before installation.
-- Android prefers the device file manager for backup import. When chat history is missing, FreeSeek attempts to restore it from the on-device recovery copy. Recovery options are under Data management → On-device recovery copy.
+- Android prefers the device file manager for backup import. When chat history is missing, FreeSeek attempts to restore it from the on-device recovery copy. Recovery options are under Data management → On-device recovery copy. Fixed intermittent attachment recovery errors when the copy was updated during recovery.
 - About FreeSeek links to the project and author profiles. The live progress setting uses the same typography as the rest of Background & notifications.
 
 ## v3.1.16
