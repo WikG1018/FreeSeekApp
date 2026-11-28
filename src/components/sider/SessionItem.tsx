@@ -46,6 +46,7 @@ export const SessionItem = memo(function SessionItem({
   const kindId = useId()
   const mode = session.mode ?? 'chat'
   const kind = t(mode === 'agent' ? 'siderAgentType' : 'siderChatType')
+  const branch = session.branchFrom && t('branchChatLabel')
   const running = useChatStore((state) => Object.hasOwn(state.streaming, session.id))
   const nativeRunning = useNativeGoalActivity((state) => state.sessionId === session.id)
   const compressing = useChatStore((state) => Object.hasOwn(state.compressing, session.id))
@@ -100,6 +101,7 @@ export const SessionItem = memo(function SessionItem({
       <div
         className={clsx(styles.item, active && styles.active)}
         data-session-id={session.id}
+        data-session-branch={branch ? '' : undefined}
         data-session-mode={mode}
         data-session-activity={activity}
       >
@@ -134,6 +136,7 @@ export const SessionItem = memo(function SessionItem({
         </button>
         <span id={kindId} className={styles.accessibleKind}>
           {kind}
+          {branch && ' · ' + branch}
           {activity && ' · ' + t(activity)}
           {session.pinned && ' · ' + t('sessionPinned')}
         </span>

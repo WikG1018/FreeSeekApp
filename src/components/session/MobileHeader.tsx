@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react'
-import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
+import { IconLinkOutline16, IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
 import { IconButton } from '../base/IconButton.js'
@@ -18,6 +18,7 @@ export const MobileHeader = ({
   onTop,
   artifactsButton,
   voicesButton,
+  openBranchSource,
 }: {
   title?: string
   headerRef?: Ref<HTMLDivElement>
@@ -25,6 +26,7 @@ export const MobileHeader = ({
   onTop?: () => void
   artifactsButton?: ReactNode
   voicesButton?: ReactNode
+  openBranchSource?: () => void
 }) => {
   const t = useTranslate()
   const open = useMobileSider((state) => state.open)
@@ -35,6 +37,7 @@ export const MobileHeader = ({
       data-testid="chat-header"
       data-artifacts={!!artifactsButton || undefined}
       data-voices={!!voicesButton || undefined}
+      data-branch-source={!!openBranchSource || undefined}
     >
       <span className={styles.action}>
         <IconButton
@@ -65,6 +68,19 @@ export const MobileHeader = ({
             </div>
           )}
           <div className={styles.right}>
+            {openBranchSource && (
+              <span className={styles.action}>
+                <IconButton
+                  size="m"
+                  tone="primary"
+                  hitArea
+                  icon={<IconLinkOutline16 />}
+                  tooltip={t('branchReturnToSource')}
+                  tooltipPlacement="bottom"
+                  onClick={openBranchSource}
+                />
+              </span>
+            )}
             {artifactsButton}
             {voicesButton}
             <span className={styles.action}>

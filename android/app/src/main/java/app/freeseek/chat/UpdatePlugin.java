@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 import android.provider.Settings;
 import androidx.core.content.FileProvider;
 import com.android.apksig.ApkVerifier;
@@ -20,15 +21,20 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,7 +46,12 @@ public class UpdatePlugin extends Plugin {
     private static final String[] MIRRORS = {"https://gh-proxy.com/", "https://ghfast.top/", "https://ghproxy.net/"};
     private static final String CACHE_DIR = "updates";
     private static final String VERSION = "[0-9]+\\.[0-9]+\\.[0-9]+";
-    private static final Pattern CACHED_PACKAGE = Pattern.compile("freeseek-(" + VERSION + ")\\.apk(\\.part)?");
+    private static final Pattern CACHED_PACKAGE = Pattern.compile(
+        "freeseek-(" + VERSION + ")\\.apk(?:(?:\\.([a-f0-9]{64}))?(\\.part))?");
+    private static final Pattern CONTENT_RANGE = Pattern.compile(
+        "bytes ([0-9]+)-([0-9]+)/([0-9]+)", Pattern.CASE_INSENSITIVE);
+    private static final ExecutorService PROBES = Executors.newFixedThreadPool(MIRRORS.length);
+    private static final int SAMPLE_BYTES = 96 * 1024;
     // File operations share a worker, including across overlapping Capacitor activity instances.
     private static final ExecutorService PACKAGES = Executors.newSingleThreadExecutor();
     private static final AtomicBoolean DOWNLOADING = new AtomicBoolean();
@@ -68,7 +79,7 @@ public class UpdatePlugin extends Plugin {
         PACKAGES.execute(() -> {
             try {
                 String installed = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
-                pruneCache(new File(context.getFilesDir(), CACHE_DIR), installed, null);
+                pruneCache(new File(context.getFilesDir(), CACHE_DIR), installed, null, false);
             } catch (PackageManager.NameNotFoundException error) {
                 DiagnosticsLog.error(context, "update", "cache.cleanup-failed", error);
             }
@@ -85,7 +96,7 @@ public class UpdatePlugin extends Plugin {
         return 0;
     }
 
-    private void pruneCache(File dir, String throughVersion, String keepName) {
+    private void pruneCache(File dir, String throughVersion, String keepName, boolean onlyPartials) {
         try {
             File[] entries = dir.listFiles();
             if (entries == null) return;
@@ -98,9 +109,10 @@ public class UpdatePlugin extends Plugin {
                 if (!match.matches() || !entry.isFile() || name.equals(keepName) || name.equals(installerFile)) {
                     continue;
                 }
-                if (match.group(2) == null && (!hasVersion || compareVersions(match.group(1), throughVersion) > 0)) {
-                    continue;
-                }
+                boolean partial = match.group(3) != null;
+                if (onlyPartials && !partial) continue;
+                boolean legacyPartial = partial && match.group(2) == null;
+                if (!legacyPartial && (!hasVersion || compareVersions(match.group(1), throughVersion) > 0)) continue;
                 long bytes = entry.length();
                 if (entry.delete()) {
                     removed++;
@@ -118,24 +130,22 @@ public class UpdatePlugin extends Plugin {
         }
     }
 
-    private URL allowedUrl(String value, boolean metadata) throws Exception {
+    private URL metadataUrl(String value) throws Exception {
         String direct = value;
         for (String mirror : MIRRORS) {
             if (direct.startsWith(mirror)) { direct = direct.substring(mirror.length()); break; }
         }
         URL url = new URL(direct);
-        boolean history = metadata && direct.matches(
+        boolean history = direct.matches(
             "https://api\\.github\\.com/repos/" + REPO + "/releases\\?per_page=30&page=([1-9]|10)");
         if (!"https".equals(url.getProtocol()) || url.getUserInfo() != null ||
             url.getPort() != -1 || (url.getQuery() != null && !history) || url.getRef() != null) {
             throw new IllegalArgumentException("invalid update URL");
         }
-        boolean allowed = metadata
-            ? (history || direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest") ||
-               direct.equals("https://github.com/" + REPO + "/releases/latest/download/update.json"))
-            : url.getHost().equals("github.com") && url.getPath().matches(
-                "/" + REPO + "/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/freeseek-v[0-9]+\\.[0-9]+\\.[0-9]+-release\\.apk");
-        if (!allowed) { throw new IllegalArgumentException("untrusted update URL"); }
+        if (!history && !direct.equals("https://api.github.com/repos/" + REPO + "/releases/latest") &&
+            !direct.equals("https://github.com/" + REPO + "/releases/latest/download/update.json")) {
+            throw new IllegalArgumentException("untrusted update URL");
+        }
         return new URL(value);
     }
     private HttpURLConnection connect(URL url, int timeout) throws Exception {
@@ -145,20 +155,131 @@ public class UpdatePlugin extends Plugin {
         connection.setRequestProperty("User-Agent", "FreeSeek-Updater");
         return connection;
     }
+    private URL assetUrl(PluginCall call) throws Exception {
+        String version = call.getString("version", "");
+        if (!version.matches(VERSION)) throw new IllegalArgumentException("invalid package version");
+        String direct = "https://github.com/" + REPO + "/releases/download/v" + version +
+            "/freeseek-v" + version + "-release.apk";
+        String value = call.getString("url", "");
+        if (value.equals(direct)) return new URL(value);
+        for (String mirror : MIRRORS) {
+            if (value.equals(mirror + direct)) return new URL(value);
+        }
+        throw new IllegalArgumentException("untrusted update package URL");
+    }
+
+    private boolean allowedAssetRedirect(URL initial, URL next) {
+        String host = next.getHost();
+        return "https".equals(next.getProtocol()) && next.getPort() == -1 && next.getUserInfo() == null &&
+            (initial.getHost().equals(host) || host.equals("github.com") ||
+                host.equals("release-assets.githubusercontent.com") || host.equals("objects.githubusercontent.com"));
+    }
+
+    private HttpURLConnection openAsset(URL initial, String range, int timeout, boolean download) throws Exception {
+        long endsAt = SystemClock.elapsedRealtime() + timeout;
+        URL url = initial;
+        for (int hops = 0; hops <= 5; hops++) {
+            int remaining = (int) (endsAt - SystemClock.elapsedRealtime());
+            if (remaining <= 0) throw new SocketTimeoutException("update connection timed out");
+            HttpURLConnection connection = connect(url, remaining);
+            connection.setInstanceFollowRedirects(false);
+            connection.setUseCaches(false);
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            if (range != null) connection.setRequestProperty("Range", range);
+            if (download) activeDownload = connection;
+            boolean done = false;
+            try {
+                if (download && cancelled) throw new IOException("download cancelled");
+                int status = connection.getResponseCode();
+                if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                    String location = connection.getHeaderField("Location");
+                    if (location == null) throw new IOException("invalid update redirect");
+                    url = new URL(url, location);
+                    if (!allowedAssetRedirect(initial, url)) throw new IOException("untrusted update redirect");
+                } else {
+                    done = true;
+                    return connection;
+                }
+            } finally {
+                if (!done) connection.disconnect();
+            }
+        }
+        throw new IOException("too many update redirects");
+    }
+
+    // A partial response must describe the same package and start at the byte we requested.
+    static boolean validRange(String header, long length, long offset, long end, long expected) {
+        Matcher match = CONTENT_RANGE.matcher(header == null ? "" : header);
+        if (!match.matches()) return false;
+        try {
+            long last = Long.parseLong(match.group(2));
+            return Long.parseLong(match.group(1)) == offset &&
+                (last == end || last == expected - 1) &&
+                Long.parseLong(match.group(3)) == expected &&
+                (length == -1 || length == last - offset + 1);
+        } catch (NumberFormatException invalid) {
+            return false;
+        }
+    }
+
+    private boolean packageResponse(HttpURLConnection connection, long offset, long end, long expected) throws Exception {
+        String contentType = connection.getContentType();
+        String encoding = connection.getContentEncoding();
+        if ((contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("text/html")) ||
+            (encoding != null && !encoding.equalsIgnoreCase("identity"))) {
+            throw new IOException("unexpected package response");
+        }
+        int status = connection.getResponseCode();
+        long length = connection.getContentLengthLong();
+        if (status == 206) {
+            if (!validRange(connection.getHeaderField("Content-Range"), length, offset, end, expected)) {
+                throw new IOException("package range mismatch");
+            }
+            return true;
+        }
+        if (status != 200) throw new IOException("download HTTP " + status);
+        if (length != -1 && length != expected) throw new IOException("download size mismatch");
+        return false;
+    }
+
+    private long expectedLength(PluginCall call) {
+        double length = call.getDouble("expectedSize", -1.0);
+        if (!Double.isFinite(length) || length <= 0 || length > 512L * 1024 * 1024 ||
+            length != Math.floor(length)) {
+            throw new IllegalArgumentException("invalid package size");
+        }
+        return (long) length;
+    }
+
+    private String expectedHash(PluginCall call) {
+        String hash = call.getString("sha256");
+        if (hash != null && !hash.matches("[a-fA-F0-9]{64}")) {
+            throw new IllegalArgumentException("invalid package digest");
+        }
+        return hash == null ? null : hash.toLowerCase(Locale.ROOT);
+    }
+
+    private File checkedApkFile(PluginCall call) throws Exception {
+        String name = call.getString("fileName", "");
+        if (!name.equals("freeseek-" + call.getString("version", "") + ".apk")) {
+            throw new IllegalArgumentException("package name or version mismatch");
+        }
+        return apkFile(name);
+    }
+
+    private File partialFile(File target, String hash) {
+        return new File(target.getAbsolutePath() + (hash == null ? "" : "." + hash) + ".part");
+    }
+
     private long versionCode(PackageInfo info) {
         return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
     }
     private void verify(File file, PluginCall call) throws Exception {
-        double expected = call.getDouble("expectedSize", -1.0);
-        if (!Double.isFinite(expected) || expected <= 0 || expected > 512L * 1024 * 1024 ||
-            expected != Math.floor(expected) || !file.isFile() || file.length() != (long) expected) {
-            throw new IllegalStateException("package size mismatch: expected " + expected +
-                ", actual " + file.length() + ", exists " + file.exists() + ", path " + file.getAbsolutePath());
+        long expected = expectedLength(call);
+        if (!file.isFile() || file.length() != expected) {
+            throw new IllegalStateException("package size mismatch: expected " + expected + ", actual " + file.length());
         }
-        String expectedHash = call.getString("sha256");
-        if (expectedHash != null && !expectedHash.matches("[a-fA-F0-9]{64}")) {
-            throw new IllegalArgumentException("invalid package digest");
-        }
+        String expectedHash = expectedHash(call);
         if (expectedHash != null) {
             MessageDigest hash = MessageDigest.getInstance("SHA-256");
             try (InputStream in = new FileInputStream(file)) {
@@ -202,7 +323,7 @@ public class UpdatePlugin extends Plugin {
             try {
                 int timeout = Math.max(1000, Math.min(30000, call.getInt("timeoutMs", 8000)));
                 long endsAt = android.os.SystemClock.elapsedRealtime() + timeout;
-                connection = connect(allowedUrl(call.getString("url", ""), true), timeout);
+                connection = connect(metadataUrl(call.getString("url", "")), timeout);
                 final HttpURLConnection active = connection;
                 deadline = DEADLINES.schedule(active::disconnect, timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
                 connection.setRequestProperty("Accept", "application/vnd.github+json");
@@ -237,19 +358,67 @@ public class UpdatePlugin extends Plugin {
     public void hasFile(PluginCall call) {
         PACKAGES.execute(() -> {
             try {
-                File file = apkFile(call.getString("fileName", ""));
+                File file = checkedApkFile(call);
+                String hash = expectedHash(call);
+                long expected = expectedLength(call);
                 boolean exists = false;
                 String reason = "";
                 try { verify(file, call); exists = true; }
                 catch (Exception invalid) { reason = invalid.toString(); if (file.exists()) {
                     DiagnosticsLog.error(getContext(), "update", "cache.rejected", invalid); file.delete();
                 } }
-                if (exists) pruneCache(file.getParentFile(), call.getString("version"), file.getName());
+                if (exists) pruneCache(file.getParentFile(), call.getString("version"), file.getName(), false);
+                File partial = partialFile(file, hash);
+                long downloaded = hash != null && partial.isFile() ? partial.length() : 0;
                 JSObject result = new JSObject(); result.put("exists", exists);
                 result.put("reason", reason);
                 result.put("path", exists ? file.getAbsolutePath() : ""); result.put("size", exists ? file.length() : 0);
+                result.put("partialBytes", !exists && downloaded <= expected ? downloaded : 0);
                 call.resolve(result);
             } catch (Exception error) { call.reject("invalid update cache", error); }
+        });
+    }
+
+    @PluginMethod
+    public void probe(PluginCall call) {
+        PROBES.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = assetUrl(call);
+                if ("github.com".equals(url.getHost())) throw new IllegalArgumentException("only mirrors are probed");
+                long expected = expectedLength(call);
+                double requested = call.getDouble("offset", -1.0);
+                if (requested < 0 || requested >= expected || requested != Math.floor(requested)) {
+                    throw new IllegalArgumentException("invalid probe offset");
+                }
+                long offset = (long) requested;
+                int limit = (int) Math.min(SAMPLE_BYTES, expected - offset);
+                long started = SystemClock.elapsedRealtime();
+                long end = offset + limit - 1;
+                connection = openAsset(url, "bytes=" + offset + "-" + end, 3500, false);
+                boolean supportsRange = packageResponse(connection, offset, end, expected);
+                int received = 0;
+                try (InputStream in = connection.getInputStream()) {
+                    byte[] buffer = new byte[16 * 1024];
+                    while (received < limit) {
+                        int remaining = (int) (3500 - (SystemClock.elapsedRealtime() - started));
+                        if (remaining <= 0) break;
+                        connection.setReadTimeout(remaining);
+                        int read = in.read(buffer, 0, Math.min(buffer.length, limit - received));
+                        if (read == -1) throw new IOException("mirror sample incomplete");
+                        received += read;
+                    }
+                } catch (SocketTimeoutException timeout) {
+                    if (received < Math.min(16 * 1024, limit)) throw timeout;
+                }
+                if (received < Math.min(16 * 1024, limit)) throw new IOException("mirror sample incomplete");
+                long rate = received * 1000L / Math.max(1, SystemClock.elapsedRealtime() - started);
+                call.resolve(new JSObject().put("supportsRange", supportsRange).put("bytesPerSecond", rate));
+            } catch (Exception failure) {
+                call.reject("mirror probe failed", failure);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
         });
     }
 
@@ -276,60 +445,115 @@ public class UpdatePlugin extends Plugin {
     }
 
     private JSObject downloadPackage(PluginCall call) throws Exception {
-        File target = apkFile(call.getString("fileName", ""));
-        URL url = allowedUrl(call.getString("url", ""), false);
+        File target = checkedApkFile(call);
+        URL url = assetUrl(call);
         String version = call.getString("version");
+        long expected = expectedLength(call);
+        String hash = expectedHash(call);
         if (target.exists()) {
             try {
                 verify(target, call);
-                pruneCache(target.getParentFile(), version, target.getName());
+                pruneCache(target.getParentFile(), version, target.getName(), false);
                 return new JSObject().put("path", target.getAbsolutePath())
                     .put("size", target.length()).put("cached", true);
-            } catch (Exception invalid) { target.delete(); }
+            } catch (Exception invalid) {
+                DiagnosticsLog.error(getContext(), "update", "cache.rejected", invalid);
+                target.delete();
+            }
         }
 
-        HttpURLConnection connection = null;
-        File temp = new File(target.getAbsolutePath() + ".part");
-        java.util.concurrent.ScheduledFuture<?> deadline = null;
+        File temporary = partialFile(target, hash);
+        pruneCache(target.getParentFile(), version, temporary.getName(), true);
         try {
-            connection = connect(url, 60000);
-            activeDownload = connection;
-            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-            connection.setConnectTimeout(15000);
-            final HttpURLConnection active = connection;
-            deadline = DEADLINES.schedule(active::disconnect, 20, java.util.concurrent.TimeUnit.MINUTES);
-            int status = connection.getResponseCode();
-            if (status != 200 || !"https".equals(connection.getURL().getProtocol())) {
-                throw new IllegalStateException("download HTTP " + status);
+            long offset = hash != null ? temporary.length() : 0;
+            if (offset > expected) {
+                if (!temporary.delete()) throw new IOException("cannot discard oversized partial package");
+                offset = 0;
             }
-            long expected = call.getDouble("expectedSize", -1.0).longValue();
-            long headerSize = connection.getContentLengthLong();
-            if (headerSize > 0 && headerSize != expected) { throw new IllegalStateException("download size mismatch"); }
-            try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(temp)) {
-                byte[] buffer = new byte[64 * 1024]; long received = 0, last = 0; int read;
+            if (offset == expected) {
+                try {
+                    verify(temporary, call);
+                } catch (Exception invalid) {
+                    DiagnosticsLog.error(getContext(), "update", "partial.rejected", invalid);
+                    if (!temporary.delete()) throw invalid;
+                    offset = 0;
+                }
+            }
+            if (offset < expected) {
+                boolean restart = call.getBoolean("allowRestart", false);
+                JSObject result = transfer(call, url, temporary, restart ? 0 : offset, expected);
+                if (result != null) return result;
+                try {
+                    verify(temporary, call);
+                } catch (Exception invalid) {
+                    DiagnosticsLog.error(getContext(), "update", "package.rejected", invalid);
+                    if (temporary.delete() && offset > 0 && !restart) {
+                        return new JSObject().put("restartRequired", true);
+                    }
+                    throw invalid;
+                }
+            }
+            if (cancelled) throw new IOException("download cancelled");
+            if (!temporary.renameTo(target)) throw new IOException("cannot publish verified package");
+            DiagnosticsLog.record(getContext(), "update", "package.verified",
+                new JSObject().put("bytes", target.length()).put("source", url.getHost()));
+            pruneCache(target.getParentFile(), version, target.getName(), false);
+            return new JSObject().put("path", target.getAbsolutePath()).put("size", target.length());
+        } finally {
+            if (hash == null) temporary.delete();
+        }
+    }
+
+    private JSObject transfer(PluginCall call, URL url, File temporary, long offset, long expected) throws Exception {
+        HttpURLConnection connection = null;
+        ScheduledFuture<?> deadline = null;
+        try {
+            connection = openAsset(url, offset == 0 ? null : "bytes=" + offset + "-", 12000, true);
+            final HttpURLConnection active = connection;
+            deadline = DEADLINES.schedule(active::disconnect, 60, TimeUnit.MINUTES);
+            connection.setReadTimeout(12000);
+            int status = connection.getResponseCode();
+            if (offset > 0 && (status == 200 || status == 416)) {
+                return new JSObject().put("restartRequired", true);
+            }
+            boolean ranged = packageResponse(connection, offset, expected - 1, expected);
+            boolean append = offset > 0 && ranged;
+            long received = append ? offset : 0;
+            notifyListeners("progress", new JSObject().put("received", received).put("total", expected));
+            boolean stopIfSlow = call.getBoolean("stopIfSlow", false);
+            try (InputStream in = connection.getInputStream();
+                 FileOutputStream out = new FileOutputStream(temporary, append)) {
+                byte[] buffer = new byte[64 * 1024];
+                long windowStart = SystemClock.elapsedRealtime(), windowBytes = received, lastProgress = 0;
+                int read;
                 while ((read = in.read(buffer)) != -1) {
-                    if (cancelled || received + read > expected) { throw new IllegalStateException("download cancelled or too large"); }
-                    out.write(buffer, 0, read); received += read;
-                    if (received - last > 256 * 1024) {
-                        JSObject progress = new JSObject(); progress.put("received", received); progress.put("total", expected);
-                        notifyListeners("progress", progress); last = received;
+                    if (cancelled) throw new IOException("download cancelled");
+                    if (received + read > expected) throw new IOException("download exceeds package size");
+                    out.write(buffer, 0, read);
+                    received += read;
+                    long now = SystemClock.elapsedRealtime();
+                    if (now - lastProgress >= 150) {
+                        notifyListeners("progress", new JSObject().put("received", received).put("total", expected));
+                        lastProgress = now;
+                    }
+                    long elapsed = now - windowStart;
+                    if (stopIfSlow && elapsed >= 12000) {
+                        long rate = (received - windowBytes) * 1000 / elapsed;
+                        if (rate < 128 * 1024 && expected - received > rate * 30) {
+                            return new JSObject().put("slow", true).put("bytesPerSecond", rate);
+                        }
+                        windowStart = now;
+                        windowBytes = received;
                     }
                 }
+                if (received != expected) throw new IOException("package download incomplete");
                 out.getFD().sync();
             }
-            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-            verify(temp, call);
-            if (cancelled) { throw new IllegalStateException("download cancelled or too large"); }
-            JSObject verified = new JSObject(); verified.put("bytes", temp.length());
-            verified.put("source", url.getHost()); DiagnosticsLog.record(getContext(), "update", "package.verified", verified);
-            if (!temp.renameTo(target)) { throw new IllegalStateException("cannot publish verified package"); }
-            pruneCache(target.getParentFile(), version, target.getName());
-            return new JSObject().put("path", target.getAbsolutePath()).put("size", target.length());
+            return null;
         } finally {
             if (deadline != null) deadline.cancel(false);
             if (connection != null) connection.disconnect();
             activeDownload = null;
-            temp.delete();
         }
     }
 
@@ -347,7 +571,8 @@ public class UpdatePlugin extends Plugin {
         PACKAGES.execute(() -> {
             try {
                 File file = new File(call.getString("path", ""));
-                if (!file.getCanonicalFile().getParentFile().equals(updateDir().getCanonicalFile())) {
+                File target = apkFile("freeseek-" + call.getString("version", "") + ".apk");
+                if (!file.equals(target) || !file.getCanonicalFile().getParentFile().equals(updateDir().getCanonicalFile())) {
                     throw new IllegalArgumentException("invalid installation path");
                 }
                 verify(file, call);

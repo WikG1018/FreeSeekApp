@@ -54,6 +54,7 @@ public class MainActivity extends BridgeActivity {
             .put("webviewAvailable", hasWebView)
             .put("elapsedMs", SystemClock.elapsedRealtime() - createdAt);
         if (hasWebView) {
+            bridge.getWebView().setWebChromeClient(new BackupFilePicker(bridge));
             bridge.getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
             DiagnosticsLog.record(this, "app", "bridge.ready", ready);
             webViewHealth = new WebViewHealth(this);

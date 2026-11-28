@@ -55,6 +55,7 @@ type RowProps = {
   className?: string
   danger?: boolean
   disabled?: boolean
+  busy?: boolean
   onClick?: () => void
   onLongPress?: () => void
   target?: string
@@ -72,6 +73,7 @@ export const Row = ({
   className,
   danger,
   disabled,
+  busy,
   onClick,
   onLongPress,
   target,
@@ -128,6 +130,7 @@ export const Row = ({
       type="button"
       className={clsx(styles.row, styles.rowInteractive, className)}
       disabled={disabled}
+      aria-busy={busy || undefined}
       aria-label={description || detail || badge ? label : undefined}
       aria-describedby={
         [description && descriptionId, detail && detailId].filter(Boolean).join(' ') || undefined
@@ -169,6 +172,7 @@ export const SwitchRow = ({
   checked,
   change,
   description,
+  prominent = Boolean(description),
   disabled = false,
   panelItem = false,
 }: {
@@ -176,6 +180,7 @@ export const SwitchRow = ({
   checked: boolean
   change: (enabled: boolean) => void
   description?: string
+  prominent?: boolean
   disabled?: boolean
   panelItem?: boolean
 }) => {
@@ -194,7 +199,7 @@ export const SwitchRow = ({
     >
       {description ? (
         <span className={styles.rowCopy}>
-          <span className={styles.rowStrong}>{label}</span>
+          <span className={clsx(styles.rowLabel, prominent && styles.rowStrong)}>{label}</span>
           <span className={styles.rowDescription} id={descriptionId}>
             {description}
           </span>

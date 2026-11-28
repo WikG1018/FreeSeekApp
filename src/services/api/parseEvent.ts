@@ -154,11 +154,13 @@ const readDelta = (value: unknown): ContentBlockDelta | null => {
   }
   switch (value.type) {
     case 'text_delta':
-      return isString(value.text) ? (value as ContentBlockDelta) : null
+      return isString(value.text) && value.text ? (value as ContentBlockDelta) : null
     case 'thinking_delta':
-      return isString(value.thinking) ? (value as ContentBlockDelta) : null
+      return isString(value.thinking) && value.thinking ? (value as ContentBlockDelta) : null
     case 'signature_delta':
-      return isString(value.signature) ? (value as ContentBlockDelta) : null
+      return isString(value.signature) && value.signature ? (value as ContentBlockDelta) : null
+    case 'input_json_delta':
+      return isString(value.partial_json) && value.partial_json ? (value as ContentBlockDelta) : null
     case 'citations_delta':
       return isCitation(value.citation) ? (value as ContentBlockDelta) : null
     default:

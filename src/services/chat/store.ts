@@ -31,8 +31,9 @@ import { UnsupportedImageError } from '../image.js'
 import { beginDiagnosticOperation, diagnosticError, logEvent } from '../diagnostics/log.js'
 import { requestPersistentStorage } from '../storagePersistence.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
+import { createBranchSnapshot } from './forkConversation.js'
 import * as db from './db.js'
-import { allSessionMessages, mapSessionMessages } from './sessionData.js'
+import { allSessionMessages, mapSessionMessages, sessionOriginalIds } from './sessionData.js'
 import { sumMessageUsage, usageEntries } from './usage.js'
 import { abortReason } from '../../utils/abort.js'
 import { mergeInheritedRoles, sessionRoles, storedSessionRoles } from '../speech/roleTable.js'
@@ -532,7 +533,7 @@ export const keepConflictingChats = () => db.withHistoryReplacement(async (): Pr
       id: createId(),
       title: translate('conflictingChatCopy', { title: session.title || translate('untitledChat') }),
     }
-    const missingOriginals = await db.saveConflictCopy(copy, pendingFiles.get(id))
+    const missingOriginals = await db.saveSessionCopy(copy, pendingFiles.get(id))
     missing += missingOriginals
     const current = getSession(id) === session
     if (current) {
@@ -844,6 +845,8 @@ const resyncSessions = () => {
   }))
 }
 
+let triedAutomaticHistoryRestore = false
+
 export const initChat = (allowEmpty = false): Promise<void> => {
   if (get().ready || get().importingHistory) {
     return Promise.resolve()
@@ -870,8 +873,13 @@ export const initChat = (allowEmpty = false): Promise<void> => {
         const vault = await import('./historyVault.js')
         await vault.refreshHistoryVault()
         if ((vault.useHistoryVault.getState().protectedSessions ?? 0) > 0) {
-          const { emptyAfterLoss } = await db.vaultCommitProof()
-          throw new db.HistoryMissingError(emptyAfterLoss ? 'empty-after-known-history' : 'selection-uncertain', emptyAfterLoss)
+          const { confirmedEmpty, canRestoreAutomatically } = await db.vaultCommitProof()
+          if (!confirmedEmpty) {
+            throw new db.HistoryMissingError(
+              canRestoreAutomatically ? 'empty-after-known-history' : 'selection-uncertain',
+              canRestoreAutomatically
+            )
+          }
         }
       }
       const route = await db.loadStartupRoute().catch((error: unknown) => {
@@ -944,6 +952,30 @@ export const initChat = (allowEmpty = false): Promise<void> => {
           historyMayStartFresh: error instanceof db.HistoryMissingError && error.canStartFresh,
         })
         db.reportStorageError('read local sessions')(error)
+        if (
+          !allowEmpty &&
+          historyReason === 'empty-after-known-history' &&
+          historyVaultAvailable() &&
+          !triedAutomaticHistoryRestore
+        ) {
+          triedAutomaticHistoryRestore = true
+          // The merge waits for this startup read to finish before touching either history store.
+          void import('./historyVault.js')
+            .then(async ({ restoreHistoryVault }) => {
+              if (!(await db.vaultCommitProof()).canRestoreAutomatically) {
+                return
+              }
+              logEvent('storage', 'history.auto-restore-started')
+              const result = await restoreHistoryVault({ automatic: true })
+              if (result && result.sessions > 0) {
+                showToast({
+                  key: result.missing > 0 ? 'historyVaultAutoRestoredPartial' : 'historyVaultAutoRestored',
+                  params: { count: result.sessions, missing: result.missing },
+                })
+              }
+            })
+            .catch(db.reportStorageError('restore from on-device backup'))
+        }
       }
     } finally {
       if (epoch === historyEpoch) {
@@ -1184,7 +1216,8 @@ export const mergeHistory = (
   write: (reservedFileIds: ReadonlySet<string>) => Promise<void>,
   choose: (preview: db.HistoryImportPreview) => Promise<ReadonlySet<string> | null>,
   rollback: () => Promise<void>,
-  repairs?: ReadonlyMap<string, string | null>
+  repairs?: ReadonlyMap<string, string | null>,
+  { onlyAfterLoss = false } = {}
 ) =>
   db.withHistoryReplacement(async () => {
     await initTask
@@ -1202,6 +1235,14 @@ export const mergeHistory = (
       const saved = await Promise.all([...unsavedSessions].map(persist))
       if (saved.some((ok) => !ok)) {
         throw new BackupError('backupSaveBeforeMerge')
+      }
+      if (onlyAfterLoss && (
+        get().ready ||
+        get().historyRecoveryReason !== 'empty-after-known-history' ||
+        !(await db.vaultCommitProof()).canRestoreAutomatically
+      )) {
+        logEvent('storage', 'history.auto-restore-skipped')
+        return null
       }
       const reserved = await db.prepareHistoryMerge()
       const discard = async () => {
@@ -1284,7 +1325,7 @@ export const mergeHistory = (
       const { activeId, ready } = get()
       if (activeId !== null) {
         void ensureSessionLoaded(activeId)
-      } else if (!ready) {
+      } else if (!ready && !onlyAfterLoss) {
         void initChat()
       }
     }
@@ -1427,6 +1468,58 @@ export const selectSession = (id: string, messageId?: string) => {
     trimSessionCache()
   }
 }
+
+/** Snapshot the selected route before opening the new conversation. */
+export const branchConversation = (sessionId: string, messageId: string) =>
+  db.withHistoryReplacement(async () => {
+    if (get().importingHistory || get().activeId !== sessionId || deletingSessions.has(sessionId)) {
+      return
+    }
+    flushChatUpdates()
+    const source = getSession(sessionId)
+    if (!source) {
+      return
+    }
+    const branch = createBranchSnapshot(source, messageId)
+    if (!branch) {
+      return
+    }
+    const question = branch.messages.at(-2)
+    const preview = question?.role === 'user'
+      ? question.content.trimStart().slice(0, 80).replace(/\s+/g, ' ').trim()
+      : ''
+    const title = Array.from(preview).slice(0, 36).join('') || source.title || translate('untitledChat')
+    const titles = new Set(get().sessions.map((session) => session.title))
+    branch.title = translate('branchChatTitle', { title })
+    for (let number = 2; titles.has(branch.title); number++) {
+      branch.title = translate('branchNumberedTitle', { title, number })
+    }
+    const originalIds = new Set(sessionOriginalIds(branch))
+    const originals = pendingFiles.get(sessionId)?.filter(({ id }) => originalIds.has(id))
+    const missingOriginals = await db.saveSessionCopy(branch, originals)
+    touchSession(branch.id)
+    set((state) => ({
+      sessions: sortSessions([
+        toSessionSummary(branch),
+        ...state.sessions.filter(({ id }) => id !== branch.id),
+      ]),
+      sessionCache: { ...state.sessionCache, [branch.id]: branch },
+    }))
+    const opened = get().activeId === sessionId
+    if (opened) {
+      selectSession(branch.id)
+    }
+    trimSessionCache()
+    logEvent('chat', 'session.branched', {
+      sessionId: branch.id,
+      messageCount: branch.messages.length,
+      missingOriginals,
+    })
+    return { opened, missingOriginals }
+  }).catch((error: unknown) => {
+    db.reportStorageError('create conversation branch')(error)
+    return undefined
+  })
 
 export const clearMessageTarget = (sessionId: string, messageId: string) => {
   if (get().activeId === sessionId && get().targetMessageId === messageId) {
@@ -4875,7 +4968,8 @@ const streamReply = async (
                       ? 'connection-changed'
                       : reply.error?.status === 429
                         ? 'provider-rate-limit'
-                        : reply.error?.localMessage?.key === 'streamIdleTimeout'
+                        : reply.error?.localMessage?.key === 'streamIdleTimeout' ||
+                          reply.error?.localMessage?.key === 'streamProgressTimeout'
                           ? 'provider-timeout'
                           : 'provider-error'
                     : 'interrupted',

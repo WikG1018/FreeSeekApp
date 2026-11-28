@@ -223,6 +223,7 @@ const BackgroundNotifications = () => {
       {liveProgress !== undefined && (
         <SwitchRow
           label={t('settingsLiveProgress')}
+          prominent={false}
           description={t(liveProgress && status?.liveProgressAllowed === false
             ? 'settingsLiveProgressPermission' : 'settingsLiveProgressHelp')}
           checked={liveProgress}

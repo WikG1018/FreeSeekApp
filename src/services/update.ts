@@ -13,15 +13,15 @@ import { isWindowsDesktop } from './api/windowsTransport.js'
  * - 结果缓存 6 小时，避免每次启动都请求
  * - 原生流式下载与已下载包均须验证大小、摘要、包名、版本与签名
  */
-const REPO = 'WikG1018/FreeSeekApp'
+export const REPO = 'WikG1018/FreeSeekApp'
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases`
 const RELEASE_API = `${RELEASES_API}/latest`
 const RELEASE_MANIFEST = `https://github.com/${REPO}/releases/latest/download/update.json`
-/** 国内网络常见的 GitHub 反代；顺序即优先级 */
-const MIRRORS = ['', 'https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']
+const MIRRORS = ['https://gh-proxy.com/', 'https://ghfast.top/', 'https://ghproxy.net/']
 const METADATA_SOURCES = [
   RELEASE_API,
   `https://gh-proxy.com/${RELEASE_API}`,
+  RELEASE_MANIFEST,
   ...MIRRORS.map((mirror) => `${mirror}${RELEASE_MANIFEST}`),
 ]
 const CACHE_KEY = 'freeseek:update-cache'
@@ -44,12 +44,22 @@ type NativeUpdate = {
   get: (o: { url: string; timeoutMs?: number }) => Promise<{ status: number; body: string }>
   hasFile: (
     o: PackageCheck & { fileName: string }
-  ) => Promise<{ exists: boolean; path: string; size: number }>
-  download: (o: PackageCheck & { url: string; fileName: string }) => Promise<{
-    path: string
-    size: number
-    cached?: boolean
-  }>
+  ) => Promise<{ exists: boolean; path: string; size: number; partialBytes?: number }>
+  probe?: (
+    o: PackageCheck & { url: string; fileName: string; offset: number }
+  ) => Promise<{ bytesPerSecond: number; supportsRange: boolean }>
+  download: (
+    o: PackageCheck & {
+      url: string
+      fileName: string
+      stopIfSlow?: boolean
+      allowRestart?: boolean
+    }
+  ) => Promise<
+    | { path: string; size: number; cached?: boolean }
+    | { restartRequired: true }
+    | { slow: true; bytesPerSecond: number }
+  >
   cancel: () => Promise<void>
   install: (o: PackageCheck & { path: string }) => Promise<{ installed: boolean; reason?: string }>
   addListener: (
@@ -60,7 +70,10 @@ type NativeUpdate = {
 
 const UpdateNative = registerPlugin<NativeUpdate>('Update')
 type PackageCheck = { expectedSize: number; sha256: string | null; version: string }
-type PackageUpdater = Pick<NativeUpdate, 'get' | 'hasFile' | 'download' | 'install' | 'addListener'>
+type PackageUpdater = Pick<
+  NativeUpdate,
+  'get' | 'hasFile' | 'probe' | 'download' | 'install' | 'addListener'
+>
 type ReleaseAsset = { name: string; size: number; url: string; sha256: string | null }
 
 declare global {
@@ -71,6 +84,7 @@ declare global {
 
 const packageUpdater = () => (isWindowsDesktop() ? window.freeseekWindowsUpdate : UpdateNative)
 const browserUpdate = () => !isWindowsDesktop() && !Capacitor.isNativePlatform()
+const online = () => navigator.onLine !== false
 
 export type ReleaseInfo = {
   version: string
@@ -544,6 +558,7 @@ const showRelease = async (
 ): Promise<boolean> => {
   const newer = isNewer(release.version, currentVersion())
   let path = ''
+  let partialBytes = 0
   const asset = availablePackage(release)
   if (newer && asset && !browserUpdate()) {
     const cached = await packageUpdater()
@@ -557,6 +572,7 @@ const showRelease = async (
     if (cached?.exists) {
       path = cached.path
     }
+    partialBytes = cached?.partialBytes ?? 0
   }
   const ready = Boolean(path || (release.webFiles && preparedWebVersion === release.version))
   useUpdate.setState({
@@ -564,13 +580,14 @@ const showRelease = async (
     lastCheckedAt: at,
     status: ready ? 'ready' : newer ? 'available' : 'latest',
     filePath: path,
-    percent: ready ? 100 : 0,
+    percent: ready ? 100 : downloadPercent(partialBytes, asset?.size ?? 0),
     error: '',
   })
   if (
     predownload &&
     newer &&
     !ready &&
+    online() &&
     (release.webFiles || (asset && (isWindowsDesktop() || Capacitor.getPlatform() === 'android')))
   ) {
     void downloadUpdate('automatic')
@@ -676,8 +693,10 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
   logEvent('update', 'check.started', { force })
   const offline = async () => {
     if (known && isNewer(known.version, currentVersion())) {
-      await showRelease(known, cache.at || state.lastCheckedAt, false)
-      useUpdate.setState({ error: 'network' })
+      await showRelease(known, cache.at || state.lastCheckedAt, !browserUpdate())
+      if (useUpdate.getState().status !== 'downloading') {
+        useUpdate.setState({ error: 'network' })
+      }
       logEvent(
         'update',
         'check.cached',
@@ -708,7 +727,37 @@ export const checkForUpdate = async ({ force = false } = {}): Promise<boolean> =
   }
 }
 
-/** 下载更新包：依次尝试直连和镜像，始终保留校验与手动重试。 */
+const downloadPercent = (received: number, total: number) =>
+  total > 0 ? Math.min(99, Math.round((received / total) * 100)) : 0
+
+const RETRY_DELAYS = [15_000, 45_000, 120_000, 300_000]
+let retryTimer: number | undefined
+let retryAt = 0
+let retryCount = 0
+let retryVersion = ''
+
+const resumeNativeUpdate = (networkRestored = false) => {
+  if (browserUpdate() || !online() || (!networkRestored && Date.now() < retryAt)) {
+    return
+  }
+  const { status, release } = useUpdate.getState()
+  if (status === 'available' && release && availablePackage(release)) {
+    void downloadUpdate('automatic')
+  }
+}
+
+const scheduleUpdateRetry = () => {
+  const delay = RETRY_DELAYS[Math.min(retryCount, RETRY_DELAYS.length - 1)]
+  retryCount += 1
+  retryAt = Date.now() + delay
+  retryTimer = window.setTimeout(() => {
+    retryTimer = undefined
+    retryAt = 0
+    resumeNativeUpdate()
+  }, delay)
+}
+
+/** 尝试直连，连接失败或速度过慢时按镜像实际传输表现继续下载。 */
 export const downloadUpdate = async (
   trigger: 'automatic' | 'manual' = 'manual'
 ): Promise<boolean> => {
@@ -724,11 +773,17 @@ export const downloadUpdate = async (
   }
   const asset = availablePackage(release)
   const updater = packageUpdater()
-  if (!asset || !updater) {
+  if (!asset || !updater || (trigger === 'automatic' && !online())) {
     return false
   }
 
-  useUpdate.setState({ status: 'downloading', percent: 0, error: '', filePath: '' })
+  clearTimeout(retryTimer)
+  retryTimer = undefined
+  if (retryVersion !== release.version) {
+    retryVersion = release.version
+    retryCount = 0
+  }
+  useUpdate.setState({ status: 'downloading', error: '', filePath: '' })
   const finish = beginDiagnosticOperation('update', 'download.transfer', {
     version: release.version,
     trigger,
@@ -736,58 +791,185 @@ export const downloadUpdate = async (
     checksumAvailable: Boolean(asset.sha256),
   })
   let receivedBytes = 0
+  const updateProgress = (received: number) => {
+    receivedBytes = received
+    useUpdate.setState({ percent: downloadPercent(received, asset.size) })
+  }
   const listener = await updater
-    .addListener('progress', ({ received, total }) => {
-      if (useUpdate.getState().status !== 'downloading') {
-        return
+    .addListener('progress', ({ received }) => {
+      if (useUpdate.getState().status === 'downloading') {
+        updateProgress(received)
       }
-      receivedBytes = received
-      useUpdate.setState({
-        percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : -1,
-      })
     })
     .catch(() => null)
 
-  const fileName = fileNameFor(release, asset)
-  try {
-    const check = { expectedSize: asset.size, sha256: asset.sha256, version: release.version }
-    const cached = await updater.hasFile({ fileName, ...check })
-    if (cached.exists) {
-      useUpdate.setState({ status: 'ready', percent: 100, filePath: cached.path })
-      finish('completed', { cached: true })
-      return true
-    }
-    const mirrors = isWindowsDesktop() ? [asset.url] : MIRRORS.map((m) => mirrored(m, asset.url))
-    for (const url of mirrors) {
-      receivedBytes = 0
-      const source = new URL(url).host
-      try {
-        const result = await updater.download({ url, fileName, ...check })
-        useUpdate.setState({ status: 'ready', percent: 100, filePath: result.path })
-        finish('completed', { source, receivedBytes })
-        return true
-      } catch (error) {
+  const check = {
+    fileName: fileNameFor(release, asset),
+    expectedSize: asset.size,
+    sha256: asset.sha256,
+    version: release.version,
+  }
+  const ready = (
+    path: string,
+    source: string,
+    extra: { cached?: boolean; resumedBytes?: number }
+  ) => {
+    retryAt = 0
+    retryCount = 0
+    useUpdate.setState({ status: 'ready', percent: 100, filePath: path })
+    finish('completed', { source, receivedBytes: asset.size, ...extra })
+    return true
+  }
+
+  let failure: unknown
+  let attempts = 0
+  let directRate = 0
+  const restartSources = new Set<string>()
+  const attempt = async (url: string, stopIfSlow: boolean, allowRestart = false) => {
+    attempts += 1
+    const source = new URL(url).host
+    try {
+      const resumedBytes = receivedBytes
+      const result = await updater.download({ url, ...check, stopIfSlow, allowRestart })
+      if ('path' in result) {
+        return ready(result.path, source, { cached: result.cached, resumedBytes })
+      }
+      if ('restartRequired' in result) {
+        restartSources.add(url)
+        logEvent('update', 'download.range-unavailable', { source, receivedBytes }, 'warn')
+      } else {
+        directRate = result.bytesPerSecond
         logEvent(
           'update',
-          'download.source-failed',
-          { source, receivedBytes, ...diagnosticError(error) },
+          'download.direct-slow',
+          { source, receivedBytes, bytesPerSecond: directRate },
           'warn'
         )
-        // 换下一个源
+      }
+    } catch (error) {
+      logEvent(
+        'update',
+        'download.source-failed',
+        { source, receivedBytes, ...diagnosticError(error) },
+        'warn'
+      )
+    }
+    return false
+  }
+
+  try {
+    const cached = await updater.hasFile(check)
+    if (cached.exists) {
+      return ready(cached.path, 'cache', { cached: true })
+    }
+    updateProgress(cached.partialBytes ?? 0)
+    if (await attempt(asset.url, true)) {
+      return true
+    }
+    if (online()) {
+      const partial = await updater.hasFile(check).catch(() => null)
+      updateProgress(partial?.partialBytes ?? receivedBytes)
+      const offset = receivedBytes
+      const probe = updater.probe
+      const mirrorUrls = MIRRORS.map((mirror) => mirrored(mirror, asset.url))
+      const measured = probe
+        ? await Promise.all(
+            mirrorUrls.map(async (url) => {
+              const speed = await probe({ ...check, url, offset }).catch(() => null)
+              return { url, speed }
+            })
+          )
+        : []
+      const ordered = measured
+        .filter((item) => item.speed && item.speed.bytesPerSecond > 0)
+        .sort(
+          (left, right) =>
+            (offset > 0
+              ? Number(right.speed?.supportsRange) - Number(left.speed?.supportsRange)
+              : 0) || (right.speed?.bytesPerSecond ?? 0) - (left.speed?.bytesPerSecond ?? 0)
+        )
+      if (probe) {
+        logEvent('update', 'download.mirrors-measured', {
+          candidates: measured.length,
+          reachable: ordered.length,
+          partialBytes: offset,
+          bestBytesPerSecond: ordered[0]?.speed?.bytesPerSecond ?? 0,
+        })
+      }
+      const fasterThanDirect = ({ speed }: (typeof measured)[number]) => {
+        if (!speed) {
+          return false
+        }
+        const actualRate =
+          speed.bytesPerSecond * (speed.supportsRange ? 1 : 1 - offset / asset.size)
+        return actualRate > directRate * 1.25
+      }
+      // Some mirrors reject a bounded sample but still serve a regular package request.
+      const mirrors =
+        ordered.length > 0
+          ? ordered.filter(fasterThanDirect)
+          : directRate === 0 && !restartSources.has(asset.url) && (probe || !isWindowsDesktop())
+            ? mirrorUrls.map((url) => ({ url, speed: null }))
+            : []
+      for (const { url, speed } of mirrors) {
+        if (offset > 0 && speed && !speed.supportsRange) {
+          restartSources.add(url)
+        } else if (await attempt(url, false)) {
+          return true
+        }
+        if (!online()) {
+          break
+        }
+      }
+      // A full restart is useful only after resumable alternatives have been tried.
+      if (online()) {
+        for (const url of restartSources) {
+          if (await attempt(url, false, true)) {
+            return true
+          }
+          if (!online()) {
+            break
+          }
+        }
+        if (online() && directRate > 0 && !restartSources.has(asset.url)) {
+          if (await attempt(asset.url, false)) {
+            return true
+          }
+          if (
+            online() &&
+            restartSources.has(asset.url) &&
+            (await attempt(asset.url, false, true))
+          ) {
+            return true
+          }
+        }
       }
     }
-    // 不让系统下载器绕过包名、证书与摘要验证；保留手动重试入口。
-    useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
-    finish('failed', { reason: 'sources-exhausted', attempts: mirrors.length, receivedBytes })
-    return false
   } catch (error) {
-    finish('failed', { receivedBytes, ...diagnosticError(error) })
+    failure = error
     logEvent('update', 'download.failed', diagnosticError(error), 'error')
-    useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
-    return false
   } finally {
     await listener?.remove().catch(() => {})
+    if (useUpdate.getState().status === 'downloading') {
+      const remaining = await updater.hasFile(check).catch(() => null)
+      if (remaining?.exists) {
+        ready(remaining.path, 'cache', { cached: true })
+      } else {
+        if (remaining) {
+          updateProgress(remaining.partialBytes ?? 0)
+        }
+        finish('failed', {
+          reason: 'sources-exhausted',
+          attempts,
+          receivedBytes,
+          ...(failure ? diagnosticError(failure) : {}),
+        })
+        useUpdate.setState({ status: 'available', error: 'download-failed', filePath: '' })
+        scheduleUpdateRetry()
+      }
+    }
   }
+  return useUpdate.getState().status === 'ready'
 }
 
 const waitForSavedHistory = async () => {
@@ -914,22 +1096,36 @@ export const initUpdateChecker = (): void => {
   window.setTimeout(() => run('startup'), 2500)
 
   // 回到前台补查（WebView 切后台会暂停定时器，所以用可见性事件兜底）
-  const onVisible = () => {
-    if (
-      document.visibilityState === 'visible' &&
-      Date.now() - lastAutoCheck > FOREGROUND_INTERVAL
-    ) {
+  const onForeground = () => {
+    resumeNativeUpdate()
+    if (Date.now() - lastAutoCheck > FOREGROUND_INTERVAL) {
       run('foreground')
+    }
+  }
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') {
+      onForeground()
     }
   }
   document.addEventListener('visibilitychange', onVisible)
   if (Capacitor.isNativePlatform()) {
     void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-      if (isActive && Date.now() - lastAutoCheck > FOREGROUND_INTERVAL) {
-        run('resume')
+      if (isActive) {
+        onForeground()
       }
     })
   }
+
+  window.addEventListener('online', () => {
+    if (browserUpdate()) {
+      return
+    }
+    resumeNativeUpdate(true)
+    const { status, error } = useUpdate.getState()
+    if (status === 'idle' || status === 'error' || error === 'network') {
+      void checkForUpdate({ force: true })
+    }
+  })
 
   // 常驻检查
   window.setInterval(() => run('periodic'), PERIODIC_INTERVAL)

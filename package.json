@@ -1,6 +1,6 @@
 {
   "name": "freeseek",
-  "version": "3.1.16",
+  "version": "3.1.17",
   "description": "FreeSeek 畅聊：自带 DeepSeek API Key 的安卓聊天客户端，无次数与额度限制。基于官方开源 chat-demo (MIT)。",
   "license": "MIT",
   "private": true,
@@ -19,7 +19,7 @@
     "build:windows": "pnpm build && node scripts/build-windows.mjs",
     "type": "tsc -p tsconfig.json",
     "lint": "oxlint src rspack.config.ts",
-    "test": "node scripts/e2e-check.mjs",
+    "test": "node --test scripts/test/windows-update.test.cjs && node scripts/e2e-check.mjs",
     "test:smoke": "node scripts/smoke.ts",
     "test:compat": "node scripts/check-legacy-bundle.mjs",
     "format": "oxfmt --write .",

@@ -8,7 +8,12 @@ export type { ApiErrorKind } from './errorTypes.js'
 import { readMessageEvent } from './parseEvent.js'
 import { createProviderUsageReader } from './providerUsage.js'
 import { describeKnownApiError } from './knownErrors.js'
-import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
+import {
+  ChatStreamProgress,
+  StreamIdleTimeoutError,
+  StreamReadError,
+  readServerSentEvents,
+} from './sse.js'
 import {
   streamWithProviderSearch,
   streamWithTaskTools,
@@ -354,13 +359,16 @@ async function* streamMessageRound(
   if (!response.body || !contentType.includes('text/event-stream')) {
     throw await readErrorResponse(response, 'protocol', '')
   }
+  const progress = new ChatStreamProgress()
   try {
     const readUsage = createProviderUsageReader('anthropic', true)
     let pendingToolUse: Extract<MessageStreamEvent, { type: 'message_delta' }> | undefined
     for await (const { event: eventName, data } of readServerSentEvents(
       response.body,
       signal,
-      (globalThis as { __FS_STREAM_IDLE_MS__?: number }).__FS_STREAM_IDLE_MS__
+      (globalThis as { __FS_STREAM_IDLE_MS__?: number }).__FS_STREAM_IDLE_MS__,
+      undefined,
+      progress
     )) {
       let payload: unknown
       try {
@@ -391,6 +399,9 @@ async function* streamMessageRound(
       if (!event) {
         continue
       }
+      if (event.type !== 'message_usage') {
+        progress.advance()
+      }
       if (event.type === 'message_delta') {
         pendingToolUse = event.delta.stop_reason === 'tool_use' ? event : undefined
         if (pendingToolUse) {
@@ -400,6 +411,7 @@ async function* streamMessageRound(
           }
           continue
         }
+        progress.finish()
       } else if (event.type === 'message_usage' && pendingToolUse) {
         pendingToolUse = { ...pendingToolUse, usage: event.usage }
       } else if (event.type === 'message_stop' && pendingToolUse) {
@@ -428,12 +440,19 @@ async function* streamMessageRound(
       throw new ApiError('network', { key: 'streamConnectionLost' })
     }
     if (error instanceof StreamIdleTimeoutError) {
-      // 连接静默挂起：按网络问题归类（可重试），给本地文案
-      throw new ApiError('network', 'Stream idle timeout', undefined, {
-        key: 'streamIdleTimeout',
-      })
+      const stalled = error.waitingFor === 'progress'
+      logEvent(
+        'api',
+        stalled ? 'response.progress.timeout' : 'response.body.timeout',
+        { requestId, receivedBytes: error.receivedBytes, reason: 'timeout' },
+        'warn'
+      )
+      throw new ApiError('network', { key: stalled ? 'streamProgressTimeout' : 'streamIdleTimeout' })
     }
     throw error
+  }
+  if (progress.waitingForUsage) {
+    logEvent('api', 'response.stop-marker-missing', { requestId }, 'warn')
   }
   // 服务端没有提供错误内容时保持为空，不推测断流原因。
   throw new ApiError('interrupted', '')

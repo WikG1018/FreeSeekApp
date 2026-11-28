@@ -91,6 +91,69 @@ export const runNavigationCases = async ({ run }) => {
     }
   )
   await run(
+    'sidebar restores its scroll position and loaded rows after a chat opens or the sidebar collapses',
+    async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page.evaluate(async () => {
+        const a = window.__audit
+        const now = Date.now()
+        const sessions = Array.from({ length: 175 }, (_, index) => ({
+          id: 'scroll-position-' + index,
+          title: '聊天记录 ' + index,
+          createdAt: now - index,
+          updatedAt: now - index,
+          mode: 'chat',
+        }))
+        await a.seed([a.fixtures.session({
+          ...sessions[124],
+          messages: [a.fixtures.user('opened-old-chat', '打开了列表下方的对话')],
+        })])
+        a.store.newChat()
+        a.store.useChatStore.setState({ sessions })
+      })
+
+      const open = page.getByRole('button', { name: '打开边栏', exact: true })
+      const list = page.getByTestId('sider-list')
+      const rows = list.locator('[data-session-id]')
+      const selected = list.getByRole('button', { name: '聊天记录 124', exact: true })
+      await open.click()
+      assert.equal(await rows.count(), 80)
+      await list.evaluate((node) => { node.scrollTop = node.scrollHeight })
+      await selected.waitFor()
+      await selected.evaluate((node) => node.scrollIntoView({ block: 'center' }))
+
+      await selected.evaluate((button) => {
+        const list = button.closest('[data-testid="sider-list"]')
+        button.addEventListener('pointerdown', () => {
+          window.__siderOffsetAtSelection = list.scrollTop
+        }, { once: true })
+      })
+      await selected.click()
+      const previous = await page.evaluate(() => window.__siderOffsetAtSelection)
+      assert.ok(previous > 80 * 44, 'the selected row is past the initial batch')
+      await page.locator('[data-message-id="opened-old-chat"]').waitFor()
+      await list.waitFor({ state: 'detached' })
+      await open.click()
+      const restored = await list.evaluate((node) => node.scrollTop)
+      assert.ok(Math.abs(restored - previous) <= 1, `mobile list returned to ${restored}, expected ${previous}`)
+      assert.equal(await rows.count(), 160)
+      assert.equal(await selected.getAttribute('aria-current'), 'page')
+
+      await page.setViewportSize({ width: 1080, height: 800 })
+      await page.getByRole('button', { name: '收起边栏', exact: true }).waitFor()
+      const desktop = await list.evaluate((node) => {
+        node.scrollTop = 1000
+        return node.scrollTop
+      })
+      assert.equal(desktop, 1000)
+      await page.getByRole('button', { name: '收起边栏', exact: true }).click()
+      await list.waitFor({ state: 'detached' })
+      await open.click()
+      const restoredDesktop = await list.evaluate((node) => node.scrollTop)
+      assert.ok(Math.abs(restoredDesktop - desktop) <= 1, `desktop list returned to ${restoredDesktop}, expected ${desktop}`)
+    }
+  )
+  await run(
     'sidebar groups saved chat types without moving pinned rows out of the top group',
     async (page) => {
       await page.evaluate(async () => {

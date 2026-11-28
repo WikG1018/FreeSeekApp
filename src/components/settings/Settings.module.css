@@ -252,6 +252,10 @@ button.row:active:not(:disabled),
   opacity: 0.5;
   cursor: default;
 }
+.row[aria-busy='true'] {
+  opacity: 1;
+  cursor: progress;
+}
 .row:focus-visible,
 .back:focus-visible,
 .close:focus-visible,
@@ -275,6 +279,13 @@ button.row:active:not(:disabled),
 .rowIcon svg {
   width: 19px;
   height: 19px;
+}
+.rowIcon .redNoteMark {
+  box-sizing: content-box;
+  padding: 2px;
+  border-radius: 5px;
+  background: #ff2442;
+  color: #fff;
 }
 .rowChevron {
   color: var(--fs-secondary-text);
@@ -351,6 +362,10 @@ button.row:active:not(:disabled),
 }
 .rowNote {
   padding: 0 16px 12px;
+}
+.aboutLinkFeedback {
+  margin: 0;
+  padding-inline-start: 50px;
 }
 .toggleTrack {
   position: relative;

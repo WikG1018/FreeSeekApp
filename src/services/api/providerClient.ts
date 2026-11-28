@@ -1,7 +1,12 @@
 import { agentProbePrompt, agentProbeSystem, verifyAgentTools } from './toolProbe.js'
 import { describeKnownApiError } from './knownErrors.js'
 import { ApiError } from './errorTypes.js'
-import { StreamIdleTimeoutError, StreamReadError, readServerSentEvents } from './sse.js'
+import {
+  ChatStreamProgress,
+  StreamIdleTimeoutError,
+  StreamReadError,
+  readServerSentEvents,
+} from './sse.js'
 import { isAndroidProviderResponse, providerFetch } from './providerTransport.js'
 import {
   streamWithProviderSearch,
@@ -715,6 +720,8 @@ async function* streamProviderRound(
     emittedText = false,
     reason: StopReason = 'end_turn',
     usage: MessageUsage | undefined
+  const progress = new ChatStreamProgress()
+  let receivedToolInput = false
   let stopFailure: ApiError | undefined
   const readUsage = createProviderUsageReader(profile.protocol)
   const rememberUsage = (raw: unknown) => {
@@ -745,6 +752,8 @@ async function* streamProviderRound(
     }
   }
   const toolInput = function* (): Generator<MessageStreamEvent> {
+    progress.advance()
+    receivedToolInput = true
     yield* closeBlock()
     if (showToolInput) {
       yield { type: 'agent_tool_input' }
@@ -754,6 +763,7 @@ async function* streamProviderRound(
     if (typeof value !== 'string' || !value) {
       return
     }
+    progress.advance()
     emitted = true
     if (!thinking) {
       emittedText = true
@@ -923,8 +933,12 @@ async function* streamProviderRound(
         yield* closeBlock()
       }
       if (data.type === 'message_delta') {
-        setReason(record(data.delta).stop_reason)
+        const stop = text(record(data.delta).stop_reason)
+        setReason(stop)
         rememberUsage(data.usage)
+        if (stop && !receivedToolInput && reason !== 'tool_use') {
+          completed = true
+        }
       }
       if (data.type === 'message_stop') {
         completed = true
@@ -939,6 +953,9 @@ async function* streamProviderRound(
         completed = true
       }
     }
+    if (completed && !receivedToolInput && reason !== 'tool_use') {
+      progress.finish()
+    }
   }
   try {
     yield { type: 'message_start', message: { id: createId(), model } }
@@ -948,7 +965,13 @@ async function* streamProviderRound(
       }
       // For native responses, the Android socket owns the idle timeout while WebView is suspended.
       const idleMs = isAndroidProviderResponse(response) ? null : undefined
-      for await (const event of readServerSentEvents(response.body, signal, idleMs)) {
+      for await (const event of readServerSentEvents(
+        response.body,
+        signal,
+        idleMs,
+        undefined,
+        progress
+      )) {
         if (event.data.trim() === '[DONE]') {
           completed = true
           break
@@ -1013,7 +1036,14 @@ async function* streamProviderRound(
       throw nativeError ?? new ApiError('network', { key: 'streamConnectionLost' })
     }
     if (error instanceof StreamIdleTimeoutError) {
-      throw new ApiError('network', { key: 'streamIdleTimeout' })
+      const stalled = error.waitingFor === 'progress'
+      logEvent(
+        'api',
+        stalled ? 'response.progress.timeout' : 'response.body.timeout',
+        { requestId: activeRequestId, operationId, receivedBytes: error.receivedBytes, reason: 'timeout' },
+        'warn'
+      )
+      throw new ApiError('network', { key: stalled ? 'streamProgressTimeout' : 'streamIdleTimeout' })
     }
     throw error
   } finally {

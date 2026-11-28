@@ -28,37 +28,9 @@ export const hasHistoryVaultCopy = ({
 }: Pick<ReturnType<typeof useHistoryVault.getState>, 'generation' | 'protectedSessions'>) =>
   generation !== null && generation > 0 && protectedSessions !== null && protectedSessions > 0
 
-export const HistoryVaultRestore = ({
-  disabled,
-  onResult,
-  showAvailability = true,
-  visible = true,
-}: {
-  disabled: boolean
-  onResult: (result: HistoryVaultResult) => void
-  showAvailability?: boolean
-  visible?: boolean
-}) => {
-  const t = useTranslate()
-  const vault = useHistoryVault()
+export const useHistoryVaultRestore = (onResult: (result: HistoryVaultResult) => void) => {
   const [working, setWorking] = useState(false)
   const [failed, setFailed] = useState(false)
-  useEffect(() => {
-    if (visible && showAvailability) {
-      void refreshHistoryVault()
-    }
-  }, [showAvailability, visible])
-
-  const running = working || vault.phase === 'restoring'
-  const recoverable = hasHistoryVaultCopy(vault)
-  if (!visible) {
-    return null
-  }
-  if (!recoverable && !running && !failed) {
-    return showAvailability && vault.phase === 'checking'
-      ? <span role="status">{t('historyVaultChecking')}</span>
-      : null
-  }
 
   const restore = async () => {
     setWorking(true)
@@ -76,22 +48,58 @@ export const HistoryVaultRestore = ({
       setWorking(false)
     }
   }
+  return { working, failed, restore, clearFailure: () => setFailed(false) }
+}
+
+export const HistoryVaultRestore = ({
+  disabled,
+  onResult,
+  visible = true,
+}: {
+  disabled: boolean
+  onResult: (result: HistoryVaultResult) => void
+  visible?: boolean
+}) => {
+  const t = useTranslate()
+  const vault = useHistoryVault()
+  const { working, failed, restore } = useHistoryVaultRestore(onResult)
+  useEffect(() => {
+    if (visible) {
+      void refreshHistoryVault()
+    }
+  }, [visible])
+
+  const running = working || vault.phase === 'restoring'
+  const recoverable = hasHistoryVaultCopy(vault)
+  if (!visible) {
+    return null
+  }
+  if (!recoverable && !running && !failed) {
+    return vault.phase === 'checking' ? (
+      <span role="status">{t('historyVaultChecking')}</span>
+    ) : null
+  }
 
   return (
     <div className={styles.recovery}>
-      {showAvailability && recoverable && vault.protectedSessions !== null && !running && (
+      {recoverable && vault.protectedSessions !== null && !running && (
         <div>
-          <p className={styles.note}>{t('historyVaultCanRestore', { count: vault.protectedSessions })}</p>
+          <p className={styles.note}>
+            {t('historyVaultCanRestore', { count: vault.protectedSessions })}
+          </p>
           {vault.protectedOriginals !== null && (
-            <p className={styles.note}>{t('historyVaultOriginals', { count: vault.protectedOriginals })}</p>
+            <p className={styles.note}>
+              {t('historyVaultOriginals', { count: vault.protectedOriginals })}
+            </p>
           )}
         </div>
       )}
       {recoverable && (
         <Button
           size="m"
-          variant={showAvailability ? 'primary' : 'outlined'}
-          disabled={disabled || running || vault.phase === 'checking' || vault.phase === 'protecting'}
+          disabled={
+            disabled || running || vault.phase === 'checking' || vault.phase === 'protecting'
+          }
           aria-busy={running}
           onClick={() => void restore()}
         >
@@ -105,7 +113,7 @@ export const HistoryVaultRestore = ({
             : t('historyVaultRestoring')}
         </p>
       )}
-      {failed && (
+      {(failed || (recoverable && vault.phase === 'error')) && !running && (
         <p className={styles.error} role="alert">
           {t('historyVaultRestoreFailed')} {t(historyVaultIssueMessage(vault.issue))}
         </p>

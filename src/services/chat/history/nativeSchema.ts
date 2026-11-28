@@ -830,6 +830,10 @@ export const readNativeSession = (value: unknown): Session => {
     ...(item.pinned === undefined ? {} : { pinned: boolean(item.pinned) }),
     createdAt: number(item.createdAt),
     updatedAt: number(item.updatedAt),
+    branchFrom: optional(item.branchFrom, (value) => {
+      const source = record(value)
+      return { sessionId: id(source.sessionId), messageId: id(source.messageId) }
+    }),
     messages,
     contextSummary: optional(item.contextSummary, contextSummary),
     compressionPromptShown: optional(item.compressionPromptShown, boolean),

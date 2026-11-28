@@ -277,6 +277,20 @@ const inspectAfterReload = async (page) => {
   await page.evaluate(() => window.__audit.historyVault.refreshHistoryVault())
 }
 
+const losePrimaryHistory = (page, confirmedEmpty = false) => page.evaluate(async (confirmedEmpty) => {
+  const opening = indexedDB.open('freeseek')
+  const primary = await new Promise((resolve, reject) => {
+    opening.onsuccess = () => resolve(opening.result)
+    opening.onerror = () => reject(opening.error)
+  })
+  const names = ['sessions', 'sessionsStaging', 'sessionSummaries', 'files', 'filesStaging', 'historyState']
+  const tx = primary.transaction(names, 'readwrite')
+  for (const name of names) tx.objectStore(name).clear()
+  if (confirmedEmpty) tx.objectStore('historyState').put(true, 'confirmedEmpty')
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error) })
+  primary.close()
+}, confirmedEmpty)
+
 const digestLocalOriginal = (page, fileId) => page.evaluate(async (fileId) => {
   const original = await window.__audit.db.loadFile(fileId)
   if (!original) return null
@@ -391,18 +405,11 @@ export const runHistoryVaultCases = async (run) => {
       await db.saveSession(fixtures.session({ id: 'remaining-chat', messages: [fixtures.user('u', '测试', {
         files: [{ id, name: '测试.txt', size: blob.size, mimeType: 'text/plain', isImage: false }],
       })] }), [{ id, blob }])
-      const opening = indexedDB.open('freeseek')
-      const primary = await new Promise((resolve, reject) => {
-        opening.onsuccess = () => resolve(opening.result)
-        opening.onerror = () => reject(opening.error)
-      })
-      const names = ['sessions', 'sessionsStaging', 'sessionSummaries', 'files', 'filesStaging', 'historyState']
-      const tx = primary.transaction(names, 'readwrite')
-      for (const name of names) tx.objectStore(name).clear()
-      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error) })
-      primary.close()
     })
+    await losePrimaryHistory(page)
+    vault.faults.set('readSession', 'UNREADABLE')
     await page.reload()
+    await page.getByRole('alert').getByText(/没能从备份找回聊天/).waitFor()
     await page.getByRole('main').getByRole('button', { name: '暂不恢复，进入首页', exact: true }).click()
     await page.getByTestId('chat-composer').waitFor()
     await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
@@ -419,6 +426,75 @@ export const runHistoryVaultCases = async (run) => {
     assert.equal(vault.sessions.size, 0)
     assert.equal(vault.originals.size, 0)
     assert.equal(vault.calls.some((call) => call.method === 'restoreOriginal'), false)
+  })
+
+  await nativeApp(run, 'automatically restores both message text and original bytes after primary history disappears', async (page, vault) => {
+    const fileId = 'auto-recovery-original'
+    const originalText = '这份附件要逐字找回来。'
+    await page.evaluate(async ({ fileId, originalText }) => {
+      const { db, fixtures } = window.__audit
+      const blob = new Blob([originalText], { type: 'text/plain' })
+      await db.saveSession(fixtures.session({
+        id: 'auto-recovery-chat', pinned: true, title: '自动找回的对话',
+        messages: [fixtures.user('u', '这段正文也要找回来。', {
+          files: [{ id: fileId, name: '原件.txt', size: blob.size, mimeType: blob.type, isImage: false }],
+        })],
+      }), [{ id: fileId, blob }])
+    }, { fileId, originalText })
+    assert.equal(vault.originals.get(fileId).sha256, digest(Buffer.from(originalText)))
+    await losePrimaryHistory(page)
+    await inspectAfterReload(page)
+    assert.deepEqual(await localState(page), { 'auto-recovery-chat': '这段正文也要找回来。' })
+    assert.equal(await digestLocalOriginal(page, fileId), digest(Buffer.from(originalText)))
+    assert.equal(await page.evaluate(async () => (await window.__audit.db.loadSession('auto-recovery-chat')).pinned), true)
+    assert.equal(vault.calls.filter(({ method }) => method === 'restoreOriginal').length, 1)
+    await inspectAfterReload(page)
+    assert.equal(vault.calls.filter(({ method }) => method === 'restoreOriginal').length, 1)
+  })
+
+  await nativeApp(run, 'honors a confirmed empty marker even with an older on-device copy still present', async (page, vault) => {
+    await saveChats(page, { former: '用户删除前的正文' })
+    assert.equal(vault.sessions.size, 1)
+    await losePrimaryHistory(page, true)
+    await inspectAfterReload(page)
+    assert.deepEqual(await localState(page), {})
+    assert.equal(vault.calls.some(({ method }) => method === 'readSession' || method === 'restoreOriginal'), false)
+  })
+
+  await nativeApp(run, 'keeps a conversation branch and its attachment after source deletion and device recovery', async (page, vault) => {
+    const sourceId = 'branch-vault-source'
+    const fileId = 'branch-vault-file'
+    const text = '分支独立保存后的附件。'
+    await page.evaluate(async ({ sourceId, fileId, text }) => {
+      const { db, fixtures } = window.__audit
+      const blob = new Blob([text], { type: 'text/plain' })
+      const file = { id: fileId, name: '清单.txt', mimeType: blob.type, size: blob.size, serverId: null, isImage: false }
+      await db.saveSession(fixtures.session({
+        id: sourceId, title: '整理清单',
+        messages: [
+          fixtures.user('u', '看看清单', { files: [file] }),
+          fixtures.assistant('ready-to-branch', '我已经看完清单。'),
+        ],
+      }), [{ id: fileId, blob }])
+    }, { sourceId, fileId, text })
+    await inspectAfterReload(page)
+    await page.evaluate((id) => window.__audit.store.selectSession(id), sourceId)
+    await page.getByRole('button', { name: '从这条回复开分支', exact: true }).click()
+    await page.getByTestId('chat-header').getByText('分支 · 看看清单', { exact: true }).waitFor()
+    const branchId = await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId)
+    assert.equal(vault.sessions.size, 2)
+    assert.equal(vault.originals.size, 1)
+    assert.equal(await page.evaluate((id) => window.__audit.store.removeSession(id), sourceId), true)
+    assert.deepEqual([...vault.sessions.keys()], [branchId])
+    assert.equal(vault.originals.get(fileId).sha256, digest(Buffer.from(text)))
+    await losePrimaryHistory(page)
+    await inspectAfterReload(page)
+    assert.deepEqual(await localState(page), { [branchId]: '看看清单' })
+    assert.equal(await digestLocalOriginal(page, fileId), digest(Buffer.from(text)))
+    assert.deepEqual(
+      await page.evaluate(async (id) => (await window.__audit.db.loadSession(id)).branchFrom, branchId),
+      { sessionId: sourceId, messageId: 'ready-to-branch' }
+    )
   })
 
   await nativeApp(run, 'commits ZIP conflict choices and disk-backed originals across a retry', async (page, vault) => {

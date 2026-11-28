@@ -679,17 +679,15 @@ export const runRoleVoiceCases = async (run) => {
   await run(
     'role markers: an unclosed marker at the end is hidden while streaming and ignored once complete',
     async (page) => {
-      const strip = (text, streaming) =>
-        page.evaluate(
-          ({ text, streaming }) => window.__audit.roleMarkers.stripRoleMarkers(text, streaming),
-          { text, streaming }
-        )
+      const strip = (text) => page.evaluate((value) => window.__audit.roleMarkers.stripRoleMarkers(value), text)
       const partial = '他说：⟦新角色：林黛'
-      assert.equal(await strip(partial, true), '他说：')
-      // 没写完的标注永远不是正文，流式结束后也不该冒出来
-      assert.equal(await strip(partial, false), '他说：')
-      assert.equal(await strip('⟦旁白｜语气：平静⟧正文。', true), '正文。')
-      assert.equal(await strip('没有标记的正文。', true), '没有标记的正文。')
+      assert.equal(await strip(partial), '他说：')
+      assert.equal(await strip('⟦旁白｜语气：平静⟧正文。'), '正文。')
+      assert.equal(await strip('没有标记的正文。'), '没有标记的正文。')
+      assert.equal(await strip('先看雨。\r\n「说话人：阿青\r\n再看风。\r\n⟦新角色：阿宁\r\n灯亮了。'),
+        '先看雨。\r\n\r\n再看风。\r\n\r\n灯亮了。')
+      const quoted = '符号写作「A｜B\n这个例子接着解释。'
+      assert.equal(await strip(quoted), quoted)
     }
   )
 
@@ -2590,6 +2588,179 @@ export const runRoleVoiceCases = async (run) => {
     await page.getByText('第三版台词。', { exact: true }).waitFor()
     await page.evaluate(() => window.__audit.waitIdle())
     assert.equal(await page.evaluate(() => window.__versionAudio.length), 5, 'an idle player remains idle')
+  })
+
+  await run('regeneration keeps showing and reading after an unfinished role marker', async (page) => {
+    await page.setViewportSize({ width: 360, height: 800 })
+    await seedReply(page, '这是上一版的回答。', [
+      named('voice-fixture-linyue', '林悦', { source: 'user', preset: '茉莉' }),
+    ])
+    await page.evaluate(() => {
+      const a = window.__audit
+      a.settings.setApiKey('chat-fixture')
+      a.settings.setSearch(false)
+      a.providers.selectModel({ providerId: 'deepseek', model: 'deepseek-flash' })
+      a.store.setConversationRoleVoiceLive('rv-read', true)
+      const fetcher = window.fetch
+      window.__regeneratedRequests = 0
+      window.fetch = async (url, init) => {
+        if (!String(url).endsWith('/messages')) return fetcher(url, init)
+        window.__regeneratedRequests += 1
+        const encoder = new TextEncoder()
+        return new Response(new ReadableStream({
+          start(controller) {
+            const emit = (event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+            emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '故事从雨夜开始。' } })
+            window.__pushRegeneratedText = (text) => emit({
+              type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text },
+            })
+            window.__finishRegeneratedText = () => {
+              emit({ type: 'content_block_stop', index: 0 })
+              emit({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })
+              emit({ type: 'message_stop' })
+              controller.close()
+            }
+          },
+        }), { headers: { 'Content-Type': 'text/event-stream' } })
+      }
+    })
+    await page.getByRole('button', { name: '重新生成', exact: true }).click()
+    await page.getByText('故事从雨夜开始。', { exact: true }).waitFor()
+    await page.evaluate(() => window.__pushRegeneratedText('\n\n「说话人：阿青'))
+    await page.evaluate(() => window.__pushRegeneratedText(
+      '\n\n窗边亮起了一盏灯。\n\n「说话人：林悦」\n故事还在继续。'
+    ))
+    await page.waitForFunction(() => {
+      const a = window.__audit
+      const state = a.store.useChatStore.getState()
+      const reply = a.branches.getVisibleMessages(state.sessionCache['rv-read']).at(-1)
+      return reply.status === 'streaming' && a.reply.getReplyText(reply).includes('故事还在继续。')
+    })
+    await page.getByText('窗边亮起了一盏灯。', { exact: true }).waitFor({ timeout: 3_000 })
+    await page.getByText('故事还在继续。', { exact: true }).waitFor()
+    assert.equal(await page.getByText('说话人：阿青', { exact: false }).count(), 0)
+    await page.waitForFunction(() => window.__ttsRequests.some(({ text, voice }) =>
+      text === '故事还在继续。' && voice === '茉莉'
+    ))
+    assert.equal(await page.evaluate(() => window.__regeneratedRequests), 1)
+    await page.evaluate(() => window.__finishRegeneratedText())
+    await page.evaluate(() => window.__audit.waitIdle())
+    await page.reload()
+    await page.getByText('故事还在继续。', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '上一个版本', exact: true }).click()
+    await page.getByText('这是上一版的回答。', { exact: true }).waitFor()
+  })
+
+  await run('conversation branch keeps the selected cast, fixed voices and live role playback', async (page) => {
+    await page.setViewportSize({ width: 360, height: 800 })
+    await chatRoute(page, ['⟦小青｜语气：轻声⟧雨停了。\n\n⟦孟叔⟧我们出发吧。'])
+    const sample = Buffer.from(
+      '524946462800000057415645666d74201000000001000100c05d000080bb000002001000646174610400000001000200',
+      'hex'
+    ).toString('base64')
+    await page.evaluate(async ({ characters, sample }) => {
+      const a = window.__audit
+      const f = a.fixtures
+      a.settings.setApiKey('fixture')
+      a.settings.setRoleVoice({ enabled: true, leadVoice: 'description', extrasShareVoice: false })
+      a.providers.saveProvider({
+        ...a.providers.emptyProfile(), name: '小米 MiMo', protocol: 'openai',
+        url: 'https://api.xiaomimimo.com/v1', apiKey: 'synthetic-voice-key',
+        model: 'mimo-v2.5-tts', models: ['mimo-v2.5-tts'],
+      }, false)
+      const blob = new Blob([Uint8Array.from(atob(sample), (byte) => byte.charCodeAt(0))], { type: 'audio/wav' })
+      const id = 'fixed-branch-voice'
+      const ancestor = characters.find((role) => role.id === 'ancestor-voice')
+      const parent = f.session({
+        id: 'voice-before-fork',
+        title: '雨夜故事',
+        roleVoiceLive: true,
+        inherited: {
+          fromId: 'old-story', fromTitle: '前情',
+          messages: [
+            f.user('ancestor-question', '请介绍村长。'),
+            f.assistant('ancestor-reply', '村长留在了驿站。'),
+          ],
+          voiceRoles: [ancestor],
+        },
+        voiceRoles: characters.map((role) => role.id === 'manual-voice'
+          ? { ...role, voiceSample: { id, size: blob.size } }
+          : role),
+        messages: [
+          f.user('fork-voice-question', '到村口了，说点什么。'),
+          f.assistant('other-voice-reply', '另一版台词。', { createdAt: 2_000 }),
+        ],
+      })
+      await a.seed([a.branches.appendBranch(parent, 'fork-voice-question', [
+        f.assistant('chosen-voice-reply', '⟦小青⟧到村口了。', { createdAt: 3_000 }),
+        f.user('later-voice-question', '再介绍一个人。'),
+        f.assistant('later-voice-reply', '后续人物出场。', { createdAt: 4_000 }),
+      ])], [{ id, blob }])
+      const fetcher = window.fetch
+      window.__branchVoiceCalls = []
+      window.fetch = async (url, init) => {
+        if (!String(url).includes('xiaomimimo.com')) return fetcher(url, init)
+        const body = JSON.parse(init.body)
+        window.__branchVoiceCalls.push({ voice: body.audio.voice, text: body.messages.at(-1).content })
+        const audio = { data: btoa('\0'.repeat(4800)) }
+        return body.stream
+          ? new Response(`data: ${JSON.stringify({ choices: [{ delta: { audio } }] })}\n\ndata: [DONE]\n\n`,
+            { headers: { 'Content-Type': 'text/event-stream' } })
+          : Response.json({ choices: [{ message: { audio } }] })
+      }
+    }, {
+      sample,
+      characters: [
+        named('alternate-voice', '阿青', { introducedBy: 'other-voice-reply' }),
+        named('selected-voice', '阿青', {
+          preset: '冰糖', aliases: ['小青'], voiceGender: 'female', introducedBy: 'chosen-voice-reply',
+        }),
+        named('manual-voice', '老孟', {
+          aliases: ['孟叔'], voiceGender: 'male', source: 'user', preset: undefined, description: '低缓的男声',
+        }),
+        named('late-voice', '林晚', { introducedBy: 'later-voice-reply' }),
+        named('role-4000-0-青鹭', '青鹭', { createdAt: 4_000 }),
+        named('ancestor-voice', '村长', { preset: '苏打', introducedBy: 'ancestor-reply' }),
+      ],
+    })
+
+    await page.locator('[data-message-id="chosen-voice-reply"]')
+      .getByRole('button', { name: '从这条回复开分支', exact: true }).click()
+    await page.getByTestId('chat-header').getByText('分支 · 到村口了，说点什么。', { exact: true }).waitFor()
+    const branch = await page.evaluate(async () => {
+      const a = window.__audit
+      return await a.db.loadSession(a.store.useChatStore.getState().activeId)
+    })
+    assert.equal(branch.roleVoiceLive, true)
+    assert.deepEqual(branch.voiceRoles.map(({ id }) => id), ['selected-voice', 'manual-voice', 'ancestor-voice'])
+    assert.equal(branch.voiceRoles[0].introducedBy, branch.messages[1].id)
+    assert.equal(branch.voiceRoles[2].introducedBy, branch.inherited.messages[1].id)
+    assert.equal(branch.inherited.voiceRoles[0].introducedBy, branch.inherited.messages[1].id)
+    await page.getByRole('button', { name: '角色配音，3 个角色', exact: true }).waitFor()
+    const originalSize = await page.evaluate(async (ref) => {
+      const a = window.__audit
+      if (window.__branchVoiceCalls.length || window.__rvRequests.length) {
+        throw new Error('Opening a branch started model or speech requests')
+      }
+      if (!await a.store.removeSession('voice-before-fork')) throw new Error('Could not remove source')
+      return (await a.db.loadFile(ref.id))?.size
+    }, branch.voiceRoles[1].voiceSample)
+    assert.equal(originalSize, Buffer.from(sample, 'base64').length)
+    const composer = page.getByTestId('chat-composer').locator('textarea')
+    await composer.fill('接着写。')
+    await composer.press('Enter')
+    await page.waitForFunction(() => window.__branchVoiceCalls.length === 2)
+    const continued = await page.evaluate(() => ({
+      system: String(window.__rvRequests[0].system),
+      calls: window.__branchVoiceCalls,
+    }))
+    const cast = continued.system.split('【已定角色】')[1]
+    assert.match(cast, /阿青（别名：小青）｜声线：女声｜音色：冰糖/)
+    assert.doesNotMatch(cast, /茉莉|林晚|青鹭/)
+    assert.deepEqual(continued.calls, [
+      { voice: '冰糖', text: '雨停了。' },
+      { voice: 'data:audio/wav;base64,' + sample, text: '我们出发吧。' },
+    ])
   })
 
   await run('role voice reads untagged narration before, between and after dialogue', async (page) => {

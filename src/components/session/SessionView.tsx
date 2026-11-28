@@ -2,7 +2,13 @@ import clsx from 'clsx'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
-import { newChat, saveSessionVoiceRole, setConversationRoleVoiceLive } from '../../services/chat/store.js'
+import {
+  newChat,
+  saveSessionVoiceRole,
+  selectSession,
+  setConversationRoleVoiceLive,
+  useChatStore,
+} from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import {
   hasUsageEstimate,
@@ -18,7 +24,7 @@ import { describeReadAloudError, previewRoleVoice } from '../../services/speech/
 import { showToast } from '../base/toastState.js'
 import { RoleVoiceButton } from './RoleVoice.js'
 import { conversationRounds, sessionArtifacts } from '../../services/tasks/sessionArtifacts.js'
-import { IconNewChatOutline20 } from '../base/icons.js'
+import { IconLinkOutline16, IconNewChatOutline20 } from '../base/icons.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
 import { MessageList } from '../messages/MessageList.js'
 import { MobileHeader } from './MobileHeader.js'
@@ -49,6 +55,14 @@ export const SessionView = ({
   const roleVoice = useSettings((state) => state.roleVoice)
   const profiles = useProviders((state) => state.profiles)
   const agent = useSessionAgent(session.id)
+  const origin = session.branchFrom
+  const hasBranchSource = useChatStore((state) =>
+    !!origin && origin.sessionId !== session.id &&
+    state.sessions.some(({ id }) => id === origin.sessionId)
+  )
+  const openBranchSource = origin && hasBranchSource
+    ? () => selectSession(origin.sessionId, origin.messageId)
+    : undefined
   const [assistantOpen, setAssistantOpen] = useState(false)
   const { artifacts, rounds } = useMemo(() => {
     if (
@@ -157,6 +171,7 @@ export const SessionView = ({
           onTop={backToTop}
           artifactsButton={artifactsButton}
           voicesButton={roleVoiceButton}
+          openBranchSource={openBranchSource}
         />
       ) : (
         <div ref={headerRef} className={styles.header} data-testid="chat-header">
@@ -182,6 +197,17 @@ export const SessionView = ({
             ) : null}
           </div>
           <div className={styles.headerActions}>
+            {openBranchSource && (
+              <button
+                type="button"
+                className={styles.headerAction}
+                title={t('branchReturnToSource')}
+                aria-label={t('branchReturnToSource')}
+                onClick={openBranchSource}
+              >
+                <IconLinkOutline16 />
+              </button>
+            )}
             {artifactsButton}
             {roleVoiceButton}
             <button

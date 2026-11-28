@@ -99,6 +99,126 @@ export const runInterfaceCases = async ({ run }) => {
     }
   )
   for (const protocol of ['deepseek', 'openai']) {
+    await run(`regeneration recovers from a heartbeat-only stall and keeps trailing usage (${protocol})`, async (page) => {
+      await page.setViewportSize({ width: 360, height: 800 })
+      await page.evaluate(async (protocol) => {
+        const a = window.__audit
+        const official = protocol === 'deepseek'
+        a.settings.setSearch(false)
+        a.settings.setAutoCompress(false)
+        Object.assign(a.sse.streamIdle, { timeoutMs: 400, progressTimeoutMs: 750, finishGraceMs: 350 })
+        if (official) {
+          a.settings.setApiKey('regeneration-fixture')
+        } else {
+          a.providers.saveProvider({
+            ...a.providers.emptyProfile(),
+            name: '重生成验收连接',
+            url: 'https://regeneration-fixture.invalid/v1',
+            apiKey: 'regeneration-fixture',
+            model: 'regeneration-test-model',
+          }, true)
+        }
+        const f = a.fixtures
+        await a.seed([f.session({
+          id: 'regenerate-stall',
+          messages: [f.user('regenerate-question', '请讲一个故事。'), f.assistant('old-reply', '旧版回答。')],
+        })])
+
+        const fetcher = window.fetch
+        const endpoint = official ? '/messages' : '/chat/completions'
+        const frame = (event) => `data: ${JSON.stringify(event)}\n\n`
+        const headers = { 'Content-Type': 'text/event-stream' }
+        const canceled = window.__regenerationCanceled = []
+        let requests = 0
+        window.fetch = async (url, init) => {
+          if (!String(url).endsWith(endpoint)) return fetcher(url, init)
+          const request = ++requests
+          const encoder = new TextEncoder()
+          const timers = []
+          let heartbeat
+          const visible = (text, index = 0) => official
+            ? { type: 'content_block_start', index, content_block: { type: 'text', text } }
+            : { choices: [{ delta: { content: text } }] }
+          return new Response(new ReadableStream({
+            start(controller) {
+              const enqueue = (value) => controller.enqueue(encoder.encode(value))
+              const emit = (event) => enqueue(frame(event))
+              heartbeat = setInterval(() => {
+                enqueue(': keep-alive\n\n')
+                emit({ type: 'ping' })
+                emit(official
+                  ? { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '' } }
+                  : { choices: [{ delta: { content: '' } }] })
+              }, 30)
+              if (request === 1) {
+                emit(visible('这段文字已经收到。'))
+                return
+              }
+              if (official) {
+                emit({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } })
+              }
+              for (let index = 1; index <= 5; index++) {
+                timers.push(setTimeout(() => emit(official
+                  ? { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '整理故事线索。' } }
+                  : { choices: [{ delta: { reasoning_content: '整理故事线索。' } }] }
+                ), index * 200))
+              }
+              timers.push(setTimeout(() => {
+                if (official) emit({ type: 'content_block_stop', index: 0 })
+                emit(visible('重新生成后收到了完整回答。', 1))
+                emit(official
+                  ? { type: 'message_delta', delta: { stop_reason: 'end_turn' } }
+                  : { choices: [{ delta: {}, finish_reason: 'stop' }] })
+              }, 1_100))
+              timers.push(setTimeout(() => emit(official
+                ? { type: 'message_delta', delta: { stop_reason: null }, usage: {
+                  input_tokens: 40, cache_read_input_tokens: 60, output_tokens: 25,
+                } }
+                : { choices: [], usage: {
+                  prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 60 }, completion_tokens: 25,
+                } }
+              ), 1_240))
+              // Both requests leave the socket open. The retry has a terminal reason but no final marker.
+            },
+            cancel() {
+              clearInterval(heartbeat)
+              timers.forEach(clearTimeout)
+              canceled.push(request)
+            },
+          }), { headers })
+        }
+      }, protocol)
+
+      const regenerate = page.getByRole('button', { name: '重新生成', exact: true })
+      await regenerate.click()
+      const partial = page.getByText('这段文字已经收到。', { exact: true })
+      await partial.waitFor()
+      await page.getByText('模型长时间没有继续输出。已收到的内容已保留，可以重新生成。', { exact: true })
+        .waitFor({ timeout: 5_000 })
+      const readReply = () => page.evaluate(async () => {
+        const a = window.__audit
+        await a.waitIdle()
+        const reply = a.branches.getVisibleMessages(await a.db.loadSession('regenerate-stall')).at(-1)
+        return { status: reply.status, error: reply.error?.localMessage?.key, usage: reply.usage, text: a.reply.getReplyText(reply) }
+      })
+      assert.deepEqual(await readReply(), {
+        status: 'error', error: 'streamProgressTimeout', usage: undefined, text: '这段文字已经收到。',
+      })
+      await regenerate.click()
+      await page.getByText('重新生成后收到了完整回答。', { exact: true }).waitFor()
+      const finished = await readReply()
+      assert.equal(finished.status, 'done')
+      assert.equal(finished.error, undefined)
+      assert.equal(finished.usage.output_tokens, 25)
+      assert.equal(finished.usage.cache_read_input_tokens, 60)
+      assert.deepEqual(await page.evaluate(() => window.__regenerationCanceled), [1, 2])
+      const previous = page.getByRole('button', { name: '上一个版本', exact: true })
+      await previous.click()
+      await partial.waitFor()
+      await previous.click()
+      await page.getByText('旧版回答。', { exact: true }).waitFor()
+    })
+
     await run(`regeneration keeps each reply's reported cache stats (${protocol})`, async (page) => {
       const versions = [
         { text: '第一版回答。', rate: '25%', input: 1000, hit: 250, output: 32 },
@@ -1672,6 +1792,53 @@ export const runInterfaceCases = async ({ run }) => {
     }
   )
 
+  await run('About project and author rows copy the matching value and open the official destination', async (page) => {
+    await page.evaluate(() => {
+      window.__aboutClipboard = []
+      window.__aboutDestinations = []
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (value) => { window.__aboutClipboard.push(value) } },
+      })
+      window.open = (url) => {
+        window.__aboutDestinations.push(url)
+        return null
+      }
+      window.__audit.settingsDialog.openSettings('about')
+    })
+    const about = page.locator('[data-settings-page="about"]')
+    const github = about.getByRole('button', { name: 'GitHub 项目', exact: true })
+    const x = about.getByRole('button', { name: 'X', exact: true })
+    const xiaohongshu = about.getByRole('button', { name: '小红书', exact: true })
+    for (const row of [github, x, xiaohongshu]) {
+      assert.equal(await row.locator('svg path').count() > 0, true)
+      await row.click()
+      await row.locator('..').getByText('已复制', { exact: true }).waitFor()
+      assert.equal(await about.getByText('已复制', { exact: true }).count(), 1)
+    }
+    assert.deepEqual(await page.evaluate(() => window.__aboutClipboard), [
+      'https://github.com/WikG1018/FreeSeekApp', '@WikG1018', '677206944',
+    ])
+    assert.deepEqual(await page.evaluate(() => window.__aboutDestinations), [
+      'https://github.com/WikG1018/FreeSeekApp', 'https://x.com/WikG1018',
+      'https://www.xiaohongshu.com/search_result/?keyword=677206944&type=user',
+    ])
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = async () => { throw new Error('fixture clipboard unavailable') }
+      document.execCommand = () => false
+    })
+    await x.click()
+    await x.locator('..').getByRole('alert').getByText('复制失败，可以重试。').waitFor()
+    await page.evaluate(() => {
+      window.__audit.settings.setLocale('en-US')
+      window.__audit.settings.setThemePreference('dark')
+      window.__audit.settings.setFontScale(1.2)
+    })
+    await page.setViewportSize({ width: 320, height: 720 })
+    await about.getByRole('heading', { name: 'About the author', exact: true }).waitFor()
+    assert.equal(await about.evaluate((el) => el.scrollWidth <= el.clientWidth), true)
+  })
+
   await run(
     'settings disclosures reverse cleanly and preserve nested values, links and keyboard access',
     async (page) => {
@@ -1950,6 +2117,49 @@ export const runInterfaceCases = async ({ run }) => {
       await page.getByRole('button', { name: '取消', exact: true }).click()
       await target.waitFor()
       assert.deepEqual(await owners(), ['page'])
+    }
+  )
+
+  await run(
+    'Android background notifications use the same title weight and can toggle live progress',
+    async (page) => {
+      await page.evaluate(() => window.__audit.settingsDialog.openSettings('chat'))
+      const progress = page.getByRole('switch', { name: '在状态栏显示实时进度', exact: true })
+      const completion = page.getByRole('button', { name: '回复与任务完成通知', exact: true })
+      await progress.waitFor()
+      const weight = (row, title) =>
+        row.getByText(title, { exact: true }).evaluate((node) => getComputedStyle(node).fontWeight)
+      assert.equal(
+        await weight(progress, '在状态栏显示实时进度'),
+        await weight(completion, '回复与任务完成通知')
+      )
+      assert.equal(await progress.getAttribute('aria-checked'), 'true')
+      await progress.click()
+      await page.waitForFunction(() =>
+        document.querySelector('[aria-label="在状态栏显示实时进度"]')?.getAttribute('aria-checked') === 'false'
+      )
+    },
+    async (context) => {
+      await context.addInitScript(() => {
+        window.CapacitorCustomPlatform = { name: 'android' }
+        let enabled = true
+        window.Capacitor = {
+          PluginHeaders: [{
+            name: 'AgentGoals',
+            methods: [
+              ...['activeGoal', 'noticeStatus', 'setLiveProgress', 'removeListener']
+                .map((name) => ({ name, rtype: 'promise' })),
+              { name: 'addListener', rtype: 'callback' },
+            ],
+          }],
+          nativeCallback: () => 'settings-listener',
+          nativePromise: async (_plugin, method, args) => {
+            if (method === 'activeGoal') return { sessionId: null }
+            if (method === 'setLiveProgress') enabled = args.enabled
+            return { granted: true, liveProgressEnabled: enabled, liveProgressAllowed: true }
+          },
+        }
+      })
     }
   )
 

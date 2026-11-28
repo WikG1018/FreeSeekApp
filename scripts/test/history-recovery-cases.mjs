@@ -30,14 +30,15 @@ const vaultFixture = (context, checkpoint = false, withRecoveredChat = false) =>
     window.__vaultStatusReads = 0
     window.__vaultSavedIds = new Set()
     window.__vaultNoSpace = false
+    window.__vaultExternalCopy = checkpoint && withRecoveredChat
     let recoveredChat
     const status = () => {
-      const sessionCount = withRecoveredChat ? 1 : checkpoint ? 3 : window.__vaultSavedIds.size
+      const sessionCount = window.__vaultExternalCopy ? 1 : checkpoint ? 3 : window.__vaultSavedIds.size
       return {
         generation: sessionCount ? 4 : 0,
         sessionCount,
         originalCount: checkpoint && !withRecoveredChat ? 5 : 0,
-        missingOriginalCount: checkpoint ? 1 : 0,
+        missingOriginalCount: checkpoint || window.__vaultExternalCopy ? 1 : 0,
         bytes: sessionCount ? 1300 : 0,
       }
     }
@@ -64,7 +65,7 @@ const vaultFixture = (context, checkpoint = false, withRecoveredChat = false) =>
         if (plugin === 'HistoryVault' && method === 'putSession') window.__vaultSavedIds.add(args.sessionId)
         if (plugin === 'HistoryVault' && method === 'commit') return status()
         if (plugin === 'HistoryVault' && ['listSessions', 'readSession'].includes(method)) {
-          if (!checkpoint) return { items: [] }
+          if (!checkpoint && !window.__vaultExternalCopy) return { items: [] }
           if (!withRecoveredChat) throw new Error('synthetic vault read failure')
           if (!recoveredChat) {
             const f = window.__audit.fixtures
@@ -102,7 +103,11 @@ export const runHistoryRecoveryCases = async (run) => {
   await run('on-device recovery status keeps unknown counts separate and gives each action once', async (page) => {
     await page.locator('#fs-startup').waitFor({ state: 'hidden' })
     await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
-    await page.getByRole('heading', { name: '本机恢复副本', exact: true }).waitFor()
+    const backupEntry = page.getByRole('button', { name: '本机聊天备份', exact: true })
+    await backupEntry.waitFor()
+    assert.equal(await page.getByRole('heading', { name: '备份状态', exact: true }).count(), 0)
+    await backupEntry.click()
+    await page.getByRole('heading', { name: '本机聊天备份', exact: true }).waitFor()
     await page.waitForFunction(() => window.__audit.historyVault.useHistoryVault.getState().phase !== 'checking')
     const display = (state) => page.evaluate(
       (state) => window.__audit.historyVault.useHistoryVault.setState(state), state
@@ -112,18 +117,21 @@ export const runHistoryRecoveryCases = async (run) => {
       protectedOriginals: 5, missingOriginals: 1,
       protectedBytes: 16 * 1024 * 1024,
     })
-    await page.getByText('副本已保存 3 个会话', { exact: true }).waitFor()
-    await page.getByText('已保护 5 份附件原件', { exact: true }).waitFor()
-    await page.getByText('副本还缺少 1 份附件原件。', { exact: true }).waitFor()
-    await page.getByText('恢复副本约 16 MB', { exact: true }).waitFor()
-    assert.equal(await page.getByText(/本机聊天存储有 0 个会话/).count(), 0)
-    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 0)
+    await page.getByText('备份里有 3 个对话', { exact: true }).waitFor()
+    const metric = (label) => page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')
+    assert.equal(await metric('已备份的附件').innerText(), '5')
+    await page.getByText('还有 1 份附件未备份。', { exact: true }).waitFor()
+    assert.equal(await metric('占用空间').innerText(), '16 MB')
+    assert.equal(await metric('当前对话数').count(), 0)
+    assert.equal(await page.getByRole('button', { name: '检查备份', exact: true }).count(), 0)
 
     await display({ totalSessions: 8 })
-    await page.getByText('已保护 3/8 个会话', { exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 1)
-    assert.equal(await page.getByRole('button', { name: '从本机恢复副本找回', exact: true }).count(), 1)
-    await page.getByText('找回缺失的会话和附件原件，保留本机已有的正文。', { exact: true }).waitFor()
+    await page.getByText('已备份 3/8 个对话', { exact: true }).waitFor()
+    const protect = page.getByRole('button', { name: '检查备份', exact: true })
+    const restore = page.getByRole('button', { name: '找回聊天和附件', exact: true })
+    assert.equal(await protect.count(), 1)
+    assert.equal(await restore.count(), 1)
+    await page.getByText('从备份补回缺少的内容，保留现在的聊天。', { exact: true }).waitFor()
     if (process.env.FREESEEK_VAULT_UI_PROOF) {
       await page.getByRole('dialog').screenshot({
         path: process.env.FREESEEK_VAULT_UI_PROOF + '/history-vault-data-' + page.viewportSize().width + '-zh.png',
@@ -131,22 +139,58 @@ export const runHistoryRecoveryCases = async (run) => {
       })
     }
     await display({ phase: 'protecting', processed: 4, total: 8 })
-    await page.getByText('正在补全副本，已处理 4/8 个会话。', { exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: '检查并补全副本', exact: true }).count(), 0)
+    await page.getByText('正在备份，已检查 4/8 个对话。', { exact: true }).waitFor()
+    assert.equal(await protect.getAttribute('aria-busy'), 'true')
+    assert.equal(await protect.isDisabled(), true)
+    assert.equal(await restore.isDisabled(), true)
 
     await display({ phase: 'error', issue: 'space' })
-    await page.getByRole('alert').getByText('设备空间不足。释放空间后重试。', { exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: '重试补全副本', exact: true }).count(), 1)
-    assert.equal(await page.getByRole('button', { name: '重新检查副本', exact: true }).count(), 0)
+    await page.getByRole('alert').getByText('手机空间不足。腾出空间后可以重试。', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '重试备份', exact: true }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: '重新检查备份', exact: true }).count(), 0)
     await page.evaluate(() => window.__audit.settings.setLocale('en-US'))
-    await page.getByRole('heading', { name: 'On-device recovery copy', exact: true }).waitFor()
-    await page.getByText('3 of 8 chats protected', { exact: true }).waitFor()
+    await page.getByRole('heading', { name: 'On-device chat backup', exact: true }).waitFor()
+    await page.getByText('3 of 8 chats backed up', { exact: true }).waitFor()
     await page.getByText('Device storage is low. Free some space and try again.', { exact: true }).waitFor()
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize({ width: 320, height: 700 })
+    await page.evaluate(() => {
+      window.__audit.settings.setThemePreference('dark')
+      window.__audit.settings.setFontScale(1.2)
+    })
+    const check = page.getByRole('button', { name: 'Retry backup', exact: true })
+    const recover = page.getByRole('button', { name: 'Recover chats and attachments', exact: true })
+    await recover.waitFor()
+    const [checkBounds, recoverBounds] = await check.evaluate((row) =>
+      [...row.closest('section').querySelectorAll('button')].map((button) => {
+        const { x, y, width, height } = button.getBoundingClientRect()
+        return { x, y, width, height }
+      })
+    )
+    assert.equal(checkBounds.x, recoverBounds.x)
+    assert.equal(checkBounds.width, recoverBounds.width)
+    assert.ok(recoverBounds.y >= checkBounds.y + checkBounds.height)
+    assert.ok(recoverBounds.x + recoverBounds.width <= 320)
     await display({ totalSessions: null, issue: 'unreadable' })
     const checks = await page.evaluate(() => window.__vaultStatusReads)
-    await page.getByRole('button', { name: 'Check the copy again', exact: true }).click()
+    await page.getByRole('button', { name: 'Check the backup again', exact: true }).click()
     await page.waitForFunction((checks) => window.__vaultStatusReads > checks, checks)
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'On-device chat backup', exact: true }).waitFor()
   }, (context) => vaultFixture(context))
+
+  await run('data management restores from its recovery row and shows the outcome', async (page) => {
+    await page.locator('#fs-startup').waitFor({ state: 'hidden' })
+    await page.evaluate(() => {
+      window.__vaultExternalCopy = true
+      window.__audit.settingsDialog.openSettings('data')
+    })
+    await page.getByRole('button', { name: '本机聊天备份', exact: true }).click()
+    await page.getByRole('button', { name: '找回聊天和附件', exact: true }).click()
+    const result = page.getByRole('dialog', { name: '已找回备份中可用的内容', exact: true })
+    await result.getByText('找回 1 个对话。', { exact: true }).waitFor()
+    await result.getByText('备份里缺少 1 份附件。', { exact: true }).waitFor()
+  }, (context) => vaultFixture(context, false, true))
 
   await run('on-device recovery protection can retry low storage without losing the original chats', async (page) => {
     await page.locator('#fs-startup').waitFor({ state: 'hidden' })
@@ -158,28 +202,30 @@ export const runHistoryRecoveryCases = async (run) => {
       ])
       a.settingsDialog.openSettings('data')
     })
-    const protect = page.getByRole('button', { name: '检查并补全副本', exact: true })
+    await page.getByRole('button', { name: '本机聊天备份', exact: true }).click()
+    const protect = page.getByRole('button', { name: '检查备份', exact: true })
     await protect.waitFor()
     await page.evaluate(() => { window.__vaultNoSpace = true })
     await protect.click()
-    await page.getByText('设备空间不足。释放空间后重试。', { exact: true }).waitFor()
+    await page.getByText('手机空间不足。腾出空间后可以重试。', { exact: true }).waitFor()
     assert.equal(
       await page.evaluate(async () => (await window.__audit.db.loadSession('vault-protect-a')).messages[0].content),
       '仍在本机'
     )
     await page.evaluate(() => { window.__vaultNoSpace = false })
-    await page.getByRole('button', { name: '重试补全副本', exact: true }).click()
+    await page.getByRole('button', { name: '重试备份', exact: true }).click()
     await protect.waitFor()
-    await page.getByText('已保护 2/2 个会话', { exact: true }).waitFor()
-    assert.equal(await page.getByText('设备空间不足。释放空间后重试。', { exact: true }).count(), 0)
+    await page.getByText('已备份 2/2 个对话', { exact: true }).waitFor()
+    assert.equal(await page.getByText('手机空间不足。腾出空间后可以重试。', { exact: true }).count(), 0)
   }, (context) => vaultFixture(context))
 
   await run('startup recovery offers the Android copy alongside retry and ZIP', async (page) => {
     await page.locator('#fs-startup').waitFor({ state: 'hidden' })
     const main = page.getByRole('main')
-    const restore = main.getByRole('button', { name: '从本机恢复副本找回', exact: true })
+    const restore = main.getByRole('button', { name: '找回聊天和附件', exact: true })
     await restore.waitFor()
-    await main.getByText('本机恢复副本中有 3 个会话可找回。', { exact: true }).waitFor()
+    await main.getByText('本机备份里有 3 个对话可以找回。', { exact: true }).waitFor()
+    await main.getByRole('alert').getByText(/没能从备份找回聊天/).waitFor()
     const retry = main.getByRole('button', { name: '重试', exact: true })
     const zip = main.getByRole('button', { name: '打开备份设置', exact: true })
     assert.equal(await retry.isEnabled(), true)
@@ -194,39 +240,35 @@ export const runHistoryRecoveryCases = async (run) => {
     await page.evaluate(() => window.__audit.historyVault.useHistoryVault.setState({
       phase: 'restoring', processed: 1, total: 3,
     }))
-    await main.getByText('正在找回，已处理 1/3 项。', { exact: true }).waitFor()
+    await main.getByText('正在找回，已检查 1/3 项。', { exact: true }).waitFor()
     assert.equal(await restore.isEnabled(), false)
     assert.equal(await retry.isEnabled(), false)
     assert.equal(await zip.isEnabled(), false)
     await page.evaluate(() => window.__audit.historyVault.useHistoryVault.setState({ phase: 'idle' }))
     await restore.click()
-    await main.getByRole('alert').getByText(/从本机副本找回失败/).waitFor()
+    await main.getByRole('alert').getByText(/没能从备份找回聊天/).waitFor()
     assert.equal(await restore.isEnabled(), true)
     assert.equal(await retry.isEnabled(), true)
     assert.equal(await zip.isEnabled(), true)
-    assert.equal(await page.getByRole('dialog', { name: '已从本机副本恢复' }).count(), 0)
+    assert.equal(await page.getByRole('dialog', { name: '已从备份找回' }).count(), 0)
     await zip.click()
     await page.getByRole('button', { name: /导入历史对话/ }).waitFor()
     assert.equal(await page.getByRole('dialog').getByRole('button', {
-      name: '从本机恢复副本找回', exact: true,
+      name: '找回聊天和附件', exact: true,
     }).count(), 0)
   }, (context) => vaultFixture(context, true), false)
 
-  await run('on-device recovery reports a partial restore after the recovery page closes', async (page) => {
+  await run('on-device recovery automatically restores chats at startup and reports missing attachments', async (page) => {
     await page.locator('#fs-startup').waitFor({ state: 'hidden' })
-    await page.getByRole('main').getByRole('button', { name: '从本机恢复副本找回', exact: true }).click()
-    const outcome = page.getByRole('dialog', { name: '已恢复本机副本中的可用内容', exact: true })
-    await outcome.getByText('找回 1 个会话。', { exact: true }).waitFor()
-    await outcome.getByText('副本缺少 1 份附件原件。', { exact: true }).waitFor()
-    assert.equal(await outcome.getByText(/^找回 d+ 份附件原件。$/).count(), 0)
-    await outcome.getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByText('已自动找回 1 个对话，备份里缺少 1 份附件。', { exact: true }).waitFor()
+    await page.getByTestId('chat-composer').waitFor()
     const session = await page.evaluate(() => window.__audit.db.loadSession('vault-ui-restored'))
     assert.equal(session.messages[0].content, '从本机副本找回的正文')
     assert.equal(session.messages[0].files[0].name, '样本.txt')
     await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
     await page.getByRole('button', { name: '删除所有对话', exact: true }).click()
     const confirm = page.getByRole('dialog', { name: /所有对话都将被清空/ })
-    await confirm.getByText(/聊天记录及本机恢复副本将一并清空/).waitFor()
+    await confirm.getByText(/聊天记录、本机备份、附件和未发送的草稿会一并清空/).waitFor()
     await confirm.getByRole('button', { name: '取消', exact: true }).click()
     await page.evaluate(() => window.__audit.settingsDialog.closeSettings())
     await page.getByRole('heading', { name: '数据管理', exact: true }).waitFor({ state: 'hidden' })
@@ -237,7 +279,7 @@ export const runHistoryRecoveryCases = async (run) => {
     await row.getByRole('button', { name: '更多', exact: true }).click()
     await page.getByRole('menuitem', { name: '删除', exact: true }).click()
     const deleteChat = page.getByRole('dialog', { name: '永久删除对话', exact: true })
-    await deleteChat.getByText(/此对话及其本机恢复副本将一并删除/).waitFor()
+    await deleteChat.getByText(/此对话及其本机备份会一并删除/).waitFor()
     await deleteChat.getByRole('button', { name: '取消', exact: true }).click()
     assert.equal(await page.evaluate(() => window.__audit.store.useChatStore.getState().sessions.length), 1)
   }, (context) => vaultFixture(context, true, true), false)
@@ -245,8 +287,9 @@ export const runHistoryRecoveryCases = async (run) => {
   await run('data management on the web retains ZIP without the on-device recovery controls', async (page) => {
     await page.evaluate(() => window.__audit.settingsDialog.openSettings('data'))
     await page.getByRole('button', { name: /导入历史对话/ }).waitFor()
-    assert.equal(await page.getByRole('heading', { name: '本机恢复副本' }).count(), 0)
-    assert.equal(await page.getByRole('button', { name: '从本机恢复副本找回' }).count(), 0)
+    assert.equal(await page.getByRole('heading', { name: '本机聊天备份' }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: '本机聊天备份' }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: '找回聊天和附件' }).count(), 0)
   })
 
   await run(

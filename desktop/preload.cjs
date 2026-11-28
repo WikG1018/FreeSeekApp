@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('freeseekOfficePreview', (options) =>
 contextBridge.exposeInMainWorld('freeseekWindowsUpdate', {
   get: (options) => ipcRenderer.invoke('freeseek:update:get', options),
   hasFile: (options) => ipcRenderer.invoke('freeseek:update:has', options),
+  probe: (options) => ipcRenderer.invoke('freeseek:update:probe', options),
   download: (options) => ipcRenderer.invoke('freeseek:update:download', options),
   install: (options) => ipcRenderer.invoke('freeseek:update:install', options),
   addListener: async (_event, receive) => {

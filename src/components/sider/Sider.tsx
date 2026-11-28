@@ -1,5 +1,13 @@
 import clsx from 'clsx'
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useAssistantLibrary } from '../../services/assistants/library.js'
 import {
@@ -40,14 +48,24 @@ import { SiderOrderPicker } from './SiderOrderPicker.js'
 import { useSessionSearch } from './useSessionSearch.js'
 import styles from './Sider.module.css'
 
+const historyBatchSize = 80
+
+export type SiderListPosition = {
+  order: SiderOrder
+  scrollTop: number
+  visibleCount: number
+}
+
 /** 展开的会话侧边栏，移动端放在由手势和系统返回控制的抽屉里。 */
 export const Sider = ({
   mobile = false,
+  listPosition,
   donationOpen,
   onDonate,
   onSearchActive,
 }: {
   mobile?: boolean
+  listPosition: MutableRefObject<SiderListPosition | null>
   donationOpen: boolean
   onDonate: () => void
   onSearchActive?: (active: boolean) => void
@@ -87,13 +105,19 @@ export const Sider = ({
   const search = useSessionSearch(sessions, keyword)
   const listRef = useRef<HTMLDivElement>(null)
   const rowPositions = useRef<Map<string, number> | null>(null)
-  const [visibleCount, setVisibleCount] = useState(80)
+  const [visibleCount, setVisibleCount] = useState(() =>
+    listPosition.current?.order === order ? listPosition.current.visibleCount : historyBatchSize
+  )
   useLayoutEffect(() => {
-    setVisibleCount(80)
-    if (listRef.current) {
-      listRef.current.scrollTop = 0
+    const saved = !keyword && listPosition.current?.order === order ? listPosition.current : null
+    if (!saved) {
+      listPosition.current = null
+      setVisibleCount(historyBatchSize)
     }
-  }, [keyword, order])
+    if (listRef.current) {
+      listRef.current.scrollTop = saved?.scrollTop ?? 0
+    }
+  }, [keyword, listPosition, order])
   const ordered = useMemo(() => orderSessions(search.sessions, order), [search.sessions, order])
   const groups = useMemo(
     () => groupSessions(ordered.slice(0, visibleCount), now, t, order),
@@ -105,7 +129,11 @@ export const Sider = ({
       return
     }
     const update = () => {
-      list.dataset.fadeMore = String(list.scrollHeight - list.scrollTop - list.clientHeight > 3)
+      const { scrollTop } = list
+      if (!keyword) {
+        listPosition.current = { order, scrollTop, visibleCount }
+      }
+      list.dataset.fadeMore = String(list.scrollHeight - scrollTop - list.clientHeight > 3)
     }
     update()
     const observer = new ResizeObserver(update)
@@ -118,7 +146,7 @@ export const Sider = ({
       observer.disconnect()
       list.removeEventListener('scroll', update)
     }
-  }, [groups])
+  }, [groups, keyword, listPosition, order, visibleCount])
   const changeOrder = (next: SiderOrder) => {
     if (next === order) {
       return
@@ -157,7 +185,7 @@ export const Sider = ({
       }
     }
   }, [order])
-  const showMore = () => setVisibleCount((count) => Math.min(count + 80, ordered.length))
+  const showMore = () => setVisibleCount((count) => Math.min(count + historyBatchSize, ordered.length))
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   const [deleteLinkedMemory, setDeleteLinkedMemory] = useState(false)

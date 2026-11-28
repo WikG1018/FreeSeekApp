@@ -1,0 +1,58 @@
+.summary {
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px;
+  color: var(--fs-secondary-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.intro {
+  display: grid;
+  gap: 3px;
+}
+
+.status,
+.note,
+.error,
+.restoreError {
+  margin: 0;
+}
+
+.status {
+  color: var(--dsw-alias-label-primary);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.metrics {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.metric dd {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+}
+
+.error,
+.restoreError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.restoreError {
+  padding: 0 15px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}

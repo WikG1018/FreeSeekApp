@@ -23,7 +23,7 @@ import {
 } from '../../services/chat/backup.js'
 import type { ArchivePartial } from '../../services/chat/history/importArchive.js'
 import { useChatStore, selectSession } from '../../services/chat/store.js'
-import { historyVaultAvailable, useHistoryVault } from '../../services/chat/historyVault.js'
+import { historyVaultAvailable, refreshHistoryVault, useHistoryVault } from '../../services/chat/historyVault.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
 import { hasHistoryVaultCopy, type HistoryVaultResult } from '../session/HistoryVaultRecovery.js'
 import { Button } from '../base/Button.js'
@@ -73,6 +73,7 @@ import { AccountPage } from './AccountPage.js'
 import { AppearancePage, ChatPreferencesPage } from './PreferencesPages.js'
 import { SettingsShell } from './SettingsShell.js'
 import { HistoryVaultSettings } from './HistoryVaultSettings.js'
+import { AboutLinks } from './AboutLinks.js'
 import type { Persona } from '../../services/personas.js'
 import { PersonaEditor, PersonaLibrary } from '../personas/PersonaLibrary.js'
 
@@ -283,8 +284,15 @@ const SettingsRoot = ({ onVaultResult }: VaultResultProps) => {
                   historyDelete={historyDelete}
                   disabled={!ready || historyBusy}
                   importDisabled={(!ready && !initError) || historyBusy}
+                  openBackup={() => open('historyBackup')}
+                />
+              )
+            case 'historyBackup':
+              return (
+                <HistoryVaultSettings
+                  disabled={(!ready && !initError) || historyBusy}
                   ready={ready}
-                  onVaultResult={onVaultResult}
+                  onResult={onVaultResult}
                 />
               )
             case 'usage':
@@ -362,28 +370,41 @@ const DataPage = ({
   historyDelete,
   disabled,
   importDisabled,
-  ready,
-  onVaultResult,
+  openBackup,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
   historyDelete: ReturnType<typeof useHistoryDelete>
   disabled: boolean
   importDisabled: boolean
-  ready: boolean
-} & VaultResultProps) => {
+  openBackup: () => void
+}) => {
   const t = useTranslate()
   const hasHistory = useChatStore((state) => state.sessions.length > 0)
   const hasRecoveryCopy = useHistoryVault(hasHistoryVaultCopy)
+  const supportsBackup = historyVaultAvailable()
+  useEffect(() => {
+    if (supportsBackup) {
+      void refreshHistoryVault()
+    }
+  }, [supportsBackup])
   const showTutorial = useSettingsDialog((state) => state.showTutorial)
   return (
     <>
       <Section title={t('settingsBackupGroup')}>
         <ImportHistory historyImport={historyImport} disabled={importDisabled} />
         {hasHistory && <ExportHistory disabled={disabled} />}
+        {supportsBackup && (
+          <div>
+            <Row
+              icon={<IconFileOutline16 />}
+              label={t('historyVaultTitle')}
+              description={t('historyVaultEntry')}
+              onClick={openBackup}
+              target="historyBackup"
+            />
+          </div>
+        )}
       </Section>
-      {historyVaultAvailable() && (
-        <HistoryVaultSettings disabled={importDisabled} ready={ready} onResult={onVaultResult} />
-      )}
       <SettingsDisclosure
         guide
         defaultOpen={showTutorial}
@@ -402,7 +423,7 @@ const DataPage = ({
           {t(hasHistory ? 'officialExportHint' : 'guideKeyFree')}
         </p>
       </SettingsDisclosure>
-      {(hasHistory || (historyVaultAvailable() && hasRecoveryCopy)) && (
+      {(hasHistory || (supportsBackup && hasRecoveryCopy)) && (
         <Section title={t('settingsRemoveGroup')}>
           <DeleteAllSetting historyDelete={historyDelete} disabled={disabled} />
         </Section>
@@ -411,7 +432,7 @@ const DataPage = ({
   )
 }
 
-/** 二级页：关于（完全本地，不跳转私有仓库） */
+/** 二级页：关于 */
 const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
   const t = useTranslate()
   const hasEasterEggs = useScreenTimeMilestones((state) => state.triggered.length > 0)
@@ -551,6 +572,7 @@ const AboutPage = ({ open }: { open: (page: SettingsPageId) => void }) => {
         </button>
         <p className={styles.paragraph}>{t('diagnosticsPrivacy')}</p>
       </Section>
+      <AboutLinks />
       <Section>
         <Row label={t('guideTitle')} onClick={() => open('guide')} target="guide" />
         <Row label={t('disclaimerTitle')} onClick={() => open('disclaimer')} target="disclaimer" />

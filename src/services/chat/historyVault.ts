@@ -488,7 +488,7 @@ async function* readBody(generation: number, sessionId: string, bytes: number) {
     offset = part.nextOffset
   }
 }
-export const restoreHistoryVault = (): Promise<RestoreResult | null> => {
+export const restoreHistoryVault = ({ automatic = false } = {}): Promise<RestoreResult | null> => {
   if (!historyVaultAvailable()) {
     return Promise.resolve(null)
   }
@@ -501,6 +501,9 @@ export const restoreHistoryVault = (): Promise<RestoreResult | null> => {
     try {
       const state = await serial(settledStatus)
       if (!state.sessionCount) {
+        if (automatic) {
+          logEvent('storage', 'history.auto-restore-unavailable', { reason: 'no-backup' })
+        }
         return null
       }
       set({
@@ -609,9 +612,11 @@ export const restoreHistoryVault = (): Promise<RestoreResult | null> => {
         },
         async () => new Set<string>(),
         () => removeDiskOriginals(created),
-        repairs
+        repairs,
+        { onlyAfterLoss: automatic }
       )
       if (!restored) {
+        set({ phase: 'idle' })
         return null
       }
       const wanted = new Set([...required.keys(), ...keptMissing.keys()])
@@ -623,10 +628,10 @@ export const restoreHistoryVault = (): Promise<RestoreResult | null> => {
       }
       recovered = true
       set({ phase: 'idle', totalSessions: restored.summaries.length, issue: undefined })
-      logEvent('storage', 'history.vault-restored', result)
+      logEvent('storage', 'history.vault-restored', { ...result, automatic })
       return result
     } catch (error) {
-      failed(error, 'restore')
+      failed(error, automatic ? 'restore-automatic' : 'restore')
       return null
     }
   })().finally(() => {

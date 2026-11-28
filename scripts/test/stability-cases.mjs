@@ -173,6 +173,92 @@ export const runStabilityCases = async ({ run, behavior, uploads, maxActive, roo
     }
   )
 
+  for (const resume of [false, true]) {
+    await run(
+      resume
+        ? 'native update resuming online favors fast mirrors that can keep the partial package'
+        : 'native update completes over fast GitHub direct without any mirror probes',
+      async (page) => {
+        await page.evaluate(async (resume) => {
+          const { update } = window.__audit
+          const tag = 'v99.0.0'
+          const name = 'freeseek-v99.0.0-release.apk'
+          const url = 'https://github.com/WikG1018/FreeSeekApp/releases/download/' + tag + '/' + name
+          const release = {
+            tag_name: tag,
+            assets: [{ name, size: 1000, browser_download_url: url, digest: 'sha256:' + 'a'.repeat(64) }],
+          }
+          window.androidBridge = {}
+          window.updateRequests = []
+          Object.defineProperty(navigator, 'onLine', { configurable: true, value: !resume })
+          window.Capacitor.nativeCallback = () => 'progress-listener'
+          let partialBytes = resume ? 300 : 0
+          window.Capacitor.nativePromise = async (_, method, options) => {
+            if (method === 'get') {
+              return { status: 200, body: JSON.stringify(release) }
+            }
+            if (method === 'hasFile') {
+              return { exists: false, partialBytes }
+            }
+            if (method === 'probe' || method === 'download') {
+              const host = new URL(options.url).host
+              window.updateRequests.push([method, host, options.offset ?? options.stopIfSlow])
+              if (method === 'probe') {
+                return {
+                  bytesPerSecond: { 'gh-proxy.com': 3000, 'ghfast.top': 2500, 'ghproxy.net': 1000 }[host],
+                  supportsRange: host !== 'gh-proxy.com',
+                }
+              }
+              if (host === 'github.com' && resume) {
+                partialBytes = 400
+                return { slow: true, bytesPerSecond: 500 }
+              }
+              return { path: '/verified.apk', size: 1000 }
+            }
+          }
+          await update.checkForUpdate({ force: true })
+          if (resume) {
+            if (update.useUpdate.getState().percent !== 30 || window.updateRequests.length) {
+              throw new Error('Saved progress was not restored while offline')
+            }
+            update.initUpdateChecker()
+            Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
+            window.dispatchEvent(new Event('online'))
+          }
+        }, resume)
+        await page.waitForFunction(() => window.__audit.update.useUpdate.getState().status === 'ready')
+        assert.deepEqual(await page.evaluate(() => window.updateRequests), [
+          ['download', 'github.com', true],
+          ...(resume
+            ? [
+                ['probe', 'gh-proxy.com', 400],
+                ['probe', 'ghfast.top', 400],
+                ['probe', 'ghproxy.net', 400],
+                ['download', 'ghfast.top', false],
+              ]
+            : []),
+        ])
+      },
+      async (context) => {
+        await context.addInitScript(() => {
+          const method = (name, rtype = 'promise') => ({ name, rtype })
+          window.Capacitor = {
+            PluginHeaders: [
+              {
+                name: 'Update',
+                methods: [
+                  ...['get', 'hasFile', 'probe', 'download', 'removeListener'].map((name) => method(name)),
+                  method('addListener', 'callback'),
+                ],
+              },
+              { name: 'App', methods: [method('addListener', 'callback')] },
+            ],
+          }
+        })
+      }
+    )
+  }
+
   for (const [mode, body, key] of [
     ['network', {}, 'uploadNetworkError'],
     ['raw', '<html>upstream failure</html>', 'uploadResponseInvalid'],

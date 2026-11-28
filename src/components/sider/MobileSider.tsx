@@ -1,17 +1,19 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type MutableRefObject } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { hasTransientPanel } from '../base/transientPanel.js'
 import { hasOpenModal } from '../base/Modal.js'
 import { hasSettingsOpen } from '../settings/settingsDialogState.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
-import { Sider } from './Sider.js'
+import { Sider, type SiderListPosition } from './Sider.js'
 import styles from './Sider.module.css'
 
 /** 关闭后保留正在查看的搜索结果，返回侧边栏时可以继续浏览。 */
 export const MobileSider = ({
+  listPosition,
   donationOpen,
   onDonate,
 }: {
+  listPosition: MutableRefObject<SiderListPosition | null>
   donationOpen: boolean
   onDonate: () => void
 }) => {
@@ -113,7 +115,13 @@ export const MobileSider = ({
         aria-hidden={!open}
       >
         {(mounted || retainSearch) && (
-          <Sider mobile donationOpen={donationOpen} onDonate={onDonate} onSearchActive={setRetainSearch} />
+          <Sider
+            mobile
+            listPosition={listPosition}
+            donationOpen={donationOpen}
+            onDonate={onDonate}
+            onSearchActive={setRetainSearch}
+          />
         )}
       </div>
     </>

@@ -67,7 +67,7 @@ import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
-import { Sider } from '../components/sider/Sider.js'
+import { Sider, type SiderListPosition } from '../components/sider/Sider.js'
 import { MobileSider } from '../components/sider/MobileSider.js'
 import { useSiderGesture } from '../components/sider/useSiderGesture.js'
 import { DonateDialog } from '../components/donate/DonateDialog.js'
@@ -97,6 +97,7 @@ export const App = () => {
   const locale = useSettings((state) => state.locale)
   // 移动端侧边栏以独立抽屉管理开合状态
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
+  const siderListPosition = useRef<SiderListPosition | null>(null)
   const ready = useChatStore((state) => state.ready)
   useEffect(() => {
     if (!ready || !workspaceDeviceFiles()) {
@@ -382,9 +383,13 @@ export const App = () => {
         data-sider-open={siderOpen ? '' : undefined}
       >
         {isMobile ? (
-          <MobileSider donationOpen={donationOpen} onDonate={openDonation} />
+          <MobileSider
+            listPosition={siderListPosition}
+            donationOpen={donationOpen}
+            onDonate={openDonation}
+          />
         ) : siderCollapsed ? null : (
-          <Sider donationOpen={donationOpen} onDonate={openDonation} />
+          <Sider listPosition={siderListPosition} donationOpen={donationOpen} onDonate={openDonation} />
         )}
         <main className={styles.main} aria-hidden={siderOpen || undefined}>
           {saveError && <ChatSaveNotice />}
@@ -394,19 +399,21 @@ export const App = () => {
               <div className={styles.loadingView}>
                 {isMobile ? <MobileHeader /> : null}
                 <div className={styles.loadingState} role="status" aria-live="polite">
-                  <span>
-                    {(!ready ? initError : sessionLoadError)
-                      ? t(
-                          !ready
-                            ? historyMissing
-                              ? historyMissingMessage(historyRecoveryReason)
-                              : historyUpgradeBlocked
-                                ? 'historyUpgradeBlocked'
-                                : 'historyStartupReadUnavailable'
-                            : 'sessionLoadFailed'
-                        )
-                      : t('sessionLoading')}
-                  </span>
+                  {(!restoringVault || ready) && (
+                    <span>
+                      {(!ready ? initError : sessionLoadError)
+                        ? t(
+                            !ready
+                              ? historyMissing
+                                ? historyMissingMessage(historyRecoveryReason)
+                                : historyUpgradeBlocked
+                                  ? 'historyUpgradeBlocked'
+                                  : 'historyStartupReadUnavailable'
+                              : 'sessionLoadFailed'
+                          )
+                        : t('sessionLoading')}
+                    </span>
+                  )}
                   {!ready && canUseVault && (
                     <HistoryVaultRestore
                       disabled={importingHistory}

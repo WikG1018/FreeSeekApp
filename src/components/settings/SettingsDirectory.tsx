@@ -49,6 +49,7 @@ export const pageTitles: Record<SettingsPageId, TranslationKey> = {
   usageModel: 'usageModelTitle',
   screenTime: 'screenTimeTitle',
   data: 'settingsDataManage',
+  historyBackup: 'historyVaultTitle',
   about: 'settingsAboutApp',
   aboutInfo: 'settingsPrivacyLicenses',
   easterEggs: 'milestoneEasterEggs',

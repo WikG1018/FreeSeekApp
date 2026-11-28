@@ -298,7 +298,7 @@ const parseFields = (inner: string) => {
 export type RoleLookup = (name: string) => VoiceRole | undefined
 
 /** 一个识别出来的标注：在原文里的起止位置和内容 */
-type TagMark = { start: number; end: number; inner: string }
+type TagMark = { start: number; end: number; inner: string; incomplete?: true }
 
 const maskInlineCode = (line: string, maskOpenCode: boolean) => {
   const runs = [...line.matchAll(/\x60+/g)]
@@ -383,19 +383,29 @@ const scanMarks = (value: string, maskOpenCode = false): TagMark[] => {
     let cursor = contentStart
     while (cursor < text.length && cursor - contentStart <= TAG_MAX_LENGTH) {
       const char = text[cursor]
-      if (CLOSERS.has(char) || char === '\n') {
+      if (CLOSERS.has(char) || char === '\n' || char === '\r') {
         break
       }
       cursor += 1
     }
     const closed = cursor < text.length && CLOSERS.has(text[cursor])
+    const inner = text.slice(contentStart, cursor)
+    const strong = STRONG_OPENERS.has(opener)
+    const speaker = speakerLabel.test(inner)
+    const hasFields = looksLikeTagLine(inner)
     if (!closed) {
-      // 没闭合（流式还没写完或模型漏了）：不算标注，交给 strip 的尾巴处理
+      if (strong || speaker || hasFields || /^(?:语气|tone)\s*[:：]/i.test(inner)) {
+        // A broken marker covers only its own line. Keep later prose and speakers.
+        const lineStart = text.lastIndexOf('\n', index - 1) + 1
+        const lineEnded = cursor === text.length || text[cursor] === '\n' || text[cursor] === '\r'
+        const bare = hasFields && lineEnded && !text.slice(lineStart, index).trim()
+        marks.push({ start: index, end: cursor, inner, ...(bare ? {} : { incomplete: true }) })
+        index = cursor
+        continue
+      }
       index = contentStart
       continue
     }
-    const inner = text.slice(contentStart, cursor)
-    const strong = STRONG_OPENERS.has(opener)
     if (!inner.trim()) {
       // 空的生僻括号是模型留下的残渣，照样要剥掉；解析阶段会因为没名字而跳过
       if (strong) {
@@ -404,9 +414,9 @@ const scanMarks = (value: string, maskOpenCode = false): TagMark[] => {
       index = contentStart
       continue
     }
-    const speakerAtLineStart = speakerLabel.test(inner) &&
+    const speakerAtLineStart = speaker &&
       !text.slice(text.lastIndexOf('\n', index - 1) + 1, index).trim()
-    if (!strong && !speakerAtLineStart && !looksLikeTagLine(inner)) {
+    if (!strong && !speakerAtLineStart && !hasFields) {
       index = contentStart
       continue
     }
@@ -523,10 +533,7 @@ export const parseRoleMarkers = (
   }
 
   const marks = scanMarks(text, options.speechOnly)
-  const dangling = options.speechOnly ? danglingOpener(text) : -1
-  const speechText = options.speechOnly
-    ? maskMarkdownCode(dangling < 0 ? text : text.slice(0, dangling), true)
-    : text
+  const speechText = options.speechOnly ? maskMarkdownCode(text, true) : text
   const addSpeech = (roleId: string | null, tone: string, from: number, to: number) => {
     const raw = speechText.slice(from, to)
     const spoken = raw.trim()
@@ -534,7 +541,7 @@ export const parseRoleMarkers = (
       segments.push({
         roleId, tone, text: spoken,
         ...(options.speechOnly && {
-          span: { start: from + raw.length - raw.trimStart().length, closed: to < text.length && to <= speechText.length },
+          span: { start: from + raw.length - raw.trimStart().length, closed: to < text.length },
         }),
       })
     }
@@ -556,6 +563,10 @@ export const parseRoleMarkers = (
     const rest = text.slice(mark.end, nextStart)
     plain += rest
     cursor = nextStart
+    if (mark.incomplete) {
+      addNarration(mark.end, nextStart)
+      continue
+    }
     const { fields, looseName, looseValue } = parseFields(mark.inner)
     const explicit = fields.has('说话人')
     // Only the legacy format uses the first blank line as an implicit narrator transition.
@@ -684,71 +695,22 @@ export const parseRoleMarkers = (
   }
 }
 
-/**
- * 渲染用：剥掉所有标注。
- * 末尾残留的开括号（流式还没写完，或模型漏了收尾）一律连同后面一起藏起来——
- * 未闭合的标注永远不是正文内容，显示出来只会是噪音。
- */
+/** 渲染用：隐藏标注，并保留后续段落。 */
 export const stripRoleMarkers = (text: string) => {
   if (!/[｜|]/.test(text) && !OPENERS.some((opener) => text.includes(opener))) {
     return text
   }
   const marks = scanMarks(text)
-  if (!marks.length) {
-    const dangling = danglingOpener(text)
-    return dangling < 0 ? text : text.slice(0, dangling)
-  }
   let out = ''
   let cursor = 0
   for (const mark of marks) {
     out += text.slice(cursor, mark.start)
     cursor = mark.end
   }
-  out += text.slice(cursor)
-  const dangling = danglingOpener(out)
-  return dangling < 0 ? out : out.slice(0, dangling)
+  return out + text.slice(cursor)
 }
 
-/**
- * 最后一个「开了但没收」的标注起点；没有返回 -1。
- * 只认两种情况，避免把正文里的【注意】这类强调误判：
- *   - 生僻开括号（⟦ ［）出现即认；
- *   - 【 之后到行末都没有任何收尾字符。
- */
-const danglingOpener = (value: string) => {
-  const text = maskMarkdownCode(value)
-  let found = -1
-  for (let index = 0; index < text.length; index += 1) {
-    const opener = OPENERS.find((item) => text.startsWith(item, index))
-    if (!opener) {
-      continue
-    }
-    const contentStart = index + opener.length
-    let cursor = contentStart
-    while (cursor < text.length && cursor - contentStart <= TAG_MAX_LENGTH) {
-      const char = text[cursor]
-      if (CLOSERS.has(char) || char === '\n') {
-        break
-      }
-      cursor += 1
-    }
-    const closed = cursor < text.length && CLOSERS.has(text[cursor])
-    if (closed) {
-      // 这是一对完整的括号，跳过它
-      index = cursor
-      continue
-    }
-    const strong = STRONG_OPENERS.has(opener)
-    const inner = text.slice(contentStart, cursor)
-    if (strong || /[｜|]/.test(inner) || /语气\s*[:：]/.test(inner) || speakerLabel.test(inner)) {
-      found = index
-    }
-    index = cursor
-  }
-  return found
-}
-
-export const hasRoleMarkers = (text: string) => scanMarks(text).length > 0
+export const hasRoleMarkers = (text: string) => scanMarks(text).some(({ incomplete }) => !incomplete)
 
 export const isNarratorRole = (role: Pick<VoiceRole, 'name'>) => roleKey(role.name) === NARRATOR
 export const NARRATOR_NAME = NARRATOR

@@ -984,13 +984,18 @@ export type VaultReceipt = { id: string; revisions: Map<string, string> }
 const VAULT_COMMIT_KEY = 'lastCommittedRecoveryBatch'
 export const vaultCommitProof = async () => {
   const view = await historyTransaction('readonly')
-  const [marker, active, alternate, index, empty] = await Promise.all([
+  const [marker, active, alternate, index, empty, interrupted] = await Promise.all([
     view.state.get(VAULT_COMMIT_KEY), view.sessions.count(), view.stagingSessions.count(),
-    view.summaries.count(), view.state.get(CONFIRMED_EMPTY_KEY), view.tx.done,
+    view.summaries.count(), view.state.get(CONFIRMED_EMPTY_KEY),
+    view.state.get(INCOMPLETE_STAGING_KEY), view.tx.done,
   ])
+  const allEmpty = active === 0 && alternate === 0 && index === 0
+  const emptyAfterLoss = allEmpty && empty !== true
   return {
     id: marker && typeof marker === 'object' && 'vaultCommit' in marker ? marker.vaultCommit : undefined,
-    emptyAfterLoss: active === 0 && alternate === 0 && index === 0 && empty !== true,
+    confirmedEmpty: allEmpty && empty === true,
+    emptyAfterLoss,
+    canRestoreAutomatically: emptyAfterLoss && !view.selectionConflict && interrupted !== true,
   }
 }
 const vaultRevision = (summary: StoredSessionSummary) =>
@@ -1309,7 +1314,7 @@ export const loadDiskOriginalRef = async (id: string): Promise<DiskOriginal | un
   return record && 'disk' in record ? record.disk : undefined
 }
 
-export const saveConflictCopy = async (session: Session, files?: StoredFile[]): Promise<number> => {
+export const saveSessionCopy = async (session: Session, files?: StoredFile[]): Promise<number> => {
   const originals: CopyOriginals = { missing: 0, disk: [] }
   await saveSession(session, files, { exists: false }, originals)
   for (const disk of originals.disk) {

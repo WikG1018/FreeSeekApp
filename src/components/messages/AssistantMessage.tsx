@@ -2,11 +2,13 @@ import { useTranslate } from '../../i18n/index.js'
 import { isWindowsDesktop } from '../../services/api/windowsTransport.js'
 import clsx from 'clsx'
 import { memo, useRef, useState } from 'react'
-import { IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
+import { IconBranchOutline16, IconRefreshOutline16, IconWarningOutline16 } from '../base/icons.js'
 import { describeReply } from '../../services/chat/describe.js'
 import { contextWasRejected } from '../../services/chat/contextCompression.js'
 import { canContinueReply } from '../../services/chat/reply.js'
+import { canBranchFromReply } from '../../services/chat/forkConversation.js'
 import {
+  branchConversation,
   continueReply,
   regenerateReply,
   newChat,
@@ -18,6 +20,7 @@ import { stopReadAloud, useReadAloud } from '../../services/speech/readAloud.js'
 import type { AssistantMessage as AssistantMessageType } from '../../services/chat/types.js'
 import { openSettings } from '../settings/settingsDialogState.js'
 import { IconButton } from '../base/IconButton.js'
+import { showToast } from '../base/toastState.js'
 import { Button } from '../base/Button.js'
 import { Markdown } from '../markdown/Markdown.js'
 import { ExpandableContent } from './ExpandableContent.js'
@@ -84,6 +87,22 @@ export const AssistantMessage = memo(function AssistantMessage({
   const playback = useReadAloud((state) => state.messageId === message.id ? state.status : 'idle')
   // 新回复（含重新生成）挂载时创建不足 800ms 播放一次入场动画
   const [fresh] = useState(() => Date.now() - message.createdAt < 800)
+  const [branching, setBranching] = useState(false)
+  const fork = async () => {
+    setBranching(true)
+    try {
+      const result = await branchConversation(sessionId, message.id)
+      if (!result) {
+        showToast({ key: 'branchCreateFailed', type: 'error' })
+      } else if (result.missingOriginals > 0) {
+        showToast({ key: 'branchMissingOriginals', params: { count: result.missingOriginals } })
+      } else if (!result.opened) {
+        showToast({ key: 'branchCreated' })
+      }
+    } finally {
+      setBranching(false)
+    }
+  }
   const panelEntry = useSearchPanel((state) => state.entry)
   const notice = streaming ? null : describeReply(message)
   const compressionPrompt = message.error?.localMessage?.key === 'compressionSuggested'
@@ -347,6 +366,16 @@ export const AssistantMessage = memo(function AssistantMessage({
             {responseText && !refused && !hasRoleSpeech ? (
               <ReadAloudButton message={message} text={responseText} sessionId={sessionId} />
             ) : null}
+            {canBranchFromReply(message) && (
+              <IconButton
+                icon={branching ? <span className={styles.branchSpinner} aria-hidden /> : <IconBranchOutline16 />}
+                tooltip={t(branching ? 'branchSaving' : 'branchFromReply')}
+                tooltipPlacement="bottom"
+                aria-busy={branching || undefined}
+                disabled={branching}
+                onClick={() => void fork()}
+              />
+            )}
             <IconButton
               icon={<IconRefreshOutline16 />}
               tooltip={t('regenerate')}

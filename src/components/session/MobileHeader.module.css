@@ -90,12 +90,14 @@ button.title:focus:not(:focus-visible) {
 }
 @media (max-width: 359px) {
   .header[data-artifacts] .title,
-  .header[data-voices] .title {
+  .header[data-voices] .title,
+  .header[data-branch-source] .title {
     margin-inline: 5px;
     padding-inline: 7px;
   }
   .header[data-artifacts] .right,
-  .header[data-voices] .right {
+  .header[data-voices] .right,
+  .header[data-branch-source] .right {
     gap: 4px;
   }
 }

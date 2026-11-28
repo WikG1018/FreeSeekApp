@@ -115,16 +115,48 @@ export class ServerSentEventDecoder {
  * idleTimeoutMs：连接「静默看门狗」。移动网络下连接可能被悄悄挂起——
  * 不报错、不关闭、也永远不再来数据，界面就会一直转圈。
  * 超过该时长没有任何字节到达时取消读取并抛 StreamIdleTimeoutError。
+ * progress：聊天协议提供有效进度和结束信号，保活分片沿用当前进度的期限。
  */
 export const streamIdle = {
   /** 测试可注入较小的值；生产用 120 秒（搜索等服务器端工具可能让事件间隔较长） */
   timeoutMs: 120_000,
+  progressTimeoutMs: 300_000,
+  finishGraceMs: 5_000,
 }
 
-/** 流静默超时：连接活着但长时间没有数据 */
+/** Chat protocols decide which events advance a reply and which explicitly end it. */
+export class ChatStreamProgress {
+  private deadline = performance.now() + streamIdle.progressTimeoutMs
+  private finishing = false
+
+  get waitingForUsage() {
+    return this.finishing
+  }
+
+  get remainingMs() {
+    return Math.max(0, this.deadline - performance.now())
+  }
+
+  advance() {
+    if (!this.finishing) {
+      this.deadline = performance.now() + streamIdle.progressTimeoutMs
+    }
+  }
+
+  finish() {
+    if (!this.finishing) {
+      this.finishing = true
+      this.deadline = performance.now() + streamIdle.finishGraceMs
+    }
+  }
+}
+
 export class StreamIdleTimeoutError extends Error {
-  constructor() {
-    super('Stream idle timeout')
+  constructor(
+    readonly waitingFor: 'bytes' | 'progress',
+    readonly receivedBytes: number
+  ) {
+    super(waitingFor === 'progress' ? 'Stream progress timeout' : 'Stream idle timeout')
     this.name = 'StreamIdleTimeoutError'
   }
 }
@@ -141,7 +173,8 @@ export async function* readServerSentEvents(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
   idleTimeoutMs: number | null = streamIdle.timeoutMs,
-  maxEventChars?: number
+  maxEventChars?: number,
+  progress?: ChatStreamProgress
 ): AsyncGenerator<ServerSentEvent> {
   const reader = stream.getReader()
   const onAbort = () => {
@@ -153,7 +186,6 @@ export async function* readServerSentEvents(
   const decoder = new ServerSentEventDecoder(maxEventChars)
   let finished = false
   let receivedBytes = 0
-  /** 每读到一段数据就重置；到点仍没数据视为连接已死 */
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   const clearIdle = () => {
     if (idleTimer !== undefined) {
@@ -166,21 +198,32 @@ export async function* readServerSentEvents(
       throw abortReason(signal)
     }
     for (;;) {
-      clearIdle()
+      const byteWait = idleTimeoutMs ?? Infinity
+      const progressWait = progress?.remainingMs ?? Infinity
+      const wait = Math.min(byteWait, progressWait)
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        if (idleTimeoutMs !== null) {
+        if (wait < Infinity) {
           idleTimer = setTimeout(() => {
-            idleTimer = undefined
-            // 取消读取让 pending 的 read 尽快结束；随后抛超时
-            reader.cancel(new StreamIdleTimeoutError()).catch(() => {})
-            reject(new StreamIdleTimeoutError())
-          }, idleTimeoutMs)
+            if (progress?.waitingForUsage) {
+              // A terminal reason arrived. Give trailing usage a bounded window before closing.
+              resolve({ done: true })
+              void reader.cancel().catch(() => {})
+              return
+            }
+            const error = new StreamIdleTimeoutError(
+              progressWait <= byteWait ? 'progress' : 'bytes',
+              receivedBytes
+            )
+            reject(error)
+            void reader.cancel(error).catch(() => {})
+          }, wait)
         }
         reader.read().then(
           ({ done, value }) => resolve({ done, value }),
           (cause: unknown) => reject(signal?.aborted ? abortReason(signal) : new StreamReadError(receivedBytes, cause))
         )
       })
+      clearIdle()
       if (chunk.done) {
         if (signal?.aborted) {
           throw abortReason(signal)

@@ -183,6 +183,9 @@ export type CompressionCheckpoint = {
   refused?: true
 }
 
+/** Link back to the reply where this independent conversation started. */
+export type ConversationBranch = { sessionId: string; messageId: string }
+
 export type Session = {
   /** Missing in older sessions, which open as ordinary chats. */
   mode?: ChatMode
@@ -197,6 +200,7 @@ export type Session = {
   pinned?: boolean
   createdAt: number
   updatedAt: number
+  branchFrom?: ConversationBranch
   /** 包含所有分支的消息，按创建顺序存储。 */
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */
@@ -215,7 +219,7 @@ export type Session = {
 /** 会话列表元数据；消息只在打开会话时加载。 */
 export type SessionSummary = Pick<
   Session,
-  'id' | 'title' | 'createdAt' | 'updatedAt' | 'pinned' | 'mode'
+  'id' | 'title' | 'createdAt' | 'updatedAt' | 'pinned' | 'mode' | 'branchFrom'
 >
 
 /** 显式提取字段，避免将完整会话的消息带进列表。 */
@@ -226,4 +230,5 @@ export const toSessionSummary = (session: SessionSummary): SessionSummary => ({
   createdAt: session.createdAt,
   updatedAt: session.updatedAt,
   ...(session.mode && { mode: session.mode }),
+  ...(session.branchFrom && { branchFrom: session.branchFrom }),
 })

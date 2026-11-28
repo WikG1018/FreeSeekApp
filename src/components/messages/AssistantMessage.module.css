@@ -135,6 +135,22 @@
   opacity: 1;
 }
 
+.branchSpinner {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: branchSaving 0.8s linear infinite;
+}
+
+@keyframes branchSaving {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .continueButton {
   margin-left: auto;
 }

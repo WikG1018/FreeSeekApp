@@ -29,6 +29,7 @@ export type SettingsPageId =
   | 'agentEdit'
   | 'appearance'
   | 'data'
+  | 'historyBackup'
   | 'usage'
   | 'usagePricing'
   | 'usageModels'
@@ -66,6 +67,9 @@ export const parentSettingsPage = (page: SettingsPageId): SettingsPageId => {
   }
   if (page === 'chatSpeech') {
     return 'chat'
+  }
+  if (page === 'historyBackup') {
+    return 'data'
   }
   if (page === 'providerCatalog' || page === 'providerModels' || page === 'providerSearch' || page === 'providerSpeech') {
     return 'providers'
