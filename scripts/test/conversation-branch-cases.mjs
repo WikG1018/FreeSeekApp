@@ -65,8 +65,47 @@ export const runConversationBranchCases = async (run) => {
         page
           .locator('[data-message-id="' + replyId + '"]')
           .getByRole('button', { name: '从这条回复开分支', exact: true })
-      await branchButton('chosen-version').click()
+      const trigger = branchButton('chosen-version')
+      const dialog = page.getByRole('dialog', { name: '从这条回复开分支？' })
+      const cancel = dialog.getByRole('button', { name: '取消', exact: true })
+      const create = dialog.getByRole('button', { name: '创建分支', exact: true })
+      const assertSource = async () => {
+        assert.deepEqual(await page.evaluate(async () => ({
+          active: window.__audit.store.useChatStore.getState().activeId,
+          saved: (await window.__audit.db.loadSessionSummaries()).map(({ id }) => id),
+        })), { active: sourceId, saved: [sourceId] })
+      }
+
+      await trigger.focus()
+      await page.keyboard.press('Enter')
+      await dialog.waitFor()
+      await assertSource()
+      const beforeCancel = await page.getByTestId('message-scroll').evaluate((scroll) => scroll.scrollTop)
+      await cancel.evaluate((button) => {
+        button.click()
+        button.nextElementSibling.click()
+      })
+      await dialog.waitFor({ state: 'hidden' })
+      await assertSource()
+      assert.equal(await page.getByTestId('message-scroll').evaluate((scroll) => scroll.scrollTop), beforeCancel)
+      await page.waitForFunction(() =>
+        document.activeElement?.getAttribute('aria-label') === '从这条回复开分支'
+      )
+
+      await trigger.click()
+      await dialog.waitFor()
+      await page.evaluate(() => window.history.back())
+      await dialog.waitFor({ state: 'hidden' })
+      await assertSource()
+
+      await trigger.click()
+      await dialog.waitFor()
+      await create.evaluate((button) => {
+        button.click()
+        button.click()
+      })
       await header.getByText('分支 · 先看这份旅行日程', { exact: true }).waitFor()
+      await dialog.waitFor({ state: 'hidden' })
       await source.waitFor()
       const first = await page.evaluate(async () => {
         const a = window.__audit
@@ -76,6 +115,7 @@ export const runConversationBranchCases = async (run) => {
           ...saved,
           requests: a.usage.summarizeSessionUsage(saved).requests,
           sends: window.__branchRequests.length,
+          count: (await a.db.loadSessionSummaries()).length,
         }
       })
       assert.deepEqual(first.branchFrom, { sessionId: sourceId, messageId: 'chosen-version' })
@@ -86,6 +126,7 @@ export const runConversationBranchCases = async (run) => {
       assert.equal(first.pinned, undefined)
       assert.equal(first.requests, 0)
       assert.equal(first.sends, 0)
+      assert.equal(first.count, 2, 'a double confirmation creates one branch')
       assert.equal(await page.getByText('只留在原对话的返程方案', { exact: true }).count(), 0)
 
       if (process.env.FREESEEK_BRANCH_UI_PROOF) {
@@ -114,10 +155,12 @@ export const runConversationBranchCases = async (run) => {
       assert.match(sent, /到了车站如何去酒店/)
       assert.doesNotMatch(sent, /没有选中的自驾方案|只留在原对话的返程方案/)
       await branchButton(continued.last).click()
+      await create.click()
       await page.waitForFunction(
         (firstId) => window.__audit.store.useChatStore.getState().activeId !== firstId,
         first.id
       )
+      await dialog.waitFor({ state: 'hidden' })
       const nested = await page.evaluate(async () => {
         const a = window.__audit,
           id = a.store.useChatStore.getState().activeId
@@ -266,7 +309,7 @@ export const runConversationBranchCases = async (run) => {
   )
 
   await run(
-    'conversation branching keeps the original screen and records when saving fails',
+    'conversation branching keeps the confirmation and original records when saving fails and can retry',
     async (page) => {
       const originalId = await page.evaluate(async () => {
         const a = window.__audit,
@@ -280,13 +323,18 @@ export const runConversationBranchCases = async (run) => {
         await a.seed([chat])
         const put = IDBObjectStore.prototype.put
         IDBObjectStore.prototype.put = function (record, ...keys) {
-          if (record?.branchFrom) throw new DOMException('synthetic failure', 'QuotaExceededError')
+          if (record?.branchFrom && !window.__retryBranch) {
+            throw new DOMException('synthetic failure', 'QuotaExceededError')
+          }
           return put.call(this, record, ...keys)
         }
         return chat.id
       })
       await page.getByRole('button', { name: '从这条回复开分支', exact: true }).click()
-      await page.getByText('没能创建分支，请重试。', { exact: true }).waitFor()
+      const dialog = page.getByRole('dialog', { name: '从这条回复开分支？' })
+      const create = dialog.getByRole('button', { name: '创建分支', exact: true })
+      await create.click()
+      await dialog.getByRole('alert').getByText('没能创建分支，请重试。', { exact: true }).waitFor()
       const stored = await page.evaluate(async () => {
         const a = window.__audit
         return {
@@ -296,10 +344,11 @@ export const runConversationBranchCases = async (run) => {
       })
       assert.deepEqual(stored, { index: [originalId], active: originalId })
       await page.getByText('原对话里已保存的回答。', { exact: true }).waitFor()
-      assert.equal(
-        await page.getByRole('button', { name: '从这条回复开分支', exact: true }).isEnabled(),
-        true
-      )
+      assert.equal(await create.isEnabled(), true)
+      await page.evaluate(() => { window.__retryBranch = true })
+      await create.click()
+      await dialog.waitFor({ state: 'hidden' })
+      assert.equal(await page.evaluate(async () => (await window.__audit.db.loadSessionSummaries()).length), 2)
     }
   )
 

@@ -142,6 +142,7 @@ class VaultFixture {
     }
     if (method === 'commit') {
       assert(!batch.entry)
+      await this.waitOnPause(method)
       const sessions = batch.replace ? new Map() : new Map(this.sessions)
       for (const id of batch.deleted) sessions.delete(id)
       for (const [id, entry] of batch.sessions) sessions.set(id, entry)
@@ -488,6 +489,7 @@ export const runHistoryVaultCases = async (run) => {
     await inspectAfterReload(page)
     await page.evaluate((id) => window.__audit.store.selectSession(id), sourceId)
     await page.getByRole('button', { name: '从这条回复开分支', exact: true }).click()
+    await page.getByRole('button', { name: '创建分支', exact: true }).click()
     await page.getByTestId('chat-header').getByText('分支 · 看看清单', { exact: true }).waitFor()
     const branchId = await page.evaluate(() => window.__audit.store.useChatStore.getState().activeId)
     assert.equal(vault.sessions.size, 2)
@@ -503,6 +505,100 @@ export const runHistoryVaultCases = async (run) => {
       await page.evaluate(async (id) => (await window.__audit.db.loadSession(id)).branchFrom, branchId),
       { sessionId: sourceId, messageId: 'ready-to-branch' }
     )
+  })
+
+  await nativeApp(run, 'sends and settles a long chat while its recovery copy waits, then copies only the latest queued revision', async (page, vault) => {
+    const id = 'long-chat-with-versions'
+    await page.evaluate(async (id) => {
+      const a = window.__audit
+      const { fixtures: f } = a
+      await a.seed([f.session({
+        id, rootMessageId: 'start',
+        messages: [
+          f.user('start', '开始一条对话', { selectedChildId: 'selected' }),
+          ...Array.from({ length: 8280 }, (_, i) => f.assistant(`old-${i}`, 'A'.repeat(2200), { parentId: 'start' })),
+          f.assistant('selected', '继续聊吧。', { parentId: 'start' }),
+        ],
+      })])
+      a.settings.setApiKey('synthetic-chat-key')
+      const originalFetch = window.fetch
+      window.__requestCount = 0
+      window.fetch = (input, init) => String(input).endsWith('/messages')
+        ? Promise.resolve(a.response(`回复 ${++window.__requestCount} 已完成。`))
+        : originalFetch(input, init)
+    }, id)
+    assert(vault.sessions.get(id).size > 16 * 1024 * 1024)
+    const firstGeneration = vault.generation
+    const gate = vault.pauseNext('commit')
+    try {
+      await page.evaluate((id) => {
+        const a = window.__audit
+        a.drafts.setDraftText(id, '发送新的问题。')
+        if (!a.store.sendMessage(id)) throw new Error('The chat did not start')
+      }, id)
+      await gate.reached
+      const continued = await page.evaluate(async (id) => {
+        const a = window.__audit
+        await a.waitIdle()
+        for (const question of ['修改第一次。', '保留最后的修改。']) {
+          const session = a.store.useChatStore.getState().sessionCache[id]
+          const target = a.branches.getVisibleMessages(session).at(-2)
+          if (!a.store.editMessage(id, target.id, question)) throw new Error('The edit did not start')
+          await a.waitIdle()
+        }
+        const saved = await a.db.loadSession(id)
+        return {
+          requests: window.__requestCount,
+          question: a.branches.getVisibleMessages(saved).at(-2).content,
+          answer: a.branches.getVisibleMessages(saved).at(-1).blocks[0].text,
+        }
+      }, id)
+      assert.deepEqual(continued, { requests: 3, question: '保留最后的修改。', answer: '回复 3 已完成。' })
+      assert.equal(vault.generation, firstGeneration, 'the primary chat can continue before the first copy finishes')
+    } finally {
+      gate.release()
+    }
+    await page.waitForFunction(() => window.__audit.historyVault.useHistoryVault.getState().phase === 'idle')
+    assert.equal(vault.generation, firstGeneration + 2, 'one in-flight copy and one coalesced latest copy')
+    const final = JSON.parse(vault.sessions.get(id).bytes.toString())
+    assert(final.messages.some(({ blocks }) => blocks?.[0]?.text === '回复 3 已完成。'))
+    assert.equal(final.messages.find(({ id }) => id === 'old-8279').blocks[0].text.length, 2200)
+  })
+
+  await nativeApp(run, 'recopies a committed chat on startup after a deferred protection failure', async (page, vault) => {
+    const id = 'retry-after-reopen'
+    await saveChats(page, { [id]: '原对话。' })
+    await inspectAfterReload(page)
+    await page.evaluate((id) => window.__audit.store.selectSession(id), id)
+    await page.waitForFunction((id) => !!window.__audit.store.useChatStore.getState().sessionCache[id], id)
+    const protectedBefore = vault.sessions.get(id).revision
+    vault.faults.set('commit', 'IO')
+    const saved = await page.evaluate(async (id) => {
+      const a = window.__audit
+      a.settings.setApiKey('synthetic-chat-key')
+      const originalFetch = window.fetch
+      window.fetch = (input, init) => String(input).endsWith('/messages')
+        ? Promise.resolve(a.response('副本失败仍然正常回复。'))
+        : originalFetch(input, init)
+      a.drafts.setDraftText(id, '新内容已留在本机。')
+      if (!a.store.sendMessage(id)) throw new Error('The chat did not start')
+      await a.waitIdle()
+      return (await a.db.loadSession(id)).messages.at(-1).blocks[0].text
+    }, id)
+    assert.equal(saved, '副本失败仍然正常回复。')
+    await page.waitForFunction(() => window.__audit.historyVault.useHistoryVault.getState().phase === 'error')
+    assert.equal(vault.sessions.get(id).revision, protectedBefore)
+    vault.faults.delete('commit')
+    const gate = vault.pauseNext('commit')
+    try {
+      await page.reload()
+      await gate.reached
+    } finally {
+      gate.release()
+    }
+    await page.waitForFunction(() => window.__audit.historyVault.useHistoryVault.getState().phase === 'idle')
+    assert.notEqual(vault.sessions.get(id).revision, protectedBefore)
+    assert.equal(JSON.parse(vault.sessions.get(id).bytes.toString()).messages.at(-1).blocks[0].text, saved)
   })
 
   await nativeApp(run, 'commits ZIP conflict choices and disk-backed originals across a retry', async (page, vault) => {

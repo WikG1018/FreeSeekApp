@@ -3,7 +3,6 @@ import { blobBase64 } from '../../utils/blobBase64.js'
 import { createId } from '../../utils/id.js'
 import { logEvent } from '../diagnostics/log.js'
 import * as db from './db.js'
-import { jsonBlob } from './history/jsonBlob.js'
 import { readJsonEntry } from './history/readJson.js'
 import { BackupError } from './history/errors.js'
 import { checkDiskOriginal, removeDiskOriginals } from './historyFiles.js'
@@ -51,6 +50,9 @@ let scanVerifiesOriginals = false
 let restore: Promise<RestoreResult | null> | undefined
 let failureStage: string | undefined
 const unsynchronized = new Set<string>()
+const queuedProtection = new Map<string, { revision: string; queuedAt: number; writes: number }>()
+let protectionTimer: ReturnType<typeof setTimeout> | undefined
+let drainingProtection = false
 const serial = <T>(task: () => Promise<T>): Promise<T> => {
   const result = tail.then(task, task)
   tail = result.catch(() => {})
@@ -154,8 +156,8 @@ type Batch = {
   verifyExisting?: boolean
   revisions: Map<string, string>
 }
-const storeSession = async (batch: Batch, sessionId: string) => {
-  const saved = await db.vaultSession(sessionId, batch.staged)
+const storeSession = async (batch: Batch, sessionId: string, savedRevision?: string) => {
+  const saved = await db.vaultSnapshot(sessionId, batch.staged, savedRevision)
   if (!saved) {
     if (batch.staged) {
       throw new Error('Staged chat unavailable')
@@ -164,7 +166,7 @@ const storeSession = async (batch: Batch, sessionId: string) => {
   }
   const originalIds: string[] = [],
     missingIds: string[] = []
-  for (const fileId of sessionOriginalIds(saved.session)) {
+  for (const fileId of saved.fileIds) {
     if (!batch.originals.has(fileId)) {
       let file = await db.vaultOriginal(fileId, batch.staged)
       if (!batch.staged && file && 'disk' in file) {
@@ -229,16 +231,15 @@ const storeSession = async (batch: Batch, sessionId: string) => {
     }
     originalIds.push(fileId)
   }
-  const body = jsonBlob(saved.session)
   await NativeVault.putSession({
     id: batch.id,
     sessionId,
-    size: body.size,
+    size: saved.body.size,
     revision: saved.revision,
     originalIds,
     missingIds,
   })
-  await writeBlob(batch.id, body)
+  await writeBlob(batch.id, saved.body)
   batch.revisions.set(sessionId, saved.revision)
 }
 const newBatch = async (mode: 'merge' | 'replace', staged: boolean): Promise<Batch> => {
@@ -249,11 +250,15 @@ const newBatch = async (mode: 'merge' | 'replace', staged: boolean): Promise<Bat
 const abort = (id: string) => NativeVault.cancel({ id }).catch(() => {})
 const writeCurrent = (ids: readonly string[], verifyExisting = false) =>
   serial(async () => {
+    const revisions = new Map(ids.map((id) => [id, queuedProtection.get(id)?.revision]))
+    for (const id of ids) {
+      queuedProtection.delete(id)
+    }
     const batch = await newBatch('merge', false)
     batch.verifyExisting = verifyExisting
     try {
       for (const id of ids) {
-        await storeSession(batch, id)
+        await storeSession(batch, id, queuedProtection.get(id)?.revision ?? revisions.get(id))
       }
       if (!batch.revisions.size) {
         await NativeVault.cancel({ id: batch.id })
@@ -262,6 +267,10 @@ const writeCurrent = (ids: readonly string[], verifyExisting = false) =>
       }
       for (const id of ids) {
         unsynchronized.delete(id)
+        const queued = queuedProtection.get(id)
+        if (queued && queued.revision === batch.revisions.get(id)) {
+          queuedProtection.delete(id)
+        }
       }
     } catch (error) {
       await abort(batch.id)
@@ -272,7 +281,7 @@ const writeCurrent = (ids: readonly string[], verifyExisting = false) =>
 export const protectChangedSession = async (id: string) => {
   if (restore) {
     unsynchronized.add(id)
-    return
+    return false
   }
   try {
     if (!scan) {
@@ -282,19 +291,64 @@ export const protectChangedSession = async (id: string) => {
     const { useChatStore } = await import('./store.js')
     const main = useChatStore.getState()
     if (!scan && !restore) {
+      const pending = queuedProtection.size
       set({
-        phase: unsynchronized.size ? 'error' : 'idle',
+        phase: pending ? 'protecting' : unsynchronized.size ? 'error' : 'idle',
         issue: unsynchronized.size ? (useHistoryVault.getState().issue ?? 'unreadable') : undefined,
-        processed: 1,
-        total: 1,
+        processed: pending ? 0 : 1,
+        total: pending || 1,
         totalSessions: main.ready ? main.sessions.length : null,
       })
     }
+    return true
   } catch (error) {
     unsynchronized.add(id)
     // The primary history is committed. A failed independent copy can be retried without resending the chat.
     failed(error, 'protect-chat')
+    return false
   }
+}
+
+const scheduleProtection = () => {
+  if (protectionTimer !== undefined || drainingProtection || scan || restore || !queuedProtection.size) {
+    return
+  }
+  protectionTimer = setTimeout(() => {
+    protectionTimer = undefined
+    const next = queuedProtection.entries().next()
+    if (next.done || scan || restore) {
+      return
+    }
+    const [id, job] = next.value
+    const started = performance.now()
+    drainingProtection = true
+    void protectChangedSession(id).then((saved) => {
+      logEvent('storage', 'history.vault-copy-finished', {
+        saved,
+        elapsedMs: Math.round(performance.now() - started),
+        queuedMs: Math.round(started - job.queuedAt),
+        writes: job.writes,
+        remaining: queuedProtection.size,
+      })
+    }).finally(() => {
+      drainingProtection = false
+      scheduleProtection()
+    })
+  }, 180)
+}
+
+/** The primary commit is already durable. Keep only the newest revision awaiting a copy. */
+export const queueChangedSession = (id: string, revision: string) => {
+  const previous = queuedProtection.get(id)
+  queuedProtection.set(id, {
+    revision,
+    queuedAt: previous?.queuedAt ?? performance.now(),
+    writes: (previous?.writes ?? 0) + 1,
+  })
+  if (!scan && !restore && !drainingProtection && protectionTimer === undefined) {
+    set({ phase: 'protecting', processed: 0, total: queuedProtection.size })
+  }
+  scheduleProtection()
 }
 
 export const protectAllHistory = (force = true): Promise<boolean> => {
@@ -383,6 +437,7 @@ export const protectAllHistory = (force = true): Promise<boolean> => {
   })().finally(() => {
     scan = undefined
     scanVerifiesOriginals = false
+    scheduleProtection()
   })
   return scan
 }
@@ -449,6 +504,7 @@ export const protectDeletion = async <T>(
     apply
   )
   unsynchronized.delete(sessionId)
+  queuedProtection.delete(sessionId)
   return result
 }
 export const protectStagedChange = <T>(
@@ -644,6 +700,7 @@ export const restoreHistoryVault = ({ automatic = false } = {}): Promise<Restore
     if (recovered) {
       void protectAllHistory(false)
     }
+    scheduleProtection()
   })
   return restore
 }

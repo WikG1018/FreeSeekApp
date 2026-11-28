@@ -44,7 +44,11 @@ type StoredSessionSummary = SessionSummary & {
 type PackedSession = { id: string; payload: Blob; summary: StoredSessionSummary }
 type StoredSession = Session | PackedSession
 // This token follows an in-memory edit only. It is never included in an archive or API request.
-type EditVersion = { exists: boolean; revision?: string; writing?: Promise<void> }
+type EditVersion = {
+  exists: boolean
+  revision?: string
+  writing?: { session: Session; files?: StoredFile[]; promise: Promise<void> }
+}
 const editVersions = new WeakMap<Session, EditVersion>()
 export const continueSessionEdit = (previous: Session, next: Session) => {
   const version = editVersions.get(previous)
@@ -1017,7 +1021,7 @@ export const vaultSessionIndex = async (staging = false) => {
   return rows.map((summary) => ({ id: summary.id, revision: vaultRevision(summary) }))
 }
 
-export const vaultSession = async (id: string, staging: boolean) => {
+const readVaultRecord = async (id: string, staging: boolean) => {
   const view = await historyTransaction('readonly')
   const [record, summary] = await Promise.all([
     (staging ? view.stagingSessions : view.sessions).get(id),
@@ -1026,7 +1030,27 @@ export const vaultSession = async (id: string, staging: boolean) => {
   if (!record) {
     return undefined
   }
-  return { session: await unpackSession(record), revision: summary ? vaultRevision(summary) : createId() }
+  return { record, revision: summary ? vaultRevision(summary) : createId() }
+}
+
+export const vaultSession = async (id: string, staging: boolean) => {
+  const saved = await readVaultRecord(id, staging)
+  return saved && { session: await unpackSession(saved.record), revision: saved.revision }
+}
+
+export const vaultSnapshot = async (id: string, staging: boolean, savedRevision?: string) => {
+  const saved = await readVaultRecord(id, staging)
+  if (!saved) {
+    return undefined
+  }
+  const { record, revision } = saved
+  // Only reuse JSON encoded and committed by this running client at the exact revision.
+  // Existing or restored records still go through the usual parse and validation path.
+  if (isPacked(record) && revision === savedRevision && record.summary.revision === savedRevision) {
+    return { body: record.payload, fileIds: record.summary.fileIds, revision }
+  }
+  const session = await unpackSession(record)
+  return { body: jsonBlob(session), fileIds: sessionOriginalIds(session), revision }
 }
 
 export const vaultOriginal = async (id: string, staging: boolean) => {
@@ -1104,8 +1128,9 @@ export const saveSession = async (
   session: Session,
   files: StoredFile[] = [],
   edit?: EditVersion,
-  originals?: CopyOriginals
+  { originals, queueProtection = false }: { originals?: CopyOriginals; queueProtection?: boolean } = {}
 ): Promise<void> => {
+  const started = performance.now()
   const summary = { ...storedSummary(session), revision: createId() }
   const record = sessionRecord(session, summary)
   const history = await historyTransaction('readwrite', true)
@@ -1161,7 +1186,21 @@ export const saveSession = async (
     })
   }
   if (historyVaultAvailable()) {
-    await (await import('./historyVault.js')).protectChangedSession(session.id)
+    if (queueProtection) {
+      const elapsedMs = Math.round(performance.now() - started)
+      if (isPacked(record) || elapsedMs >= 500) {
+        logEvent('storage', 'history.chat-committed', {
+          elapsedMs,
+          messageCount: session.messages.length,
+          bytes: isPacked(record) ? record.payload.size : undefined,
+        })
+      }
+      void import('./historyVault.js')
+        .then((vault) => vault.queueChangedSession(session.id, summary.revision))
+        .catch(reportStorageError('schedule history protection'))
+    } else {
+      await (await import('./historyVault.js')).protectChangedSession(session.id)
+    }
   }
 }
 
@@ -1169,14 +1208,18 @@ export const saveSession = async (
 export const saveEditedSession = (session: Session, files?: StoredFile[]) => {
   const edit: EditVersion = editVersions.get(session) ?? { exists: false }
   editVersions.set(session, edit)
-  const save = () => saveSession(session, files, edit)
-  const write = edit.writing ? edit.writing.then(save, save) : save()
-  edit.writing = write
-  return write.finally(() => {
-    if (edit.writing === write) {
+  const current = edit.writing
+  if (current?.session === session && current.files === files) {
+    return current.promise
+  }
+  const save = () => saveSession(session, files, edit, { queueProtection: true })
+  const promise = (current ? current.promise.then(save, save) : save()).finally(() => {
+    if (edit.writing?.promise === promise) {
       delete edit.writing
     }
   })
+  edit.writing = { session, files, promise }
+  return promise
 }
 
 /** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */
@@ -1316,7 +1359,7 @@ export const loadDiskOriginalRef = async (id: string): Promise<DiskOriginal | un
 
 export const saveSessionCopy = async (session: Session, files?: StoredFile[]): Promise<number> => {
   const originals: CopyOriginals = { missing: 0, disk: [] }
-  await saveSession(session, files, { exists: false }, originals)
+  await saveSession(session, files, { exists: false }, { originals })
   for (const disk of originals.disk) {
     try {
       await checkDiskOriginal(disk)

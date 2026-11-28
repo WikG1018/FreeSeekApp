@@ -27,6 +27,7 @@ import type { Session } from '../../services/chat/types.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { AssistantMessage } from './AssistantMessage.js'
+import { ReplyBranchDialog } from './ReplyBranchDialog.js'
 import { ScrollToBottomContext } from './scrollContext.js'
 import { UserMessage } from './UserMessage.js'
 import type { Message } from '../../services/chat/types.js'
@@ -88,6 +89,11 @@ export const MessageList = ({
   const previousPosition = useRef<{ sessionId: string; end?: string; activeReply?: string }>()
   const scrollTopRef = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
+  const [branchTarget, setBranchTarget] = useState<{ sessionId: string; messageId: string } | null>(null)
+  const requestBranch = useCallback((messageId: string) => {
+    setBranchTarget({ sessionId: session.id, messageId })
+  }, [session.id])
+  const closeBranch = useCallback(() => setBranchTarget(null), [])
   const scrolledRef = useRef(false)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const allMessages = useMemo(() => getVisibleMessages(session), [session])
@@ -535,6 +541,7 @@ export const MessageList = ({
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}
                   onPlanReply={onPlanReply}
+                  onBranchReply={requestBranch}
                 />
               )
             )}
@@ -550,6 +557,7 @@ export const MessageList = ({
           </div>
         </div>
         {footer}
+        {branchTarget && <ReplyBranchDialog {...branchTarget} onClose={closeBranch} />}
         {messages.length > 0 && (showingEarlier || !atBottom) ? (
           <button
             type="button"

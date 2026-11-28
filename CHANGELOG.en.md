@@ -1,5 +1,11 @@
 # Release notes
 
+## v3.1.18
+
+- Fixed long waits after sending or editing messages in large Android conversations. Chats can send and continue as soon as the local conversation is saved. The on-device recovery copy updates in the background and combines rapid changes.
+- Improved local saving and recovery copy updates for long conversations. Diagnostics now record timings for each stage to help identify slow saves and requests.
+- Branching from a reply now asks for confirmation and explains which messages and attachments will carry over. If saving fails, retry in the same dialog.
+
 ## v3.1.17
 
 - Start a separate conversation from a completed reply. The branch keeps the conversation up to that reply, its attachments, and its character voices. The sidebar returns to its previous scroll position.

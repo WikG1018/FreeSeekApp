@@ -1,0 +1,16 @@
+.confirm {
+  display: inline-grid;
+}
+
+.confirm > span {
+  grid-area: 1 / 1;
+}
+
+.confirm > span[aria-hidden='true'] {
+  visibility: hidden;
+}
+
+.error {
+  margin: 12px 0 0;
+  color: var(--dsw-alias-state-error-primary);
+}

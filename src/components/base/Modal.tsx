@@ -58,11 +58,13 @@ const EXIT_MS = 145
 export const Modal = ({
   title,
   ariaLabel,
+  ariaDescribedBy,
   children,
   footer,
   closable = false,
   dismissible = true,
   centered = false,
+  motion = 'standard',
   className,
   titleClassName,
   mainClassName,
@@ -72,14 +74,17 @@ export const Modal = ({
 }: {
   title: ReactNode
   ariaLabel?: string
+  ariaDescribedBy?: string
   children?: ReactNode
-  footer?: ReactNode
+  /** 底部按钮可在操作结束后调用 close，沿用弹窗的退出动画。 */
+  footer?: ReactNode | ((close: () => void) => ReactNode)
   /** 标题栏右侧显示关闭按钮 */
   closable?: boolean
   /** 阻止处理中的弹窗被遮罩、Esc 或系统返回键提前收起。 */
   dismissible?: boolean
   /** 居中弹窗：危险确认等场景在移动端也保持居中对话框，而不是底部 Sheet */
   centered?: boolean
+  motion?: 'standard' | 'fade'
   className?: string
   titleClassName?: string
   /** 内容区的 class */
@@ -92,16 +97,34 @@ export const Modal = ({
   const t = useTranslate()
   const titleId = useId()
   const [closing, setClosing] = useState(false)
+  const [entered, setEntered] = useState(false)
+  const fading = motion === 'fade'
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const closingRef = useRef(false)
   const closeTimer = useRef<number>()
   useEffect(() => () => clearTimeout(closeTimer.current), [])
+  useEffect(() => {
+    if (!fading) {
+      return
+    }
+    // Paint the initial position before starting a transition that can reverse in place.
+    let enterFrame: number | undefined
+    const prepareFrame = requestAnimationFrame(() => {
+      enterFrame = requestAnimationFrame(() => setEntered(true))
+    })
+    return () => {
+      cancelAnimationFrame(prepareFrame)
+      if (enterFrame !== undefined) {
+        cancelAnimationFrame(enterFrame)
+      }
+    }
+  }, [fading])
 
   /** 播放退出动画后真正卸载；重复调用只生效一次 */
-  const requestCloseRef = useRef(() => {})
-  requestCloseRef.current = () => {
-    if (!dismissible || closingRef.current) {
+  const requestCloseRef = useRef<(fromFooter?: boolean) => void>(() => {})
+  requestCloseRef.current = (fromFooter = false) => {
+    if ((!dismissible && !fromFooter) || closingRef.current) {
       return
     }
     closingRef.current = true
@@ -183,12 +206,16 @@ export const Modal = ({
   }, [isTop])
 
   const requestClose = () => requestCloseRef.current()
+  const footerContent =
+    typeof footer === 'function' ? footer(() => requestCloseRef.current(true)) : footer
 
   return createPortal(
     <div
       className={clsx(
         styles.overlay,
         centered && styles.overlayCentered,
+        fading && styles.overlayFade,
+        fading && entered && !closing && styles.overlayEntered,
         closing && styles.overlayClosing
       )}
       onMouseDown={(event) => event.target === event.currentTarget && requestClose()}
@@ -204,6 +231,7 @@ export const Modal = ({
         aria-modal="true"
         aria-label={ariaLabel}
         aria-labelledby={ariaLabel ? undefined : titleId}
+        aria-describedby={ariaDescribedBy}
         ref={contentRef}
         tabIndex={-1}
       >
@@ -231,7 +259,7 @@ export const Modal = ({
             {scrollEdgeFeedback ? <div data-scroll-edge-content="">{children}</div> : children}
           </div>
         ) : null}
-        {footer ? <div className={styles.footer}>{footer}</div> : null}
+        {footerContent ? <div className={styles.footer}>{footerContent}</div> : null}
       </div>
     </div>,
     document.body

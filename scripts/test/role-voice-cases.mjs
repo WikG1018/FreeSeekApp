@@ -2726,6 +2726,7 @@ export const runRoleVoiceCases = async (run) => {
 
     await page.locator('[data-message-id="chosen-voice-reply"]')
       .getByRole('button', { name: '从这条回复开分支', exact: true }).click()
+    await page.getByRole('button', { name: '创建分支', exact: true }).click()
     await page.getByTestId('chat-header').getByText('分支 · 到村口了，说点什么。', { exact: true }).waitFor()
     const branch = await page.evaluate(async () => {
       const a = window.__audit

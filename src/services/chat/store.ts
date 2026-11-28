@@ -3717,6 +3717,8 @@ const streamReply = async (
     for (let attempt = 0; ; attempt += 1) {
       lastRequestId = undefined
       receivedMessageStop = false
+      const attemptStartedAt = performance.now()
+      let saveWaitMs: number | undefined
       let phase: 'save' | 'connection' | 'context' | 'attachments' | 'request' =
         attempt === 0 && beforeRequest ? 'save' : 'connection'
       let requestAttachmentCount = 0
@@ -3726,7 +3728,9 @@ const streamReply = async (
       let sentMemoryTokens = 0
       try {
         if (attempt === 0 && beforeRequest) {
+          const saveStartedAt = performance.now()
           await beforeRequest
+          saveWaitMs = Math.round(performance.now() - saveStartedAt)
           controller.signal.throwIfAborted()
         }
         phase = 'connection'
@@ -4185,6 +4189,8 @@ const streamReply = async (
           outputBudgetSource: connection.kind === 'custom' ? 'model-settings' : 'service-default',
           offersIndependentSearch: Boolean(search),
           attempt,
+          prepareMs: Math.round(performance.now() - attemptStartedAt),
+          saveWaitMs,
           messagesCount: messages.length,
           bodyBytes: new Blob([JSON.stringify(messages)]).size,
           omittedFiles: omitted.size,
